@@ -1,0 +1,44 @@
+[gd_scene load_steps=5 format=2]
+
+[ext_resource path="res://Sprites/Destructible Objects Sprite Sheet.png" type="Texture" id=1]
+[ext_resource path="res://BarrelKinematic.gd" type="Script" id=2]
+
+[sub_resource type="Animation" id=1]
+resource_name = "New Anim"
+length = 0.35
+step = 0.05
+tracks/0/type = "value"
+tracks/0/path = NodePath("Sprite:frame")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/keys = {
+"times": PoolRealArray( 0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3 ),
+"transitions": PoolRealArray( 1, 1, 1, 1, 1, 1, 1 ),
+"update": 1,
+"values": [ 0, 1, 2, 3, 4, 5, 6 ]
+}
+
+[sub_resource type="RectangleShape2D" id=2]
+extents = Vector2( 9, 13 )
+
+[node name="KinematicBody2D" type="KinematicBody2D" groups=["destructible"]]
+position = Vector2( 32, -80 )
+script = ExtResource( 2 )
+
+[node name="Sprite" type="Sprite" parent="."]
+position = Vector2( 0, -8 )
+scale = Vector2( 1, 1.14667 )
+texture = ExtResource( 1 )
+hframes = 7
+frame = 2
+region_enabled = true
+region_rect = Rect2( 0, 70, 450, 50 )
+
+[node name="AnimationPlayer" type="AnimationPlayer" parent="."]
+"anims/New Anim" = SubResource( 1 )
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+position = Vector2( 1, -3 )
+shape = SubResource( 2 )
