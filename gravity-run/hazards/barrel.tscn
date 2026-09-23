@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://hazards/barrel.gd" id="1"]
+
+[node name="Barrel" type="Node2D" groups=["barrels"]]
+script = ExtResource("1")
