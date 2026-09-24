@@ -92,7 +92,8 @@ body {
 		</style>
 		<link id="-gd-engine-icon" rel="icon" type="image/png" href="index.icon.png" />
 <link rel="apple-touch-icon" href="index.apple-touch-icon.png"/>
-
+<link rel="manifest" href="index.manifest.json">
+<style>html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#101827}body{display:flex;align-items:center;justify-content:center}#canvas{position:absolute;width:min(100vw,177.7778vh);height:min(56.25vw,100vh);max-width:100vw;max-height:100vh;aspect-ratio:16/9;left:50%;top:50%;transform:translate(-50%,-50%)}@media(orientation:portrait){body:after{content:"VÄND MOBILEN TILL LIGGANDE LÄGE";position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:2rem;box-sizing:border-box;text-align:center;font:600 1.25rem system-ui,sans-serif;color:#edf3ff;background:#101827}}</style>
 	</head>
 	<body>
 		<canvas id="canvas">
@@ -111,7 +112,7 @@ body {
 
 		<script src="index.js"></script>
 		<script>
-const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":true,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":270244,"index.wasm":39514754},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
+const GODOT_CONFIG = {"args":[],"canvasResizePolicy":1,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":true,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":270196,"index.wasm":39514754},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4,"serviceWorker":"index.service.worker.js"};
 const GODOT_THREADS_ENABLED = false;
 const engine = new Engine(GODOT_CONFIG);
 
