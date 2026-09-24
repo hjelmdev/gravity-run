@@ -26,6 +26,31 @@
 			overflow: hidden;
 			background: #101827;
 		}
+		/* Touch-first devices use the whole available display instead of a 16:9 letterbox. */
+		@media (pointer: coarse) {
+			#game-shell {
+				width: 100vw;
+				height: 100vh;
+				width: 100dvw;
+				height: 100dvh;
+				max-width: none;
+				max-height: none;
+				aspect-ratio: auto;
+			}
+		}
+		/* Keep the game rendered in landscape even if the device is held upright. */
+		@media (pointer: coarse) and (orientation: portrait) {
+			#game-shell {
+				position: fixed;
+				left: 50%;
+				top: 50%;
+				width: 100vh;
+				height: 100vw;
+				width: 100dvh;
+				height: 100dvw;
+				transform: translate(-50%, -50%) rotate(90deg);
+			}
+		}
 		#game-frame {
 			display: block;
 			width: 100%;
@@ -33,30 +58,12 @@
 			border: 0;
 			background: #101827;
 		}
-		#rotate-message {
-			display: none;
-			position: fixed;
-			inset: 0;
-			z-index: 2;
-			align-items: center;
-			justify-content: center;
-			padding: 2rem;
-			box-sizing: border-box;
-			text-align: center;
-			font: 600 1.25rem system-ui, sans-serif;
-			color: #edf3ff;
-			background: #101827;
-		}
-		@media (orientation: portrait) {
-			#rotate-message { display: flex; }
-		}
 	</style>
 </head>
 <body>
 	<main id="game-shell">
 		<iframe id="game-frame" src="game/index.html" title="Gravity Run" allow="fullscreen; autoplay" allowfullscreen></iframe>
 	</main>
-	<div id="rotate-message" role="status">VÄND MOBILEN TILL LIGGANDE LÄGE</div>
 	<script>
 	if ('serviceWorker' in navigator) {
 		const migrationKey = 'gravity-run-pages-shell-v1';
