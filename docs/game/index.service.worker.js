@@ -4,7 +4,7 @@
 // Incrementing CACHE_VERSION will kick off the install event and force
 // previously cached resources to be updated from the network.
 /** @type {string} */
-const CACHE_VERSION = '1790282875|1933730';
+const CACHE_VERSION = '1790283034|1939107';
 /** @type {string} */
 const CACHE_PREFIX = 'Gravity Run-sw-cache-';
 const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
