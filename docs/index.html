@@ -137,7 +137,7 @@
 			const pageScope = new URL('./', location.href).href;
 			const gameScope = new URL('./game/', location.href).href;
 			const cachePrefix = 'Gravity Run-sw-cache-';
-			const loadGame = () => { document.getElementById('game-frame').src = './game/index.html'; };
+			const loadGame = () => { document.getElementById('game-frame').src = './game-v2/index.html'; };
 			navigator.serviceWorker.getRegistrations().then(async (registrations) => {
 				const oldWorkers = registrations.filter((registration) => registration.scope === pageScope || registration.scope === gameScope);
 				if (oldWorkers.length === 0) {
@@ -150,7 +150,7 @@
 				location.reload();
 			}).catch(() => loadGame());
 		} else {
-			document.getElementById('game-frame').src = './game/index.html';
+			document.getElementById('game-frame').src = './game-v2/index.html';
 		}
 	})();
 	</script>
