@@ -106,6 +106,19 @@
 	</style>
 </head>
 <body>
+	<script>
+	(() => {
+		const params = new URLSearchParams(window.location.search);
+		if (!window.opener) return;
+		if (params.has('code')) {
+			window.opener.postMessage('gravity-run-oauth|code|' + encodeURIComponent(params.get('code')), window.location.origin);
+			window.close();
+		} else if (params.has('error')) {
+			window.opener.postMessage('gravity-run-oauth|error|' + encodeURIComponent(params.get('error_description') || params.get('error')), window.location.origin);
+			window.close();
+		}
+	})();
+	</script>
 	<main id="game-shell">
 		<iframe id="game-frame" title="Gravity Run" allow="fullscreen; autoplay" allowfullscreen></iframe>
 	</main>
