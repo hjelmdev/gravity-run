@@ -1,0 +1,22 @@
+{
+	"name": "Gravity Run",
+	"short_name": "Gravity Run",
+	"start_url": "./",
+	"scope": "./",
+	"display": "standalone",
+	"background_color": "#101827",
+	"theme_color": "#101827",
+	"orientation": "landscape",
+	"icons": [
+		{
+			"src": "./game/index.144x144.png",
+			"sizes": "144x144",
+			"type": "image/png"
+		},
+		{
+			"src": "./game/index.512x512.png",
+			"sizes": "512x512",
+			"type": "image/png"
+		}
+	]
+}
