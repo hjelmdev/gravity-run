@@ -107,7 +107,7 @@
 </head>
 <body>
 	<main id="game-shell">
-		<iframe id="game-frame" src="./game/index.html" title="Gravity Run" allow="fullscreen; autoplay" allowfullscreen></iframe>
+		<iframe id="game-frame" title="Gravity Run" allow="fullscreen; autoplay" allowfullscreen></iframe>
 	</main>
 	<aside id="rotate-prompt" role="status" aria-live="polite">
 		<div class="rotate-icon" aria-hidden="true"></div>
@@ -132,20 +132,25 @@
 		screen.orientation?.addEventListener?.('change', updateOrientation);
 		window.addEventListener('orientationchange', updateOrientation);
 		portraitQuery.addEventListener?.('change', updateOrientation);
-		// Retire an older root-scoped Godot worker. The game export in ./game owns its own cache.
+		// Retire old Godot workers and cached game exports before loading the iframe.
 		if ('serviceWorker' in navigator) {
-			const scope = new URL('./', location.href).href;
-			navigator.serviceWorker.getRegistrations().then((registrations) => {
-				const oldRootWorkers = registrations.filter((registration) => registration.scope === scope);
-				if (oldRootWorkers.length === 0) return;
-				Promise.all(oldRootWorkers.map((registration) => registration.unregister())).then(() => {
-					const key = 'gravity-run-root-worker-retired-v1';
-					if (!sessionStorage.getItem(key)) {
-						sessionStorage.setItem(key, '1');
-						location.reload();
-					}
-				});
-			}).catch(() => {});
+			const pageScope = new URL('./', location.href).href;
+			const gameScope = new URL('./game/', location.href).href;
+			const cachePrefix = 'Gravity Run-sw-cache-';
+			const loadGame = () => { document.getElementById('game-frame').src = './game/index.html'; };
+			navigator.serviceWorker.getRegistrations().then(async (registrations) => {
+				const oldWorkers = registrations.filter((registration) => registration.scope === pageScope || registration.scope === gameScope);
+				if (oldWorkers.length === 0) {
+					loadGame();
+					return;
+				}
+				await Promise.all(oldWorkers.map((registration) => registration.unregister()));
+				const cacheNames = await caches.keys();
+				await Promise.all(cacheNames.filter((name) => name.startsWith(cachePrefix)).map((name) => caches.delete(name)));
+				location.reload();
+			}).catch(() => loadGame());
+		} else {
+			document.getElementById('game-frame').src = './game/index.html';
 		}
 	})();
 	</script>
