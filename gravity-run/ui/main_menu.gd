@@ -1,7 +1,8 @@
 extends Control
 
 const GAME_SCENE := preload("res://main.tscn")
-const TEST_LAB_SCENE := "res://tools/test_hub.tscn"
+const GAME_HUB_SCENE := preload("res://ui/game_hub.tscn")
+const INVENTORY_SCREEN_SCENE := preload("res://ui/inventory_screen.tscn")
 const COURSE_GENERATOR_SCRIPT := preload("res://systems/course_generator.gd")
 const COURSE_RULESET_SCRIPT := preload("res://systems/course_generation_ruleset.gd")
 
@@ -41,6 +42,9 @@ var _create_challenge_title: LineEdit
 var _create_challenge_profiles: Array[CheckBox] = []
 var _create_challenge_status: Label
 var _create_challenge_button: Button
+var _game_hub: Control
+var _inventory_screen: Control
+var _return_to_hub_after_screen := false
 
 func _ready() -> void:
 	Leaderboard.top_runs_received.connect(_on_top_runs_received)
@@ -59,8 +63,11 @@ func _ready() -> void:
 	var demo_background: Node = GAME_SCENE.instantiate()
 	demo_background.name = "AutoplayBackground"
 	demo_background.set("demo_mode", true)
-	add_child(demo_background)
+	get_parent().get_parent().get_node("WorldBackground").add_child(demo_background)
 	_build_menu()
+	if AppNavigation.consume_game_hub_request():
+		_show_game_hub()
+		return
 	var launch_challenge_code := ChallengeService.read_challenge_code_from_web_url()
 	if not launch_challenge_code.is_empty():
 		_show_challenge_menu(launch_challenge_code)
@@ -85,6 +92,9 @@ func _build_menu() -> void:
 	_show_main_menu()
 
 func _show_main_menu() -> void:
+	if _return_to_hub_after_screen:
+		_show_game_hub()
+		return
 	_menu_view = "main"
 	_clear_menu_panel()
 	var viewport_size := get_viewport_rect().size
@@ -135,31 +145,7 @@ func _show_main_menu() -> void:
 	new_game_button.pressed.connect(_start_new_game)
 	layout.add_child(new_game_button)
 
-	var challenge_button := _make_button(tr("Challenges"))
-	challenge_button.custom_minimum_size.y = 36.0
-	challenge_button.pressed.connect(_show_challenge_options)
-	layout.add_child(challenge_button)
-
-	var leaderboard_button := _make_button(tr("Leaderboard"))
-	leaderboard_button.custom_minimum_size.y = 36.0
-	leaderboard_button.pressed.connect(_show_leaderboard_menu)
-	layout.add_child(leaderboard_button)
-
-	if AuthService.is_authenticated:
-		var achievements_button := _make_button(tr("Achievements"))
-		achievements_button.custom_minimum_size.y = 36.0
-		achievements_button.pressed.connect(_show_achievements_menu)
-		layout.add_child(achievements_button)
-
-	var test_lab_button := _make_button(tr("Test Lab"))
-	test_lab_button.custom_minimum_size.y = 36.0
-	test_lab_button.pressed.connect(func() -> void: get_tree().change_scene_to_file(TEST_LAB_SCENE))
-	layout.add_child(test_lab_button)
-
-	var account_label := tr("Account")
-	if AuthService.is_authenticated:
-		account_label = tr("Account · %s") % PlayerAccountProfile.nickname if PlayerAccountProfile.has_profile else tr("Account · Signed in")
-	var account_button := _make_button(account_label)
+	var account_button := _make_button(tr("Account"))
 	account_button.custom_minimum_size.y = 36.0
 	account_button.pressed.connect(_show_account_menu)
 	layout.add_child(account_button)
@@ -175,6 +161,47 @@ func _show_main_menu() -> void:
 	layout.add_child(quit_button)
 
 	new_game_button.grab_focus()
+
+func _show_game_hub() -> void:
+	_return_to_hub_after_screen = true
+	_menu_view = "game_hub"
+	_clear_menu_panel()
+	_game_hub = GAME_HUB_SCENE.instantiate()
+	_game_hub.start_run_requested.connect(_start_run_from_hub)
+	_game_hub.challenges_requested.connect(_show_challenge_options)
+	_game_hub.leaderboard_requested.connect(_show_leaderboard_menu)
+	_game_hub.achievements_requested.connect(_open_hub_achievements)
+	_game_hub.character_requested.connect(_show_character_screen)
+	_game_hub.shop_requested.connect(_show_shop_screen)
+	_game_hub.main_menu_requested.connect(_return_to_main_menu)
+	add_child(_game_hub)
+
+func _show_character_screen() -> void:
+	_show_inventory_screen("character")
+
+func _show_shop_screen() -> void:
+	_show_inventory_screen("shop")
+
+func _show_inventory_screen(mode: String) -> void:
+	if is_instance_valid(_inventory_screen):
+		_inventory_screen.queue_free()
+	_inventory_screen = INVENTORY_SCREEN_SCENE.instantiate()
+	_inventory_screen.view_mode = mode
+	_inventory_screen.back_requested.connect(_show_game_hub)
+	add_child(_inventory_screen)
+
+func _open_hub_achievements() -> void:
+	if not AuthService.is_authenticated:
+		_show_account_menu()
+		return
+	_show_achievements_menu()
+
+func _start_run_from_hub() -> void:
+	get_tree().change_scene_to_packed(GAME_SCENE)
+
+func _return_to_main_menu() -> void:
+	_return_to_hub_after_screen = false
+	_show_main_menu()
 
 func _show_achievements_menu() -> void:
 	if not AuthService.is_authenticated:
@@ -600,7 +627,7 @@ func _join_seed_challenge() -> void:
 		return
 	if _challenge_preview_ready:
 		ChallengeService.clear_challenge_code_from_web_url(ChallengeService.get_challenge_code())
-		get_tree().change_scene_to_packed(GAME_SCENE)
+		_show_game_hub()
 		return
 	var code := _challenge_code_edit.text.strip_edges().to_upper()
 	if not ChallengeService.load_challenge_code(code):
@@ -611,7 +638,7 @@ func _join_seed_challenge() -> void:
 		_challenge_status.visible = true
 		_challenge_join_button.disabled = true
 	else:
-		get_tree().change_scene_to_packed(GAME_SCENE)
+		_show_game_hub()
 
 func _on_challenge_definition_received(success: bool, definition: Dictionary, error_message: String) -> void:
 	if _menu_view != "challenge" or not is_instance_valid(_challenge_status):
@@ -932,7 +959,7 @@ func _on_menu_challenge_created(success: bool, _challenge_code: String, error_me
 		if is_instance_valid(_create_challenge_button):
 			_create_challenge_button.disabled = false
 		return
-	get_tree().change_scene_to_packed(GAME_SCENE)
+	_show_game_hub()
 
 func _is_valid_challenge_nickname(nickname: String) -> bool:
 	var pattern := RegEx.new()
@@ -1454,12 +1481,18 @@ func _select_control(mode: String) -> void:
 func _clear_menu_panel() -> void:
 	if is_instance_valid(menu_panel):
 		menu_panel.queue_free()
+	if is_instance_valid(_game_hub):
+		_game_hub.queue_free()
+		_game_hub = null
+	if is_instance_valid(_inventory_screen):
+		_inventory_screen.queue_free()
+		_inventory_screen = null
 	_close_achievement_group_overlay()
 	_achievement_group_overlay_id = ""
 
 func _start_new_game() -> void:
 	ChallengeService.clear_challenge()
-	get_tree().change_scene_to_packed(GAME_SCENE)
+	_show_game_hub()
 
 func _quit_game() -> void:
 	if OS.has_feature("web"):

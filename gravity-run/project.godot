@@ -25,6 +25,7 @@ AccountProgress="*res://systems/account_progress.gd"
 PlayerAccountProfile="*res://systems/player_account_profile.gd"
 AchievementService="*res://systems/achievement_service.gd"
 InventoryService="*res://systems/inventory_service.gd"
+AppNavigation="*res://systems/app_navigation.gd"
 
 [internationalization]
 locale/translations=PackedStringArray("res://locale/sv.po")

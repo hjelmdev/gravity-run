@@ -2,7 +2,14 @@
 
 [ext_resource type="Script" path="res://ui/main_menu.gd" id="1"]
 
-[node name="MainMenu" type="Control"]
+[node name="MainMenu" type="Node2D"]
+
+[node name="WorldBackground" type="Node2D" parent="."]
+
+[node name="MainMenuLayer" type="CanvasLayer" parent="."]
+layer = 40
+
+[node name="MainMenuUI" type="Control" parent="MainMenuLayer"]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0

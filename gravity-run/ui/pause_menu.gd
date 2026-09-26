@@ -1,6 +1,7 @@
 extends CanvasLayer
 
 const MAIN_MENU_SCENE := "res://ui/main_menu.tscn"
+const INVENTORY_SCREEN_SCENE := preload("res://ui/inventory_screen.tscn")
 
 var pause_button: Button
 var pause_overlay: Control
@@ -8,6 +9,9 @@ var resume_button: Button
 var menu_layout: VBoxContainer
 var pause_panel: PanelContainer
 var portrait_forced_pause := false
+var manual_pause_requested := false
+var _inventory_screen: Control
+var _inventory_return_to_pause := false
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -18,16 +22,20 @@ func _process(_delta: float) -> void:
 	if not OS.has_feature("web"):
 		return
 	var phone_in_portrait := bool(JavaScriptBridge.eval("window.parent.document.documentElement.classList.contains('phone-portrait')"))
-	if phone_in_portrait and not portrait_forced_pause and not get_tree().paused:
-		portrait_forced_pause = true
-		get_tree().paused = true
-	elif not phone_in_portrait and portrait_forced_pause:
-		portrait_forced_pause = false
-		get_tree().paused = false
+	portrait_forced_pause = phone_in_portrait
+	_apply_pause_state()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_cancel") and is_instance_valid(_inventory_screen):
+		_close_inventory()
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_I and not is_instance_valid(_inventory_screen):
+		_open_inventory("character")
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed("ui_cancel"):
-		_set_paused(not get_tree().paused)
+		_set_paused(not manual_pause_requested)
 		get_viewport().set_input_as_handled()
 
 func _build_pause_button() -> void:
@@ -57,6 +65,26 @@ func _build_pause_button() -> void:
 		pause_icon.add_child(bar)
 	pause_button.pressed.connect(_set_paused.bind(true))
 	add_child(pause_button)
+	var character_button := _make_hud_action("◈", tr("Character / Inventory"), "character")
+	character_button.offset_left = -148.0
+	character_button.offset_right = -108.0
+	add_child(character_button)
+	var shop_button := _make_hud_action("▤", tr("Shop"), "shop")
+	shop_button.offset_left = -100.0
+	shop_button.offset_right = -60.0
+	add_child(shop_button)
+
+func _make_hud_action(glyph: String, accessible_name: String, mode: String) -> Button:
+	var button := Button.new()
+	button.text = glyph
+	button.tooltip_text = accessible_name
+	button.custom_minimum_size = Vector2(40.0, 40.0)
+	button.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	button.offset_top = 6.0
+	button.offset_bottom = 46.0
+	button.add_theme_font_size_override("font_size", 20)
+	button.pressed.connect(_open_inventory.bind(mode))
+	return button
 
 func _build_pause_overlay() -> void:
 	pause_overlay = Control.new()
@@ -77,7 +105,7 @@ func _build_pause_overlay() -> void:
 	pause_overlay.add_child(center)
 
 	pause_panel = PanelContainer.new()
-	pause_panel.custom_minimum_size = Vector2(360.0, 390.0)
+	pause_panel.custom_minimum_size = Vector2(360.0, 450.0)
 	pause_panel.add_theme_stylebox_override("panel", _panel_style())
 	center.add_child(pause_panel)
 
@@ -107,6 +135,16 @@ func _show_pause_actions() -> void:
 	resume_button.custom_minimum_size = Vector2(0.0, 44.0)
 	resume_button.pressed.connect(_set_paused.bind(false))
 	menu_layout.add_child(resume_button)
+	var character_button := Button.new()
+	character_button.text = tr("Character / Inventory")
+	character_button.custom_minimum_size = Vector2(0.0, 40.0)
+	character_button.pressed.connect(_open_inventory.bind("character"))
+	menu_layout.add_child(character_button)
+	var shop_button := Button.new()
+	shop_button.text = tr("Shop")
+	shop_button.custom_minimum_size = Vector2(0.0, 40.0)
+	shop_button.pressed.connect(_open_inventory.bind("shop"))
+	menu_layout.add_child(shop_button)
 
 	var options_button := Button.new()
 	options_button.text = tr("Options")
@@ -115,7 +153,7 @@ func _show_pause_actions() -> void:
 	menu_layout.add_child(options_button)
 
 	var menu_button := Button.new()
-	menu_button.text = tr("Quit to main menu")
+	menu_button.text = tr("Return to game hub")
 	menu_button.custom_minimum_size = Vector2(0.0, 44.0)
 	menu_button.pressed.connect(_quit_to_main_menu)
 	menu_layout.add_child(menu_button)
@@ -183,15 +221,56 @@ func _clear_menu_layout() -> void:
 func _set_paused(paused: bool) -> void:
 	if not is_inside_tree():
 		return
-	get_tree().paused = paused
-	pause_overlay.visible = paused
-	pause_button.visible = not paused
+	manual_pause_requested = paused
 	if paused:
 		_show_pause_actions()
+	_apply_pause_state()
+	if paused and is_instance_valid(resume_button):
 		resume_button.grab_focus()
 
+func _apply_pause_state() -> void:
+	if not is_inside_tree():
+		return
+	get_tree().paused = manual_pause_requested or portrait_forced_pause or is_instance_valid(_inventory_screen)
+	if is_instance_valid(pause_overlay):
+		pause_overlay.visible = manual_pause_requested and not is_instance_valid(_inventory_screen)
+	if is_instance_valid(pause_button):
+		pause_button.visible = not manual_pause_requested and not is_instance_valid(_inventory_screen)
+
+func _open_inventory(mode: String) -> void:
+	if is_instance_valid(_inventory_screen):
+		return
+	_inventory_return_to_pause = manual_pause_requested
+	_inventory_screen = INVENTORY_SCREEN_SCENE.instantiate()
+	_inventory_screen.view_mode = mode
+	_inventory_screen.equipment_locked = true
+	_inventory_screen.back_requested.connect(_on_inventory_back)
+	add_child(_inventory_screen)
+	_apply_pause_state()
+
+func _on_inventory_back() -> void:
+	_inventory_screen = null
+	if _inventory_return_to_pause:
+		manual_pause_requested = true
+		_show_pause_actions()
+	_apply_pause_state()
+	if _inventory_return_to_pause and is_instance_valid(resume_button):
+		resume_button.grab_focus()
+
+func _close_inventory() -> void:
+	if is_instance_valid(_inventory_screen):
+		var screen := _inventory_screen
+		_inventory_screen = null
+		screen.queue_free()
+	if _inventory_return_to_pause:
+		manual_pause_requested = true
+		_show_pause_actions()
+	_apply_pause_state()
+
 func _quit_to_main_menu() -> void:
+	manual_pause_requested = false
 	get_tree().paused = false
+	AppNavigation.request_game_hub()
 	get_tree().change_scene_to_file(MAIN_MENU_SCENE)
 
 func _panel_style() -> StyleBoxFlat:

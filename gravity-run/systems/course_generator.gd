@@ -13,18 +13,21 @@ const MAX_RUN_SPEED := 750.0
 ## Deterministic planning geometry shared across viewport sizes and devices.
 const REFERENCE_TRACK_HEIGHT := 900.0
 const EVENT_SPAWN_LEAD_DISTANCE := 820.0
+const EVENT_SPAWN_MARGIN := 48.0
 const PLAYER_FLIP_SPEED := 680.0
 const PLAYER_GRAVITY := 1900.0
 const PLAYER_FLIP_COOLDOWN := 0.42
 const SWITCH_SAFETY_MARGIN := 0.12
 const PLAN_RETRY_SPACING := 48.0
 const BARREL_SPEED_MULTIPLIER := 1.4
-const GENERATOR_VERSION := 3
+const GENERATOR_VERSION := 4
+const LEGACY_GENERATOR_VERSION := 3
 const CourseHazardProfileScript = preload("res://systems/course_hazard_profile.gd")
 const CourseDifficultyProfileScript = preload("res://systems/course_difficulty_profile.gd")
 
 var _rng := RandomNumberGenerator.new()
 var _profiles: Array[CourseHazardProfile] = []
+var _barrel_profile: CourseHazardProfile
 var _events: Array[Dictionary] = []
 var _next_event_distance := 1050.0
 var _next_spawn_index := 0
@@ -32,6 +35,11 @@ var _seed := 0
 var _difficulty: Resource
 var _spawn_lead_distance := 0.0
 var _configuration_failed := false
+
+## Spawn course events fully beyond the viewport so their geometry enters smoothly.
+## The canonical lead remains a lower bound for stable planning on small screens.
+static func get_viewport_spawn_lead_distance(viewport_width: float, player_x: float, largest_event_width: float = 440.0) -> float:
+	return maxf(EVENT_SPAWN_LEAD_DISTANCE, viewport_width - player_x + largest_event_width * 0.5 + EVENT_SPAWN_MARGIN)
 
 func configure_ruleset(ruleset: Resource, generator_version: int = GENERATOR_VERSION, additional_profiles: Array[CourseHazardProfile] = []) -> bool:
 	_configuration_failed = false
@@ -58,7 +66,17 @@ func configure_ruleset(ruleset: Resource, generator_version: int = GENERATOR_VER
 		var weight_multiplier := float(multipliers.get(String(profile.profile_id), 1.0))
 		if selected and weight_multiplier > 0.0:
 			selected_profiles.append(profile)
-	_profiles = selected_profiles
+	_profiles.clear()
+	_barrel_profile = null
+	for profile in selected_profiles:
+		if generator_version >= 4 and profile.event_kind == &"barrels":
+			_barrel_profile = profile
+		else:
+			_profiles.append(profile)
+	if _profiles.is_empty():
+		push_error("The active ruleset must include at least one non-barrel encounter.")
+		_configuration_failed = true
+		return false
 	_difficulty = ruleset.call("create_difficulty_profile")
 	return true
 
@@ -83,14 +101,16 @@ func set_difficulty_profile(profile: Resource) -> void:
 
 func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> bool:
 	_configuration_failed = false
-	if generator_version != GENERATOR_VERSION:
+	if generator_version != GENERATOR_VERSION and generator_version != LEGACY_GENERATOR_VERSION:
 		push_error("Unsupported course generator version: %d" % generator_version)
 		return false
 	_profiles.clear()
+	_barrel_profile = null
 	_difficulty = null
 	_profiles.append(_make_profile(&"spike_group", &"spikes", 3.0, BOTH_LANES, Vector2(124.0, 188.0), Vector2i(4, 6), PackedFloat32Array([32.0])))
 	_profiles.append(_make_profile(&"block", &"block", 2.3, BOTH_LANES, Vector2(44.0, 64.0), Vector2i(1, 1), PackedFloat32Array([82.0, 132.0, 168.0])))
-	var barrel_profile := _make_profile(&"barrel_chain", &"barrels", 1.7, FLOOR_LANE, Vector2(54.0, 194.0), Vector2i(1, 3), PackedFloat32Array([54.0, 76.0]))
+	var barrel_weight := 1.7 if generator_version == LEGACY_GENERATOR_VERSION else 12.0
+	var barrel_profile := _make_profile(&"barrel_chain", &"barrels", barrel_weight, FLOOR_LANE, Vector2(54.0, 194.0), Vector2i(1, 3), PackedFloat32Array([54.0, 76.0]))
 	barrel_profile.motion_speed_min = BARREL_SPEED_MULTIPLIER
 	barrel_profile.motion_speed_max = BARREL_SPEED_MULTIPLIER
 	_profiles.append(barrel_profile)
@@ -230,6 +250,8 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 					widest = maxf(widest, float(threat["end"]) - float(threat["start"]))
 				var conservative_spacing := maxf(spacing, widest + clearance)
 				_next_event_distance += get_density_adjusted_spacing(conservative_spacing)
+				if _barrel_profile != null:
+					_try_append_independent_barrel(candidate, clearance)
 				return
 			_next_event_distance += PLAN_RETRY_SPACING
 		spacing += 48.0
@@ -237,6 +259,32 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 	# Use only profiles permitted by the active ruleset for the safe fallback.
 	# A hidden fallback hazard would make custom challenges/campaign stages unfair.
 	_append_safe_fallback(speed, track_height)
+
+func _try_append_independent_barrel(base_event: Dictionary, clearance: float) -> void:
+	var barrel_weight := _barrel_profile.weight * _get_profile_weight_multiplier(_barrel_profile.profile_id)
+	if barrel_weight <= 0.0:
+		return
+	var base_kind := StringName(base_event.get("kind", ""))
+	if int(base_event.get("blocked_lanes", 0)) != FLOOR_LANE or base_kind not in [&"block", &"spikes"]:
+		return
+	var normal_weight := 0.0
+	for profile in _profiles:
+		normal_weight += profile.weight * _get_profile_weight_multiplier(profile.profile_id)
+	if _rng.randf() >= barrel_weight / maxf(normal_weight + barrel_weight, 0.001):
+		return
+	var base_distance := float(base_event["course_distance"])
+	var barrel_event := _barrel_profile.create_event(_rng, base_distance, _difficulty, FLOOR_LANE)
+	# Put the extra floor-only barrel chain just beyond the base obstacle so it
+	# rolls into that obstacle on screen; its independent roll never replaces it.
+	var chain_width := float(barrel_event.get("width", 54.0)) - 54.0
+	var separation := float(base_event.get("width", 54.0)) * 0.5 + chain_width * 0.5 + 54.0 + 24.0
+	barrel_event["course_distance"] = base_distance + separation
+	barrel_event["threats"] = _barrel_profile.build_threat_intervals(barrel_event)
+	var trial: Array[Dictionary] = []
+	trial.append_array(_events)
+	trial.append(barrel_event)
+	if is_plan_solvable(trial, clearance):
+		_events.append(barrel_event)
 
 func _append_safe_fallback(speed: float, track_height: float) -> void:
 	var clearance := get_switch_clearance_distance(speed, track_height)

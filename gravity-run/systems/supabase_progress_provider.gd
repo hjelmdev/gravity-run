@@ -28,13 +28,14 @@ func _ready() -> void:
 func load_progress(access_token: String, user_id: String) -> void:
 	_start_rpc(_progress_request, "load_progress", "get_my_account_progress", {}, access_token, user_id)
 
-func record_run(run_id: String, distance_m: int, coins: int, gravity_flips: int, hazards_encountered: Array, access_token: String, user_id: String) -> void:
-	_start_rpc(_run_request, "record_run", "record_player_run", {
+func record_run(run_id: String, distance_m: int, coins: int, gravity_flips: int, hazards_encountered: Array, loot_pickup_indexes: Array, access_token: String, user_id: String) -> void:
+	_start_rpc(_run_request, "record_run", "record_player_run_v2", {
 		"p_run_id": run_id,
 		"p_distance_m": distance_m,
 		"p_coins_earned": coins,
 		"p_gravity_flips": gravity_flips,
 		"p_hazards_encountered": hazards_encountered,
+		"p_loot_pickup_indexes": loot_pickup_indexes,
 	}, access_token, user_id + "|" + run_id)
 
 func fetch_total_distance_leaderboard() -> void:

@@ -30,6 +30,7 @@ var _achievement_previous: Button
 var _achievement_next: Button
 var _run_achievements: Array[Dictionary] = []
 var _achievement_index := 0
+var _shown_run_id := ""
 
 func _ready() -> void:
 	_build_ui()
@@ -38,9 +39,11 @@ func _ready() -> void:
 	ChallengeService.challenge_created.connect(_on_challenge_created)
 	PlayerAccountProfile.profile_changed.connect(_on_account_profile_changed)
 	AccountProgress.run_saved.connect(_on_account_run_saved)
+	AccountProgress.run_loot_resolved.connect(_on_run_loot_resolved)
 	AchievementService.run_unlocks_changed.connect(_on_run_achievements_changed)
 
-func show_result(raw_distance: float, coins: int, challenge_code: String = "", is_challenge_run: bool = false) -> void:
+func show_result(raw_distance: float, coins: int, challenge_code: String = "", is_challenge_run: bool = false, run_id: String = "") -> void:
+	_shown_run_id = run_id
 	_distance_m = int(raw_distance / 10.0)
 	_coins = coins
 	_score_label.text = tr("Distance: %d m     Coins: %02d") % [_distance_m, _coins]
@@ -275,7 +278,7 @@ func _build_ui() -> void:
 	retry_button.pressed.connect(func() -> void: get_parent().call("retry_run"))
 	buttons.add_child(retry_button)
 
-	var menu_button := _make_button(tr("Main Menu"))
+	var menu_button := _make_button(tr("Game Hub"))
 	menu_button.pressed.connect(func() -> void: get_parent().call("return_to_main_menu"))
 	buttons.add_child(menu_button)
 
@@ -405,6 +408,22 @@ func _on_account_run_saved(success: bool, message: String) -> void:
 		return
 	_account_save_label.text = message
 	_account_save_label.add_theme_color_override("font_color", Color("42d6c5") if success else Color("ffbd5c"))
+
+func _on_run_loot_resolved(run_id: String, claims: Array) -> void:
+	if run_id != _shown_run_id or claims.is_empty() or not is_instance_valid(_account_save_label):
+		return
+	var results: Array[String] = []
+	for claim in claims:
+		if not claim is Dictionary:
+			continue
+		var item_id := str(claim.get("item_id", ""))
+		if str(claim.get("claim_status", "")) == "awarded":
+			results.append(tr("Loot found: %s") % item_id.replace("_", " ").capitalize())
+		elif str(claim.get("claim_status", "")) == "already_owned":
+			results.append(tr("Loot found, but already owned: %s") % item_id.replace("_", " ").capitalize())
+		else:
+			results.append(tr("No item found this time."))
+	_account_save_label.text += "\n" + "\n".join(results)
 
 func _on_run_achievements_changed(entries: Array) -> void:
 	if not visible:

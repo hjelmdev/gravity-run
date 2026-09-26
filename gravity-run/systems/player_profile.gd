@@ -1,19 +1,31 @@
 extends Node
 
+const DEFAULT_CHARACTER_STATS := preload("res://characters/runner_stats.tres")
 const SAVE_PATH := "user://gravity_run_profile.cfg"
 
 var best_distance_m := 0.0
 var flip_control := "keyboard"
 var leaderboard_name := ""
 var language := ""
+var character_stats: Resource
 var _saved_challenges: Array[Dictionary] = []
 
 func _ready() -> void:
+	character_stats = DEFAULT_CHARACTER_STATS.duplicate(true)
 	flip_control = "swipe" if DisplayServer.is_touchscreen_available() else "keyboard"
 	_load_profile()
 	if language.is_empty():
 		language = "en" if OS.get_locale_language().to_lower() == "en" else "sv"
 	TranslationServer.set_locale(language)
+
+func get_character_stats() -> Resource:
+	return character_stats
+
+func set_character_stats(stats: Resource) -> bool:
+	if stats == null or not stats.has_method("validate") or not str(stats.call("validate")).is_empty():
+		return false
+	character_stats = stats.duplicate(true)
+	return true
 
 func record_distance(distance_m: float) -> void:
 	if distance_m <= best_distance_m:

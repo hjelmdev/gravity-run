@@ -15,7 +15,7 @@ var _resolved_stats: Dictionary = {}
 var _stat_sources: Dictionary = {}
 var _loadout_signature := ""
 
-static func create(equipped_items: Array, catalog_version: int = 1, base_stats: Dictionary = {}) -> RunLoadoutSnapshot:
+static func create(equipped_items: Array, catalog_version: int, base_stats: Dictionary) -> RunLoadoutSnapshot:
 	var snapshot := RunLoadoutSnapshot.new()
 	snapshot._catalog_version = catalog_version
 	if catalog_version < 1:

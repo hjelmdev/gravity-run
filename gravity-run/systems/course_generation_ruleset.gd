@@ -11,7 +11,7 @@ const CourseDifficultyProfileScript = preload("res://systems/course_difficulty_p
 ## When false, only the listed profile IDs may appear. Empty allowlists are invalid.
 @export var include_all_profiles := true
 @export var included_profile_ids := PackedStringArray()
-@export_range(0.5, 2.5, 0.05) var event_density := 1.0
+@export_range(0.5, 2.5, 0.05) var event_density := 1.25
 @export_range(0.75, 1.5, 0.05) var hazard_size := 1.0
 @export_range(0.0, 1.0, 0.05) var lane_alternation := 0.0
 @export_range(0.0, 2.0, 0.05) var reaction_margin := 1.0

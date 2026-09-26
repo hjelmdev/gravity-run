@@ -16,22 +16,39 @@ var gravity_direction := 1
 var grounded := true
 var cooldown_left := 0.0
 var input_enabled := true
+var _flip_cooldown_multiplier := 1.0
 var active_touch_index := -1
 var touch_start_position := Vector2.ZERO
+## Absolute horizontal course coordinate, independent of camera and viewport.
+var world_x := PLAYER_X
 @onready var effects: Node = $PlayerEffects
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 
 func reset_to_floor(floor_surface_y: float) -> void:
-	position = Vector2(PLAYER_X, floor_surface_y - PLAYER_SIZE.y * 0.5)
+	world_x = PLAYER_X
+	position = Vector2(world_x, floor_surface_y - PLAYER_SIZE.y * 0.5)
 	vertical_speed = 0.0
 	gravity_direction = 1
 	grounded = true
 	cooldown_left = 0.0
 	input_enabled = true
+	_flip_cooldown_multiplier = 1.0
 	_update_sprite_orientation()
 	sprite.play("run")
 	effects.call("clear_effects")
 	status_changed.emit(gravity_direction, cooldown_left)
+
+func advance_world_x(distance: float) -> void:
+	world_x += maxf(distance, 0.0)
+	position.x = world_x
+
+func set_loadout_snapshot(snapshot: Resource) -> void:
+	_flip_cooldown_multiplier = 1.0
+	if snapshot == null or not snapshot.has_method("is_valid") or not bool(snapshot.call("is_valid")):
+		return
+	var stats: Variant = snapshot.call("get_resolved_stats")
+	if stats is Dictionary:
+		_flip_cooldown_multiplier = clampf(float(stats.get("flip_cooldown_percent", 10000)) / 10000.0, 0.5, 2.0)
 
 func set_input_enabled(enabled: bool) -> void:
 	input_enabled = enabled
@@ -61,10 +78,19 @@ func is_spike_immune() -> bool:
 func advance(delta: float, floor_surface_y: float, ceiling_surface_y: float, floor_supported: bool = true, ceiling_supported: bool = true) -> void:
 	cooldown_left = maxf(0.0, cooldown_left - delta)
 	effects.call("tick", delta)
+	var floor_contact_y := floor_surface_y - PLAYER_SIZE.y * 0.5
+	var ceiling_contact_y := ceiling_surface_y + PLAYER_SIZE.y * 0.5
+	var contact_y := floor_contact_y if gravity_direction > 0 else ceiling_contact_y
+	# A step can move the supporting surface away in the direction of gravity.
+	# Detach before integration so the character falls across the gap instead of
+	# being snapped instantly to the new surface height.
+	if grounded and float(gravity_direction) * (contact_y - position.y) > 12.0:
+		grounded = false
+		vertical_speed = 0.0
 	vertical_speed += float(gravity_direction) * GRAVITY_ACCELERATION * delta
 	position.y += vertical_speed * delta
-	var floor_y := floor_surface_y - PLAYER_SIZE.y * 0.5
-	var ceiling_y := ceiling_surface_y + PLAYER_SIZE.y * 0.5
+	var floor_y := floor_contact_y
+	var ceiling_y := ceiling_contact_y
 	if gravity_direction > 0:
 		if not floor_supported:
 			grounded = false
@@ -104,7 +130,7 @@ func _try_flip(new_direction: int) -> void:
 	_update_sprite_orientation()
 	grounded = false
 	vertical_speed = float(gravity_direction) * PLAYER_SPEED_Y
-	cooldown_left = COOLDOWN_SECONDS
+	cooldown_left = COOLDOWN_SECONDS * _flip_cooldown_multiplier
 	status_changed.emit(gravity_direction, cooldown_left)
 
 func _unhandled_input(event: InputEvent) -> void:

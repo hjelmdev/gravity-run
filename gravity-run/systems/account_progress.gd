@@ -2,6 +2,7 @@ extends Node
 
 signal progress_changed(wallet_coins: int, total_distance_m: int, best_distance_m: int)
 signal run_saved(success: bool, message: String)
+signal run_loot_resolved(run_id: String, claims: Array)
 signal achievements_loaded(data: Dictionary)
 signal achievements_unlocked(entries: Array)
 signal total_distance_leaderboard_received(rows: Array, error_message: String)
@@ -37,21 +38,24 @@ func _ready() -> void:
 	if AuthService.is_authenticated:
 		_activate_user(AuthService.user_id)
 
-func record_completed_run(distance_m: int, coins: int, gravity_flips: int = 0, hazards_seen: Array = []) -> void:
+func record_completed_run(distance_m: int, coins: int, gravity_flips: int = 0, hazards_seen: Array = [], loot_pickup_indexes: Array = []) -> String:
 	if not AuthService.is_authenticated or AuthService.user_id.is_empty():
-		return
+		return ""
 	if distance_m < 0 or coins < 0:
-		return
+		return ""
+	var run_id := _create_run_id()
 	var run := {
-		"run_id": _create_run_id(),
+		"run_id": run_id,
 		"distance_m": distance_m,
 		"coins_earned": coins,
 		"gravity_flips": maxi(gravity_flips, 0),
 		"hazards_encountered": hazards_seen.duplicate(),
+		"loot_pickup_indexes": loot_pickup_indexes.duplicate(),
 	}
 	_pending_runs.append(run)
 	_save_pending_runs()
 	_flush_pending_runs()
+	return run_id
 
 func fetch_total_distance_leaderboard() -> void:
 	_provider.fetch_total_distance_leaderboard()
@@ -151,6 +155,7 @@ func _flush_pending_runs() -> void:
 		int(run["coins_earned"]),
 		int(run.get("gravity_flips", 0)),
 		run.get("hazards_encountered", []),
+		run.get("loot_pickup_indexes", []),
 		AuthService.get_access_token(),
 		_user_id
 	)
@@ -201,6 +206,12 @@ func _on_request_finished(action: String, success: bool, data: Variant, message:
 		else:
 			_save_cached_progress_data(data, completed_user_id)
 		_remove_pending_run(completed_user_id, completed_run_id)
+		var loot_claims: Variant = data.get("loot_claims", [])
+		if completed_user_id == _user_id and AuthService.is_authenticated and loot_claims is Array:
+			run_loot_resolved.emit(completed_run_id, loot_claims)
+			for claim in loot_claims:
+				if claim is Dictionary and str(claim.get("claim_status", "")) == "awarded":
+					InventoryService.refresh()
 		_active_run_id = ""
 		_active_run_user_id = ""
 		_retry_timer.stop()

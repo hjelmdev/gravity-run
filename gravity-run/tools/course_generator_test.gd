@@ -13,7 +13,9 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	_test_many_seeded_courses()
+	_test_viewport_events_spawn_offscreen()
 	_test_seed_reproduces_course_events()
+	_test_barrels_are_an_additive_v4_stream()
 	_test_multi_window_future_hazard()
 	_test_impossible_custom_hazard_is_rejected()
 	_test_fast_barrel_forecast()
@@ -47,6 +49,13 @@ func _test_many_seeded_courses() -> void:
 	_check(found_floor_gap, "default courses should generate floor gaps")
 	_check(found_ceiling_gap, "default courses should generate ceiling gaps")
 
+func _test_viewport_events_spawn_offscreen() -> void:
+	var desktop_lead := CourseGeneratorScript.get_viewport_spawn_lead_distance(1920.0, 180.0, 440.0)
+	var slope_left_edge := 180.0 + desktop_lead - 220.0
+	_check(slope_left_edge >= 1920.0 + CourseGeneratorScript.EVENT_SPAWN_MARGIN, "wide-screen slope should spawn completely beyond the right edge with a margin")
+	var small_viewport_lead := CourseGeneratorScript.get_viewport_spawn_lead_distance(960.0, 180.0, 440.0)
+	_check(180.0 + small_viewport_lead - 220.0 >= 960.0 + CourseGeneratorScript.EVENT_SPAWN_MARGIN, "reference-width slope should also spawn beyond the right edge")
+
 func _test_seed_reproduces_course_events() -> void:
 	var first := CourseGeneratorScript.new() as CourseGenerator
 	first.configure_default_profiles(CourseGenerator.GENERATOR_VERSION)
@@ -58,6 +67,22 @@ func _test_seed_reproduces_course_events() -> void:
 	second.reset(1234567890)
 	second.ensure_horizon(80000.0, 330.0, 900.0, 1400.0)
 	_check(first_signature == _course_signature(second.get_planned_events()), "the same challenge seed should reproduce the course despite runtime speed and viewport differences")
+
+func _test_barrels_are_an_additive_v4_stream() -> void:
+	var generator := CourseGeneratorScript.new() as CourseGenerator
+	var ruleset := CourseRulesetScript.new() as Resource
+	_check(generator.configure_ruleset(ruleset, CourseGenerator.GENERATOR_VERSION), "v4 standard ruleset should configure")
+	generator.reset(8252026)
+	generator.ensure_horizon(100000.0, 500.0, 540.0, 820.0)
+	var base_events := 0
+	var barrel_events := 0
+	for event in generator.get_planned_events():
+		if event["kind"] == &"barrels":
+			barrel_events += 1
+		else:
+			base_events += 1
+	_check(base_events >= 100, "the standard event stream should remain populated when barrels are enabled")
+	_check(barrel_events >= 15, "the independent barrel stream should add encounters instead of replacing base events")
 
 func _course_signature(events: Array[Dictionary]) -> Array[String]:
 	var signature: Array[String] = []

@@ -13,7 +13,7 @@ Konton äger föremål. Gäster kan spela som nu, men får inga persistenta för
 - `main.gd` startar rundan i `_start_run()`, flyttar världens objekt i `_physics_process()` och avslutar via `RunState.finish_run()`. `RunState` skickar redan rundans coins och resultat till `AccountProgress`.
 - `AccountProgress` köar avslutade rundor med ett `run_id` och återförsöker kontosparning. `record_player_run(...)` i senaste SQL-migrationen uppdaterar plånbok, distans och achievements atomärt och idempotent per `(user_id, run_id)`.
 - `PauseMenu` är en `CanvasLayer` som processar även vid paus. Den använder redan `SceneTree.paused`, men porträttläge i webben ändrar samma booleska värde. Detta måste samordnas innan inventory kan öppnas/stängas tillförlitligt.
-- `Player` har fasta värden för vertikal fart, gravitation och cooldown. `main.gd::_run_speed()` kombinerar grundfart, distans och tidsbegränsad fartbonus. `CourseGenerator` planerar hinder med ett övre fartantagande på 750 px/s. Framtida fartbonus från utrustning får inte bryta det antagandet.
+- `Player` har fasta värden för vertikal fart, gravitation och cooldown. Den nuvarande `main.gd::_run_speed()` flyttar banan förbi en X-låst spelare; det är en simuleringsdetalj, inte den avsedda betydelsen av löphastighet. Utrustningens fartstat ska motsvara spelarens hastighet genom spelvärlden och efter singleplayer-refaktorn påverka spelarens `world_x` medan kameran följer. Generatorns nuvarande fartantagande är en planeringsbegränsning som ska testas/justeras, inte ett skäl att göra statbonusen meningslös.
 - Utmaningskoder bygger på deterministisk ban-generering. Coins ligger redan utanför likvärdighetsgarantin. Föremålsfynd ska också ligga på ett separat slumpflöde och får inte förbruka `CourseGenerator`-slump eller ändra hinderplacering.
 - `main_menu.gd` bygger menyer i kod och har redan konto, achievements och utmaningar. Lägg inte all inventory-, shop- och karaktärslogik i denna stora fil; låt en separat spelhubb och återanvändbara vyer äga spelrelaterade skärmar.
 
@@ -95,7 +95,7 @@ Skapa en separat `InventoryService` autoload och en `SupabaseInventoryProvider` 
 
 Version 1 har en **generisk fynd-ikon/kista** på banan, inte ett klientvalt föremål. En separat `LootSpawnPlanner` får run-seed och egen salt/version. Den planerar sällsynta tillfällen enligt dataregler (till exempel tidigast efter 600 m, högst ett försök per 600–900 m, max två per runda). Den konsumerar aldrig `CourseGenerator`-RNG. Placera bara fynd där det inte överlappar hinder och där spelaren kan nå det; en misslyckad plats hoppas över. Ingen loot i demobakgrund eller gästrundor.
 
-När spelaren tar ett fynd registrerar `RunState` ett index för den planerade pickupen. Visa ”Fynd väntar på sparning” under rundan. Vid run end skickas indexen i samma permanenta pending-run-post som redan innehåller `run_id`, distans och coins. Utöka run-RPC:n med ett versionssatt kontrakt, exempelvis `record_player_run_v2`, så coins, achievements och loot-claims sparas i **en transaktion**. Migrera den aktuella SQL-funktionens logik från `202609260006` utan att tappa hazard-/achievement-fälten. Ändra inte den gamla signaturen slarvigt så att PostgREST får tvetydiga överlagringar.
+När spelaren tar ett fynd registrerar `RunState` ett index för den planerade pickupen. Visa ”Fynd väntar på sparning” under rundan. Vid run end skickas indexen i samma permanenta pending-run-post som redan innehåller `run_id`, distans och coins. Utöka run-RPC:n med ett versionssatt kontrakt, exempelvis `record_player_run_v2`, så coins, achievements och loot-claims sparas i **en transaktion**. Migrera den aktuella SQL-funktionens logik från `202609260006` utan att tappa hazard-/achievement-fälten. Ändra inte den gamla signaturen slarvigt så att PostgREST får tvetydiga överlagringar. Vanliga runddrops är tills vidare avstängda i spelklienten och dropptabellen; behåll stödet för framtida special-/eventfynd.
 
 Servern validerar max antal, att pickup-index är unika och ligger inom rapporterad distans, samt rullar föremål från en serverägd drop-tabell med vikt/rarity och `drop_enabled`. Klienten skickar aldrig `item_id` eller rarity som belöning. Samma `(user_id, run_id, pickup_index)` ska ge samma svar vid återförsök och inte skapa dubletter. Om katalogföremålet redan ägs returneras `already_owned`. Vid misslyckad run-save ligger fyndet kvar som väntande, inte som användbart föremål. Återförsöket efter omstart måste hantera gamla köposter utan lootfält.
 
@@ -133,6 +133,19 @@ Nuvarande spelet litar redan på klientens rapporterade distans och coins. Denna
 ## Medvetet senare arbete
 
 Fler slots, drag och släpp, flera exemplar av samma föremål, procedurgenererade affixer, försäljning, crafting, förbrukningsvaror, visuell rustning på figur, achievement-belöningar och aktiva stat-/specialeffekter. De kan byggas ovanpå definition/instans/slot/stat-snapshot utan att ändra första versionens ägandeflöde.
+
+### Parkerad idé: shop-progression och upplåsningar
+
+Shoppen behåller tills vidare sitt nuvarande gemensamma utbud för alla spelare. Ändra inte köpflöde eller katalog som del av denna idélista. När shop-progression prioriteras, undersök ett datadrivet upplåsningssystem där nya föremål eller sortiment kan styras av flera typer av spelarframsteg:
+
+- Hur mycket spelaren totalt har spenderat i shoppen.
+- Försäljning av föremål tillbaka till shoppen, med en tydlig återköps-/guld-ekonomi.
+- Roterande utbud, potentiellt med en tidsperiod eller annan bestämd rotationsregel.
+- Uppnådda achievements.
+- Löpframsteg, exempelvis längsta/totala distans eller sammanlagd tid i rörelse.
+- Ytterligare upplåsningsvillkor som kan kombineras, så att nya items kan ha olika krav.
+
+Börja med att bestämma om upplåsningar gäller per spelare och om rotationen är personlig eller gemensam. Visa låsta föremål och deras krav tydligt; servern ska vara auktoritativ för upplåsning, köp, försäljning och valuta. Ingen av punkterna ovan är implementerad eller ett krav för den nuvarande inventory-versionen.
 
 ## Referenser
 

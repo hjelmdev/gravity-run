@@ -19,8 +19,10 @@ func configure(new_size: Vector2, attach_to_ceiling: bool) -> void:
 	from_ceiling = attach_to_ceiling
 	queue_redraw()
 
-func advance_motion(_delta: float, movement: float, _player_position: Vector2, _floor_y_at: Callable, _surface_angle_at: Callable, _surface_supported_at: Callable = Callable()) -> void:
-	position.x -= movement
+func advance_motion(_delta: float, _movement: float, _player_position: Vector2, _floor_y_at: Callable, _surface_angle_at: Callable, _surface_supported_at: Callable = Callable()) -> void:
+	# Static course hazards stay at absolute world coordinates. Specialized hazards
+	# such as barrels may add their own world-space motion.
+	pass
 
 func destroy() -> void:
 	if is_destroying:

@@ -8,24 +8,20 @@ const SLOT_REGISTRY := {
 }
 const SLOT_ORDER: Array[String] = ["helmet", "boots"]
 const STAT_ORDER: Array[String] = ["run_speed_percent", "flip_cooldown_percent"]
-const BASE_STATS := {
-	"run_speed_percent": 10000,
-	"flip_cooldown_percent": 10000,
-}
 const STAT_REGISTRY := {
 	"run_speed_percent": {
 		"unit": "basis_points",
-		"minimum_total": 5000,
-		"maximum_total": 15000,
-		"minimum_modifier": -5000,
-		"maximum_modifier": 5000,
+		"minimum_total": 9400,
+		"maximum_total": 10600,
+		"minimum_modifier": -300,
+		"maximum_modifier": 300,
 	},
 	"flip_cooldown_percent": {
 		"unit": "basis_points",
-		"minimum_total": 5000,
-		"maximum_total": 20000,
-		"minimum_modifier": -5000,
-		"maximum_modifier": 10000,
+		"minimum_total": 9000,
+		"maximum_total": 11000,
+		"minimum_modifier": -500,
+		"maximum_modifier": 500,
 	},
 }
 
@@ -35,8 +31,9 @@ static func validate_modifiers(modifiers: Dictionary) -> String:
 		if not STAT_REGISTRY.has(stat_key):
 			return "Unknown equipment stat '%s'." % stat_key
 		var value: Variant = modifiers[stat_id]
-		if typeof(value) != TYPE_INT:
+		if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)) or not is_equal_approx(float(value), roundf(float(value))):
 			return "Equipment stat '%s' must be an integer basis-point value." % stat_key
+		value = int(roundf(float(value)))
 		var stat_definition: Dictionary = STAT_REGISTRY[stat_key]
 		if int(value) < int(stat_definition.minimum_modifier) or int(value) > int(stat_definition.maximum_modifier):
 			return "Equipment stat '%s' is outside its supported modifier range." % stat_key
@@ -50,18 +47,21 @@ static func is_known_item_type(item_type: StringName) -> bool:
 
 ## Each entry has slot_type, instance_id and a Resource ItemDefinition in definition.
 ## Result keys: valid, errors, base_stats, bonuses, totals, sources.
-static func resolve(equipped_items: Array, base_stats: Dictionary = {}) -> Dictionary:
+static func resolve(equipped_items: Array, base_stats: Dictionary) -> Dictionary:
 	var errors: Array[String] = []
-	var bases := BASE_STATS.duplicate(true)
-	for stat_id in base_stats:
-		var stat_key := str(stat_id)
-		if not STAT_REGISTRY.has(stat_key):
-			errors.append("Unknown base stat '%s'." % stat_key)
+	var bases: Dictionary = {}
+	for stat_id in STAT_ORDER:
+		if not base_stats.has(stat_id):
+			errors.append("Character profile is missing base stat '%s'." % stat_id)
 			continue
 		if typeof(base_stats[stat_id]) != TYPE_INT:
-			errors.append("Base stat '%s' must be an integer basis-point value." % stat_key)
+			errors.append("Base stat '%s' must be an integer basis-point value." % stat_id)
 			continue
-		bases[stat_key] = int(base_stats[stat_id])
+		bases[stat_id] = int(base_stats[stat_id])
+	for stat_id in base_stats:
+		var stat_key := str(stat_id)
+		if not STAT_ORDER.has(stat_key):
+			errors.append("Unknown base stat '%s'." % stat_key)
 
 	var bonuses: Dictionary = {}
 	var totals := bases.duplicate(true)
@@ -121,9 +121,9 @@ static func resolve(equipped_items: Array, base_stats: Dictionary = {}) -> Dicti
 		var modifiers: Dictionary = definition.get("stat_modifiers")
 		for stat_id in modifiers:
 			var stat_key := str(stat_id)
-			if not STAT_REGISTRY.has(stat_key) or typeof(modifiers[stat_id]) != TYPE_INT:
+			if not STAT_REGISTRY.has(stat_key):
 				continue
-			var amount := int(modifiers[stat_id])
+			var amount := int(roundf(float(modifiers[stat_id])))
 			bonuses[stat_key] = int(bonuses[stat_key]) + amount
 			sources[stat_key].append({"slot_type": slot_key, "item_id": item_id, "amount_bps": amount})
 	for stat_id in STAT_ORDER:

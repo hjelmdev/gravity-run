@@ -8,6 +8,159 @@ msgstr ""
 msgid "New Game"
 msgstr "Nytt spel"
 
+msgid "GAME HUB"
+msgstr "SPEL"
+
+msgid "Start run"
+msgstr "Starta runda"
+
+msgid "Leaderboard"
+msgstr "Topplista"
+
+msgid "Achievements"
+msgstr "Prestationer"
+
+msgid "Character and inventory"
+msgstr "Karaktär och väska"
+
+msgid "Character / Inventory"
+msgstr "Karaktär / väska"
+
+msgid "Shop"
+msgstr "Butik"
+
+msgid "Account · Guest"
+msgstr "Konto · Gäst"
+
+msgid "Account · Signed in"
+msgstr "Konto · Inloggad"
+
+msgid "Signed in · inventory is synced"
+msgstr "Inloggad · väskan är synkad"
+
+msgid "Guest · sign in to save inventory"
+msgstr "Gäst · logga in för att spara väskan"
+
+msgid "Coins: %d"
+msgstr "Mynt: %d"
+
+msgid "Coins: —"
+msgstr "Mynt: —"
+
+msgid "CHARACTER / INVENTORY"
+msgstr "KARAKTÄR / VÄSKA"
+
+msgid "SHOP"
+msgstr "BUTIK"
+
+msgid "Sign in to save items and use the shop."
+msgstr "Logga in för att spara föremål och handla."
+
+msgid "Guest inventory is not saved."
+msgstr "Gästens föremål sparas inte."
+
+msgid "Inventory is out of date; syncing. Changes are disabled."
+msgstr "Väskan är inaktuell och synkas. Ändringar är avstängda."
+
+msgid "Could not sync inventory: %s"
+msgstr "Kunde inte synka väskan: %s"
+
+msgid "Inventory is synced."
+msgstr "Väskan är synkad."
+
+msgid "Loading inventory…"
+msgstr "Laddar väskan…"
+
+msgid "Inventory could not be loaded."
+msgstr "Väskan kunde inte hämtas."
+
+msgid "Runner"
+msgstr "Löpare"
+
+msgid "Helmet"
+msgstr "Hjälm"
+
+msgid "Boots"
+msgstr "Skor"
+
+msgid "Empty slot"
+msgstr "Tom plats"
+
+msgid "Stats"
+msgstr "Egenskaper"
+
+msgid "Base stats"
+msgstr "Grundegenskaper"
+
+msgid "Run speed"
+msgstr "Löphastighet"
+
+msgid "Flip cooldown"
+msgstr "Gravitationspaus"
+
+msgid "Bag · 24 slots per page"
+msgstr "Väska · 24 platser per sida"
+
+msgid "Select an item to equip"
+msgstr "Välj ett föremål att utrusta"
+
+msgid "Choose an item for the matching equipment slot."
+msgstr "Välj ett föremål som passar utrustningsplatsen."
+
+msgid "Select an item to see its details."
+msgstr "Välj ett föremål för att se detaljer."
+
+msgid "Items change gameplay only when a supported stat bonus is listed."
+msgstr "Föremål påverkar bara spelet när en angiven egenskap stöds."
+
+msgid "No stat bonuses"
+msgstr "Inga egenskapsbonusar"
+
+msgid "Common"
+msgstr "Vanlig"
+
+msgid "Uncommon"
+msgstr "Ovanlig"
+
+msgid "Rare"
+msgstr "Sällsynt"
+
+msgid "Epic"
+msgstr "Episk"
+
+msgid "Legendary"
+msgstr "Legendarisk"
+
+msgid "Buy · %d coins"
+msgstr "Köp · %d mynt"
+
+msgid "Not enough coins · %d"
+msgstr "För få mynt · %d"
+
+msgid "Owned"
+msgstr "Ägs redan"
+
+msgid "Saving inventory change…"
+msgstr "Sparar ändringen…"
+
+msgid "Select an item to buy"
+msgstr "Välj ett föremål att köpa"
+
+msgid "coins"
+msgstr "mynt"
+
+msgid "Loot found: %s"
+msgstr "Fynd: %s"
+
+msgid "Loot found, but already owned: %s"
+msgstr "Föremålet finns redan i väskan: %s"
+
+msgid "No item found this time."
+msgstr "Inget föremål hittades den här gången."
+
+msgid "LOOT PENDING · %d"
+msgstr "FYND VÄNTAR · %d"
+
 msgid "Join challenge"
 msgstr "Gå med i utmaning"
 
@@ -260,9 +413,6 @@ msgstr "Utmaningskoden är kopierad. Dela den med en vän!"
 msgid "Leaderboard"
 msgstr "Topplista"
 
-msgid "Test Lab"
-msgstr "Testlabb"
-
 msgid "Options"
 msgstr "Alternativ"
 
@@ -333,7 +483,10 @@ msgid "Resume"
 msgstr "Fortsätt"
 
 msgid "Quit to main menu"
-msgstr "Till huvudmenyn"
+msgstr "Till spelhubben"
+
+msgid "Return to game hub"
+msgstr "Till spelhubben"
 
 msgid "Back to pause menu"
 msgstr "Tillbaka till pausmenyn"
@@ -397,6 +550,12 @@ msgstr "Ny runda"
 
 msgid "Main Menu"
 msgstr "Huvudmeny"
+
+msgid "Game Hub"
+msgstr "Spelhubben"
+
+msgid "Main menu"
+msgstr "Till huvudmenyn"
 
 msgid "Enter a name first."
 msgstr "Skriv ett namn först."
@@ -864,16 +1023,16 @@ msgid "item.boots_canvas_01.name"
 msgstr "Lärkor"
 
 msgid "item.boots_canvas_01.description"
-msgstr "Bekväma tygskor för vardagsrundor."
+msgstr "Bekväma tygskor som ger 1 % högre löphastighet."
 
 msgid "item.boots_runner_01.name"
 msgstr "Löparskor"
 
 msgid "item.boots_runner_01.description"
-msgstr "Slitstarka skor för långa rundor."
+msgstr "Slitstarka skor som ger 2,5 % högre löphastighet."
 
 msgid "item.boots_gravity_01.name"
 msgstr "Gravitationsstövlar"
 
 msgid "item.boots_gravity_01.description"
-msgstr "Stövlar med en märkligt stadig sula."
+msgstr "Stadiga sulor som minskar pausen mellan gravitationsvändningar med 3 %."

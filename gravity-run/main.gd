@@ -4,8 +4,10 @@ extends Node2D
 
 var screen_width := 960.0
 var screen_height := 540.0
-const RUN_SPEED_START := 330.0
+const RUN_SPEED_BASE := 500.0
 const COIN_DISTANCE := 720.0
+const WORLD_WIDTH := 960.0
+const WORLD_HEIGHT := 540.0
 const SLOPE_WIDTH := 440.0
 const PLAYER_X := 180.0
 const SPIKE_WIDTH := 28.0
@@ -17,6 +19,9 @@ const SPIKE_SCENE := preload("res://hazards/spikes.tscn")
 const BLOCK_SCENE := preload("res://hazards/block.tscn")
 const BARREL_SCENE := preload("res://hazards/barrel.tscn")
 const COIN_SCENE := preload("res://collectibles/coin.tscn")
+const LOOT_PICKUP_SCENE := preload("res://collectibles/loot_pickup.tscn")
+const LOOT_PLANNER_SCRIPT := preload("res://systems/loot_spawn_planner.gd")
+const RUN_LOOT_ENABLED := false
 const SLOPE_SCENE := preload("res://terrain/slope.tscn")
 const LEDGE_SCENE := preload("res://terrain/ledge.tscn")
 const COURSE_GENERATOR_SCRIPT := preload("res://systems/course_generator.gd")
@@ -26,11 +31,13 @@ const TRACK_GAP_SCRIPT := preload("res://terrain/track_gap.gd")
 
 @onready var player: Node2D = $Player
 @onready var run_state: Node = $RunState
-@onready var hud: Node2D = $HUD
+@onready var hud: Node2D = $HUDLayer/HUD
 @onready var run_end_panel: CanvasLayer = $RunEndPanel
+@onready var camera: Camera2D = $Camera2D
 
 var obstacles: Array[Node2D] = []
 var coins: Array[Node2D] = []
+var loot_pickups: Array[Node2D] = []
 var slopes: Array[Node2D] = []
 var gaps: Array[Node2D] = []
 var _seed_scores: Array[Dictionary] = []
@@ -39,6 +46,7 @@ var _active_seed := 0
 var _active_seed_version := 0
 var _default_ruleset: Resource
 var course_generator: CourseGenerator
+var loot_spawn_planner: LootSpawnPlanner
 var course_distance := 0.0
 var coin_distance := 0.0
 var floor_level_y := screen_height - 80.0
@@ -49,14 +57,19 @@ var game_over := false
 var run_blocked := false
 var demo_flip_timer := 1.0
 var demo_restart_timer := 0.0
+var _speed_debug_visible := false
 
 func _ready() -> void:
 	course_generator = COURSE_GENERATOR_SCRIPT.new()
+	loot_spawn_planner = LOOT_PLANNER_SCRIPT.new()
 	_default_ruleset = COURSE_RULESET_SCRIPT.new()
+	camera.enabled = true
+	camera.make_current()
 	_sync_screen_size()
 	get_viewport().size_changed.connect(_sync_screen_size)
 	run_state.connect("stats_changed", Callable(self, "_on_run_stats_changed"))
 	run_state.connect("achievement_metrics_changed", Callable(self, "_on_run_achievement_metrics_changed"))
+	run_state.connect("loot_pending_changed", Callable(hud, "set_loot_pending_count"))
 	run_state.connect("run_started", Callable(hud, "hide_game_over"))
 	run_state.connect("run_finished", Callable(hud, "show_game_over"))
 	player.connect("gravity_flipped", Callable(run_state, "record_gravity_flip"))
@@ -71,10 +84,14 @@ func _start_run() -> void:
 	run_end_panel.visible = false
 	if not demo_mode:
 		AchievementService.begin_run()
-	player.call("reset_to_floor", screen_height - 80.0)
+	player.call("reset_to_floor", WORLD_HEIGHT - 80.0)
+	var loadout_snapshot: Resource = InventoryService.create_run_loadout_snapshot(PlayerProfile.get_character_stats())
+	run_state.call("set_loadout_snapshot", loadout_snapshot)
+	player.call("set_loadout_snapshot", loadout_snapshot)
 	run_state.call("start_run")
 	course_distance = 0.0
 	var run_seed := ChallengeService.begin_run()
+	loot_spawn_planner.reset(run_seed)
 	_active_seed = run_seed
 	_active_seed_version = ChallengeService.generation_version
 	_seed_scores.clear()
@@ -90,16 +107,18 @@ func _start_run() -> void:
 		hud.call("set_seed", ChallengeService.generation_version, run_seed)
 		ChallengeService.fetch_current_scores()
 	coin_distance = 0.0
-	floor_level_y = screen_height - 80.0
+	floor_level_y = WORLD_HEIGHT - 80.0
 	ceiling_level_y = 80.0
 	planned_floor_level_y = floor_level_y
 	planned_ceiling_level_y = ceiling_level_y
 	_clear_nodes(obstacles)
 	_clear_nodes(coins)
+	_clear_nodes(loot_pickups)
 	_clear_nodes(slopes)
 	_clear_nodes(gaps)
 	game_over = false
 	run_blocked = false
+	_update_camera()
 	demo_flip_timer = randf_range(0.9, 1.8)
 	demo_restart_timer = 0.0
 	player.call("set_input_enabled", not demo_mode)
@@ -112,32 +131,23 @@ func _sync_screen_size() -> void:
 	var viewport_size := get_viewport_rect().size
 	if viewport_size.x <= 0.0 or viewport_size.y <= 0.0:
 		return
-	var old_height := screen_height
-	if is_equal_approx(viewport_size.x, screen_width) and is_equal_approx(viewport_size.y, screen_height):
-		return
-	screen_width = viewport_size.x
-	screen_height = viewport_size.y
-	if not is_equal_approx(old_height, screen_height):
-		var height_scale := maxf(screen_height - 112.0, 1.0) / maxf(old_height - 112.0, 1.0)
-		floor_level_y = _scale_track_y(floor_level_y, height_scale)
-		ceiling_level_y = _scale_track_y(ceiling_level_y, height_scale)
-		planned_floor_level_y = _scale_track_y(planned_floor_level_y, height_scale)
-		planned_ceiling_level_y = _scale_track_y(planned_ceiling_level_y, height_scale)
-		for terrain in slopes:
-			if terrain.has_method("scale_track_height"):
-				terrain.call("scale_track_height", height_scale)
-		for obstacle in obstacles:
-			obstacle.position.y = _scale_track_y(obstacle.position.y, height_scale)
-			if obstacle.has_method("scale_track_height"):
-				obstacle.call("scale_track_height", height_scale)
-		for coin in coins:
-			coin.position.y = _scale_track_y(coin.position.y, height_scale)
-		if is_instance_valid(player):
-			player.position.y = _scale_track_y(player.position.y, height_scale)
-			player.set("vertical_speed", float(player.get("vertical_speed")) * height_scale)
+	var view_scale := minf(viewport_size.x / WORLD_WIDTH, viewport_size.y / WORLD_HEIGHT)
+	view_scale = maxf(view_scale, 0.01)
+	screen_width = viewport_size.x / view_scale
+	screen_height = viewport_size.y / view_scale
+	camera.zoom = Vector2.ONE * view_scale
+	_update_camera()
 	if is_instance_valid(hud):
 		hud.queue_redraw()
 	queue_redraw()
+
+func _update_camera() -> void:
+	if not is_instance_valid(camera) or not is_instance_valid(player):
+		return
+	camera.position = Vector2(
+		float(player.get("world_x")) + screen_width * 0.5 - PLAYER_X,
+		screen_height * 0.5
+	)
 
 func _on_run_stats_changed(distance_pixels: float, coins: int) -> void:
 	hud.call("update_stats", distance_pixels, coins)
@@ -157,12 +167,19 @@ func _clear_nodes(nodes: Array[Node2D]) -> void:
 	nodes.clear()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F3:
+		_speed_debug_visible = not _speed_debug_visible
+		hud.call("set_speed_debug_visible", _speed_debug_visible)
+		_update_speed_debug()
+		get_viewport().set_input_as_handled()
+		return
 	if game_over:
 		if event is InputEventScreenTouch and event.pressed:
 			get_viewport().set_input_as_handled()
 		elif event is InputEventMouseButton and event.pressed:
 			get_viewport().set_input_as_handled()
 		elif event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+			AppNavigation.request_game_hub()
 			get_tree().change_scene_to_file("res://ui/main_menu.tscn")
 			get_viewport().set_input_as_handled()
 
@@ -175,33 +192,45 @@ func _physics_process(delta: float) -> void:
 		return
 
 	var speed := _run_speed()
+	_update_speed_debug()
 	var movement := speed * delta if not run_blocked else 0.0
 	if not run_blocked:
 		var previous_distance := float(run_state.get("distance_m"))
+		player.call("advance_world_x", movement)
+		course_distance = float(player.get("world_x")) - PLAYER_X
 		run_state.call("add_distance", movement)
 		var current_distance := float(run_state.get("distance_m"))
 		_mark_crossed_seed_records(previous_distance, current_distance)
-		course_distance += movement
 		coin_distance += movement
-		course_generator.ensure_horizon(course_distance + screen_width + 1400.0, speed, screen_height, screen_width + 40.0 - PLAYER_X)
-		var spawn_line := course_distance + COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE
+		var event_spawn_lead := COURSE_GENERATOR_SCRIPT.get_viewport_spawn_lead_distance(screen_width, PLAYER_X, SLOPE_WIDTH)
+		course_generator.ensure_horizon(course_distance + screen_width + 1400.0, speed, screen_height, event_spawn_lead)
+		if RUN_LOOT_ENABLED and AuthService.is_authenticated and not demo_mode:
+			loot_spawn_planner.ensure_horizon(course_distance + screen_width + 1400.0)
+		var spawn_line := course_distance + event_spawn_lead
 		for event in course_generator.pop_events_until(spawn_line):
 			_spawn_course_event(event)
+		if RUN_LOOT_ENABLED:
+			for loot_event in loot_spawn_planner.pop_events_until(spawn_line):
+				_spawn_loot_pickup(loot_event)
 		_update_hazard_discoveries()
 		if coin_distance >= COIN_DISTANCE:
 			coin_distance -= COIN_DISTANCE
 			_spawn_coin_row()
 
 	_update_moving_slopes(movement)
+	# Barrel motion has its own fallback while the player is blocked; other
+	# obstacle behavior remains synchronized to actual player movement.
 	_update_moving_nodes(obstacles, movement, delta)
 	_update_moving_nodes(coins, movement, delta)
+	_update_moving_nodes(loot_pickups, movement, delta)
 	_update_moving_nodes(gaps, movement, delta)
 	_resolve_obstacle_interactions()
 
 	if demo_mode:
 		_update_demo_ai(delta)
-	player.call("advance", delta, _floor_surface_y(PLAYER_X), _ceiling_surface_y(PLAYER_X), _surface_is_solid_at_x(PLAYER_X, false), _surface_is_solid_at_x(PLAYER_X, true))
-	if player.position.y < -64.0 or player.position.y > screen_height + 64.0:
+	player.call("advance", delta, _floor_surface_y(float(player.get("world_x"))), _ceiling_surface_y(float(player.get("world_x"))), _surface_is_solid_at_x(float(player.get("world_x")), false), _surface_is_solid_at_x(float(player.get("world_x")), true))
+	_update_camera()
+	if player.position.y < -64.0 or player.position.y > WORLD_HEIGHT + 64.0:
 		_end_run()
 
 	var blocked_by_edge := false
@@ -230,27 +259,43 @@ func _physics_process(delta: float) -> void:
 				_end_run()
 				break
 			if bool(terrain.call("intersects_wall", player_rect)):
-				blocked_by_edge = true
+				# Let the runner pass a step when its surface moves away in the
+				# direction of gravity: down over a floor drop or up over a rising
+				# ceiling step.
+				var from_ceiling := bool(terrain.call("is_ceiling_slope"))
+				var gravity_direction := int(player.call("get_gravity_direction"))
+				var surface_delta := float(terrain.call("get_end_y")) - float(terrain.call("get_start_y"))
+				var surface_moves_away := (gravity_direction > 0 and not from_ceiling and surface_delta > 0.0) \
+					or (gravity_direction < 0 and from_ceiling and surface_delta < 0.0)
+				if not surface_moves_away:
+					blocked_by_edge = true
 	run_blocked = blocked_by_edge and not game_over
 	hud.call("set_run_blocked", run_blocked)
 	if not demo_mode:
 		for coin in coins:
 			if _player_hits_obstacle(coin):
 				coin.call("collect")
-	coins = coins.filter(func(coin: Node2D) -> bool: return is_instance_valid(coin) and not bool(coin.call("is_collected")) and coin.position.x > -100.0)
+		for pickup in loot_pickups:
+			if _player_hits_obstacle(pickup):
+				pickup.call("collect")
+	var camera_left := course_distance
+	coins = coins.filter(func(coin: Node2D) -> bool: return is_instance_valid(coin) and not bool(coin.call("is_collected")) and coin.position.x > camera_left - 100.0)
+	loot_pickups = loot_pickups.filter(func(pickup: Node2D) -> bool: return is_instance_valid(pickup) and pickup.position.x > camera_left - 100.0)
 	queue_redraw()
 
 func _end_run() -> void:
 	game_over = true
 	player.call("set_input_enabled", false)
 	if not demo_mode:
+		AchievementService.finish_run()
 		run_state.call("finish_run")
-		run_end_panel.call("show_result", float(run_state.get("distance_m")), int(run_state.get("coins")), ChallengeService.get_challenge_code(), ChallengeService.active)
+		run_end_panel.call("show_result", float(run_state.get("distance_m")), int(run_state.get("coins")), ChallengeService.get_challenge_code(), ChallengeService.active, str(run_state.get("last_run_id")))
 
 func retry_run() -> void:
 	_start_run()
 
 func return_to_main_menu() -> void:
+	AppNavigation.request_game_hub()
 	get_tree().change_scene_to_file("res://ui/main_menu.tscn")
 
 func _update_demo_ai(delta: float) -> void:
@@ -324,13 +369,12 @@ func _update_moving_nodes(nodes: Array[Node2D], movement: float, delta: float = 
 				Callable(self, "_surface_angle_at"),
 				Callable(self, "_surface_is_solid_at_x")
 			)
-		else:
-			node.position.x -= movement
 	var active_nodes: Array[Node2D] = []
+	var camera_left := course_distance
 	for node in nodes:
 		if not is_instance_valid(node):
 			continue
-		if (node.has_method("is_destroying_now") and bool(node.call("is_destroying_now"))) or node.position.x > -200.0:
+		if (node.has_method("is_destroying_now") and bool(node.call("is_destroying_now"))) or node.position.x > camera_left - 220.0:
 			active_nodes.append(node)
 		else:
 			node.queue_free()
@@ -377,11 +421,38 @@ func _surface_angle_at(x: float, ceiling: bool) -> float:
 	return 0.0
 
 func _run_speed() -> float:
-	var distance_m := float(run_state.get("distance_m"))
-	return (RUN_SPEED_START + minf(distance_m * 0.012, 170.0)) * float(player.call("get_speed_multiplier"))
+	return _base_run_speed() * _equipment_speed_multiplier()
+
+func _base_run_speed() -> float:
+	return RUN_SPEED_BASE * float(player.call("get_speed_multiplier"))
+
+func _equipment_speed_multiplier() -> float:
+	var equipment_multiplier := 1.0
+	var snapshot: Variant = run_state.get("loadout_snapshot")
+	if snapshot is Resource and snapshot.has_method("get_resolved_stats"):
+		var stats: Variant = snapshot.call("get_resolved_stats")
+		if stats is Dictionary:
+			equipment_multiplier = float(stats.get("run_speed_percent", 10000)) / 10000.0
+	return equipment_multiplier
+
+func _update_speed_debug() -> void:
+	if not _speed_debug_visible or not is_instance_valid(hud):
+		return
+	hud.call("set_speed_debug_values", _run_speed(), _base_run_speed(), _equipment_speed_multiplier() * 100.0)
 
 func _spawn_course_event(event: Dictionary) -> void:
-	var event_x := PLAYER_X + float(event["course_distance"]) - course_distance
+	var event_x := PLAYER_X + float(event["course_distance"])
+	var event_spawn_lead := COURSE_GENERATOR_SCRIPT.get_viewport_spawn_lead_distance(screen_width, PLAYER_X, SLOPE_WIDTH)
+	var from_ceiling := bool(event.get("from_ceiling", false))
+	var width := float(event.get("width", 48.0))
+	var height := float(event.get("height", 72.0))
+	var event_kind := StringName(event.get("kind", ""))
+	if event_kind == &"block" or event_kind == &"barrels":
+		var lane_clearance := _floor_surface_y(event_x) - _ceiling_surface_y(event_x)
+		# Keep the authored hazard dimensions. If it cannot fit while leaving a
+		# character-sized route in the opposite lane, omit this encounter.
+		if lane_clearance < height + 44.0 + 12.0:
+			return
 	var hazard_id := str(event.get("id", ""))
 	if not hazard_id.is_empty():
 		_pending_hazard_discoveries.append({
@@ -389,10 +460,7 @@ func _spawn_course_event(event: Dictionary) -> void:
 			"course_distance": float(event.get("course_distance", 0.0)),
 			"width": float(event.get("width", 48.0)),
 		})
-	var from_ceiling := bool(event.get("from_ceiling", false))
-	var width := float(event.get("width", 48.0))
-	var height := float(event.get("height", 72.0))
-	match StringName(event.get("kind", "")):
+	match event_kind:
 		&"spikes":
 			var count := int(event.get("count", 4))
 			var group_width := float(count - 1) * SPIKE_GROUP_SPACING
@@ -402,8 +470,12 @@ func _spawn_course_event(event: Dictionary) -> void:
 		&"barrels":
 			var count := int(event.get("count", 1))
 			var chain_width := float(count - 1) * 70.0
+			var motion_speed_multiplier := float(event.get("motion_speed_multiplier", 1.0))
+			# Keep the barrel's encounter timing tied to the canonical planner lead
+			# even when a wide desktop viewport requires spawning it much earlier.
+			var early_spawn_offset := maxf(event_spawn_lead - COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE, 0.0) * (motion_speed_multiplier - 1.0)
 			for index in range(count):
-				_spawn_obstacle_scene(BARREL_SCENE, 54.0, height, false, event_x - chain_width * 0.5 + float(index) * 70.0, float(event.get("motion_speed_multiplier", 1.0)))
+				_spawn_obstacle_scene(BARREL_SCENE, 54.0, height, false, event_x + early_spawn_offset - chain_width * 0.5 + float(index) * 70.0, motion_speed_multiplier)
 		&"gap":
 			var gap := TRACK_GAP_SCRIPT.new() as TrackGap
 			gap.position = Vector2(event_x, 0.0)
@@ -457,7 +529,7 @@ func _spawn_ledge(event: Dictionary, x: float) -> void:
 	var start_y := planned_ceiling_level_y if from_ceiling else planned_floor_level_y
 	var change := float(event.get("height", 84.0))
 	var low_limit := 40.0 if from_ceiling else 330.0
-	var high_limit := 220.0 if from_ceiling else screen_height - 40.0
+	var high_limit := 220.0 if from_ceiling else WORLD_HEIGHT - 40.0
 	var end_y: float = start_y + change if from_ceiling else start_y - change
 	end_y = clampf(end_y, low_limit, high_limit)
 	if absf(end_y - start_y) < 40.0:
@@ -482,7 +554,7 @@ func _spawn_course_slope(event: Dictionary, center_x: float) -> void:
 	var from_ceiling := bool(event.get("from_ceiling", false))
 	var start_y := planned_ceiling_level_y if from_ceiling else planned_floor_level_y
 	var low_limit := 40.0 if from_ceiling else 330.0
-	var high_limit := 220.0 if from_ceiling else screen_height - 40.0
+	var high_limit := 220.0 if from_ceiling else WORLD_HEIGHT - 40.0
 	var direction := float(event.get("slope_direction", 1.0))
 	var end_y := clampf(start_y + direction * float(event.get("height", 65.0)), low_limit, high_limit)
 	if absf(end_y - start_y) < 40.0:
@@ -552,7 +624,7 @@ func _spawn_coin_row() -> void:
 	for i in range(coin_count):
 		var coin := COIN_SCENE.instantiate() as Node2D
 		coin.connect("collected", Callable(run_state, "add_coins"))
-		var coin_x := screen_width + 70.0 + float(i) * 48.0
+		var coin_x := course_distance + screen_width + 70.0 + float(i) * 48.0
 		var placed := false
 		for attempt in range(20):
 			var coin_y := randf_range(_ceiling_surface_y(coin_x) + 28.0, _floor_surface_y(coin_x) - 28.0)
@@ -566,6 +638,40 @@ func _spawn_coin_row() -> void:
 		add_child(coin)
 		coins.append(coin)
 
+func _spawn_loot_pickup(event: Dictionary) -> void:
+	if not RUN_LOOT_ENABLED or demo_mode or not AuthService.is_authenticated:
+		return
+	var pickup := LOOT_PICKUP_SCENE.instantiate() as Node2D
+	var pickup_distance := float(event.get("course_distance", 0.0))
+	var pickup_x := PLAYER_X + pickup_distance
+	pickup.call("configure", int(event.get("pickup_index", 0)))
+	var placed := false
+	for attempt in range(24):
+		var ceiling_y := _ceiling_surface_y(pickup_x) + 52.0
+		var floor_y := _floor_surface_y(pickup_x) - 52.0
+		if floor_y <= ceiling_y:
+			break
+		pickup.position = Vector2(pickup_x, loot_spawn_planner.random_between(ceiling_y, floor_y))
+		if _loot_position_is_clear(pickup):
+			placed = true
+			break
+	if not placed:
+		pickup.queue_free()
+		return
+	pickup.connect("collected", Callable(run_state, "record_loot_pickup"))
+	add_child(pickup)
+	loot_pickups.append(pickup)
+
+func _loot_position_is_clear(pickup: Node2D) -> bool:
+	var rect: Rect2 = pickup.call("get_hitbox_rect")
+	for obstacle in obstacles:
+		if is_instance_valid(obstacle) and obstacle.call("get_hitbox_rect").grow(26.0).intersects(rect):
+			return false
+	for coin in coins:
+		if is_instance_valid(coin) and coin.call("get_hitbox_rect").grow(12.0).intersects(rect):
+			return false
+	return true
+
 func _coin_position_is_clear(coin: Node2D) -> bool:
 	var coin_rect: Rect2 = coin.call("get_hitbox_rect")
 	for obstacle in obstacles:
@@ -573,21 +679,20 @@ func _coin_position_is_clear(coin: Node2D) -> bool:
 			return false
 	return true
 
-func _update_moving_slopes(movement: float) -> void:
-	for slope in slopes:
-		slope.position.x -= movement
+func _update_moving_slopes(_movement: float) -> void:
 	var active_slopes: Array[Node2D] = []
+	var camera_left := course_distance
 	for slope in slopes:
 		if not is_instance_valid(slope):
 			continue
 		var end_x: float = slope.call("get_end_x")
-		if end_x <= 0.0:
+		if end_x <= camera_left:
 			if bool(slope.call("is_ceiling_slope")):
 				ceiling_level_y = float(slope.call("get_end_y"))
 			else:
 				floor_level_y = float(slope.call("get_end_y"))
 			slope.queue_free()
-		elif slope.position.x > -SLOPE_WIDTH:
+		elif slope.position.x > camera_left - SLOPE_WIDTH:
 			active_slopes.append(slope)
 		else:
 			slope.queue_free()
@@ -633,8 +738,9 @@ func _draw_seed_finish_markers() -> void:
 	for index in range(mini(_seed_scores.size(), 5)):
 		var score: Dictionary = _seed_scores[index]
 		var record_distance_m := int(score.get("best_distance_m", 0))
-		var marker_x := PLAYER_X + float(record_distance_m * 10) - current_distance
-		if marker_x < 0.0 or marker_x > screen_width:
+		var marker_x := PLAYER_X + float(record_distance_m * 10)
+		var marker_screen_x := marker_x - course_distance
+		if marker_screen_x < 0.0 or marker_screen_x > screen_width:
 			continue
 		var marker_color: Color = rank_colors[mini(index, rank_colors.size() - 1)]
 		var y := 0.0
@@ -649,12 +755,12 @@ func _draw_seed_finish_markers() -> void:
 		draw_set_transform(Vector2.ZERO)
 
 func _draw_background() -> void:
-	draw_rect(Rect2(Vector2.ZERO, Vector2(screen_width, screen_height)), Color("101827"))
+	var view_left := course_distance
+	draw_rect(Rect2(Vector2(view_left, 0.0), Vector2(screen_width, screen_height)), Color("101827"))
 	# Use the continuous course coordinate: integer meter rounding made the
-	# stars jump in small steps, especially visible through moving track gaps.
-	var star_scroll := course_distance * 0.12
+	# stars drift gently while course objects remain at fixed world coordinates.
 	for i in range(18):
-		var x := fposmod(float(i * 83) + star_scroll, screen_width)
+		var x := view_left + fposmod(float(i * 83) + course_distance * 0.12, screen_width)
 		draw_circle(Vector2(x, 58.0 + float((i * 47) % 390)), 1.5, Color("26364b"))
 
 func _draw_track() -> void:
@@ -662,23 +768,25 @@ func _draw_track() -> void:
 	_draw_track_surface(false)
 
 func _draw_track_surface(ceiling: bool) -> void:
+	var view_left := course_distance
+	var view_right := view_left + screen_width
 	var surface_gaps: Array[Dictionary] = []
 	for gap in gaps:
 		if is_instance_valid(gap) and bool(gap.get("from_ceiling")) == ceiling:
 			var half_width := float(gap.get("width")) * 0.5
 			surface_gaps.append({"start": gap.position.x - half_width, "end": gap.position.x + half_width})
 	surface_gaps.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a["start"]) < float(b["start"]))
-	var cursor := 0.0
+	var cursor := view_left
 	for gap_interval in surface_gaps:
-		var gap_start := clampf(float(gap_interval["start"]), 0.0, screen_width)
-		var gap_end := clampf(float(gap_interval["end"]), 0.0, screen_width)
+		var gap_start := clampf(float(gap_interval["start"]), view_left, view_right)
+		var gap_end := clampf(float(gap_interval["end"]), view_left, view_right)
 		if gap_end <= cursor:
 			continue
 		if gap_start > cursor:
 			_draw_track_surface_segment(ceiling, cursor, gap_start)
 		cursor = maxf(cursor, gap_end)
-	if cursor < screen_width:
-		_draw_track_surface_segment(ceiling, cursor, screen_width)
+	if cursor < view_right:
+		_draw_track_surface_segment(ceiling, cursor, view_right)
 
 func _draw_track_surface_segment(ceiling: bool, start_x: float, end_x: float) -> void:
 	if end_x - start_x < 0.5:
@@ -698,7 +806,9 @@ func _draw_track_surface_segment(ceiling: bool, start_x: float, end_x: float) ->
 
 func _get_surface_points(ceiling: bool, start_x: float = 0.0, end_x: float = -1.0) -> PackedVector2Array:
 	if end_x < 0.0:
-		end_x = screen_width
+		end_x = course_distance + screen_width
+	if is_zero_approx(start_x):
+		start_x = course_distance
 	var points := PackedVector2Array()
 	var x_positions: Array[float] = [start_x]
 	# Keep the sampling lattice fixed to the viewport instead of moving it with

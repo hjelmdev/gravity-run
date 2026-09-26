@@ -10,6 +10,7 @@ var hazard_stats: Dictionary = {}
 var recent_run_unlocks: Array[Dictionary] = []
 var _user_id := ""
 var _catalog_loaded := false
+var _run_active := false
 var _presented_this_run: Dictionary = {}
 var _toast_layer: CanvasLayer
 var _toast_card: PanelContainer
@@ -45,12 +46,20 @@ func get_recent_run_unlocks() -> Array[Dictionary]:
 	return recent_run_unlocks.duplicate(true)
 
 func begin_run() -> void:
+	_run_active = true
 	recent_run_unlocks.clear()
 	_presented_this_run.clear()
+	_toast_queue.clear()
+	_hide_toast()
 	_run_distance_m = 0
 	_run_coins = 0
 	_run_flips = 0
 	_run_hazards.clear()
+
+func finish_run() -> void:
+	_run_active = false
+	_toast_queue.clear()
+	_hide_toast()
 
 func update_run_distance(distance_pixels: float) -> void:
 	_run_distance_m = int(distance_pixels / 10.0)
@@ -69,7 +78,7 @@ func update_run_metrics(coins: int, gravity_flips: int, hazards_encountered: Arr
 	_check_live_unlocks()
 
 func _check_live_unlocks() -> void:
-	if not AuthService.is_authenticated or not _catalog_loaded:
+	if not _run_active or not AuthService.is_authenticated or not _catalog_loaded:
 		return
 	for definition in definitions:
 		var key := _key(str(definition.id), int(definition.tier))
@@ -175,7 +184,7 @@ func _on_achievements_unlocked(entries: Array) -> void:
 			continue
 		unlocked[key] = raw_entry
 		recent_run_unlocks.append(definition)
-		if not _presented_this_run.has(key):
+		if _run_active and not _presented_this_run.has(key):
 			_toast_queue.append({"definition": definition, "provisional": false})
 	if not entries.is_empty():
 		run_unlocks_changed.emit(recent_run_unlocks.duplicate(true))

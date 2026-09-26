@@ -6,6 +6,7 @@ var is_falling := false
 var motion_speed_multiplier := 1.0
 const FALL_GRAVITY := 1800.0
 const STEP_FALL_THRESHOLD := 14.0
+const STOPPED_PLAYER_REFERENCE_SPEED := 500.0
 
 func configure(new_size: Vector2, attach_to_ceiling: bool) -> void:
 	super.configure(new_size, attach_to_ceiling)
@@ -21,10 +22,15 @@ func set_motion_speed_multiplier(multiplier: float) -> void:
 func advance_motion(delta: float, movement: float, _player_position: Vector2, floor_y_at: Callable, surface_angle_at: Callable, surface_supported_at: Callable = Callable()) -> void:
 	if is_destroying:
 		return
-	# Barrels roll faster than the scrolling course; their profile forecasts this
-	# relative motion so the route planner still reserves the correct danger span.
-	var travel := movement * motion_speed_multiplier
-	position.x -= travel
+	# The course is static in world space and the player moves right. A barrel's
+	# extra relative speed is therefore represented as leftward world motion.
+	var motion_reference := movement
+	if movement <= 0.0 and delta > 0.0:
+		# The rolling barrel still has autonomous motion while the runner is
+		# blocked. Use the same world-speed reference as while running.
+		motion_reference = STOPPED_PLAYER_REFERENCE_SPEED * delta
+	var relative_travel := motion_reference * (motion_speed_multiplier - 1.0)
+	position.x -= relative_travel
 	var floor_y := float(floor_y_at.call(position.x))
 	var floor_supported := true
 	if surface_supported_at.is_valid():
@@ -47,7 +53,9 @@ func advance_motion(delta: float, movement: float, _player_position: Vector2, fl
 	rotation = float(surface_angle_at.call(position.x, false))
 	var radius := minf(size.x, size.y) * 0.5
 	if radius > 0.0:
-		roll_angle -= travel / radius
+		# Camera motion changes apparent screen velocity, not the barrel's own
+		# angular velocity. Spin only from its world-space travel.
+		roll_angle -= relative_travel / radius
 	queue_redraw()
 
 func _begin_destruction() -> void:

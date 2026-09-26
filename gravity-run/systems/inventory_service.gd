@@ -4,6 +4,8 @@ signal state_changed(state: Dictionary, stale: bool, error_message: String)
 signal action_finished(action: String, success: bool, message: String, result: Dictionary)
 
 const Provider = preload("res://systems/supabase_inventory_provider.gd")
+const ItemDefinitionScript = preload("res://systems/item_definition.gd")
+const RunLoadoutSnapshotScript = preload("res://systems/run_loadout_snapshot.gd")
 const CACHE_PATH := "user://gravity_run_inventory.cfg"
 
 var inventory_state: Dictionary = {}
@@ -43,6 +45,59 @@ func unequip(slot_type: String) -> void:
 	if not _begin_mutation("unequip_item"):
 		return
 	_provider.unequip_item(slot_type, AuthService.get_access_token(), _user_id)
+
+func create_run_loadout_snapshot(character_stats: Resource) -> Resource:
+	var base_stats: Dictionary = {}
+	if character_stats != null and character_stats.has_method("get_base_stats") and character_stats.has_method("validate") and str(character_stats.call("validate")).is_empty():
+		base_stats = character_stats.call("get_base_stats")
+	else:
+		push_warning("Missing or invalid character profile stats; equipment bonuses will not be applied this run.")
+	var entries: Array[Dictionary] = []
+	var equipped: Variant = inventory_state.get("equipment", {})
+	if equipped is Dictionary:
+		for slot in equipped:
+			var instance_id := str(equipped[slot])
+			var owned := _find_owned_item(instance_id)
+			if owned.is_empty():
+				continue
+			var raw: Dictionary = owned.get("definition", {})
+			var definition = ItemDefinitionScript.new()
+			definition.item_id = str(raw.get("item_id", ""))
+			definition.slot_type = str(raw.get("slot_type", ""))
+			definition.rarity = str(raw.get("rarity", "common"))
+			definition.name_key = str(raw.get("name_key", ""))
+			definition.description_key = str(raw.get("description_key", ""))
+			definition.icon_key = str(raw.get("icon_key", "unknown"))
+			var modifiers: Variant = raw.get("stat_modifiers", {})
+			definition.stat_modifiers = modifiers if modifiers is Dictionary else {}
+			entries.append({"slot_type": str(slot), "instance_id": instance_id, "definition": definition})
+	var version := 1
+	var catalog: Variant = inventory_state.get("catalog", [])
+	if catalog is Array:
+		for raw_definition in catalog:
+			if raw_definition is Dictionary:
+				version = maxi(version, int(raw_definition.get("catalog_version", 1)))
+	var snapshot = RunLoadoutSnapshotScript.create(entries, version, base_stats)
+	if not snapshot.is_valid():
+		push_warning("Invalid equipped inventory; starting this run with the default loadout: %s" % ", ".join(snapshot.get_errors()))
+		return RunLoadoutSnapshotScript.create([], version, base_stats)
+	return snapshot
+
+func _find_owned_item(instance_id: String) -> Dictionary:
+	if instance_id.is_empty():
+		return {}
+	var items: Variant = inventory_state.get("items", [])
+	var catalog: Variant = inventory_state.get("catalog", [])
+	if not items is Array or not catalog is Array:
+		return {}
+	var definitions := {}
+	for raw_definition in catalog:
+		if raw_definition is Dictionary:
+			definitions[str(raw_definition.get("item_id", ""))] = raw_definition
+	for item in items:
+		if item is Dictionary and str(item.get("instance_id", "")) == instance_id:
+			return {"instance": item, "definition": definitions.get(str(item.get("item_id", "")), {})}
+	return {}
 
 func _begin_mutation(action: String) -> bool:
 	if not AuthService.is_authenticated or AuthService.user_id.is_empty():
@@ -101,6 +156,9 @@ func _on_request_finished(action: String, success: bool, data: Variant, message:
 		return
 	_apply_state(result)
 	action_finished.emit(action, true, tr("Equipment updated."), {})
+	# Refresh the catalog as well as the equipped slot; item definitions can gain
+	# new stats after an account already owns the item.
+	refresh()
 
 func _apply_state(state: Dictionary) -> void:
 	if not AuthService.is_authenticated or AuthService.user_id != _user_id:

@@ -12,5 +12,5 @@ func configure(new_width: float, attach_to_ceiling: bool) -> void:
 func contains_track_x(world_x: float, ceiling: bool) -> bool:
 	return ceiling == from_ceiling and absf(world_x - global_position.x) <= width * 0.5
 
-func advance_motion(_delta: float, movement: float, _player_position: Vector2, _floor_y_at: Callable, _surface_angle_at: Callable, _surface_supported_at: Callable = Callable()) -> void:
-	position.x -= movement
+func advance_motion(_delta: float, _movement: float, _player_position: Vector2, _floor_y_at: Callable, _surface_angle_at: Callable, _surface_supported_at: Callable = Callable()) -> void:
+	pass

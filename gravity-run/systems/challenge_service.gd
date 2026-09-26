@@ -13,6 +13,7 @@ const SeedChallengeProvider := preload("res://systems/supabase_seed_challenge_pr
 const RulesetScript := preload("res://systems/course_generation_ruleset.gd")
 const Config := preload("res://systems/leaderboard_config.gd")
 const GENERATOR_VERSION := CourseGeneratorScript.GENERATOR_VERSION
+const LEGACY_GENERATOR_VERSION := CourseGeneratorScript.LEGACY_GENERATOR_VERSION
 const MIN_CHALLENGE_SEED := 100000000
 const MAX_CHALLENGE_SEED := 2147483647
 
@@ -36,7 +37,7 @@ func _ready() -> void:
 	_challenge_provider.name = "SupabaseSeedChallengeProvider"
 	_challenge_provider.request_finished.connect(_on_challenge_request_finished)
 	add_child(_challenge_provider)
-	ruleset = RulesetScript.new()
+	ruleset = _new_default_ruleset(GENERATOR_VERSION)
 
 func begin_run() -> int:
 	if active and seed_value > 0:
@@ -47,7 +48,7 @@ func begin_run() -> int:
 	generation_version = GENERATOR_VERSION
 	_custom_challenge_mode = false
 	active_challenge_code = ""
-	ruleset = RulesetScript.new()
+	ruleset = _new_default_ruleset(GENERATOR_VERSION)
 	last_error = ""
 	return seed_value
 
@@ -55,10 +56,10 @@ func start_challenge_from_code(raw_code: String) -> bool:
 	last_error = ""
 	var parts := raw_code.strip_edges().to_upper().split("-", false)
 	if parts.size() != 2 or not parts[0].begins_with("GR") or not parts[0].substr(2).is_valid_int() or not parts[1].is_valid_int():
-		last_error = "Invalid challenge code. Use GR3- followed by its number."
+		last_error = "Invalid challenge code. Use GR%d- followed by its number." % GENERATOR_VERSION
 		return false
 	var requested_version := parts[0].substr(2).to_int()
-	if requested_version != GENERATOR_VERSION:
+	if not _supports_generator_version(requested_version):
 		last_error = "That challenge uses an unsupported generator version."
 		return false
 	var parsed_seed := parts[1].to_int()
@@ -70,7 +71,7 @@ func start_challenge_from_code(raw_code: String) -> bool:
 	active = true
 	_custom_challenge_mode = false
 	active_challenge_code = ""
-	ruleset = RulesetScript.new()
+	ruleset = _new_default_ruleset(requested_version)
 	return true
 
 ## Numeric GR codes remain supported for the current basic challenge flow.
@@ -258,14 +259,14 @@ func _on_challenge_request_finished(action: String, success: bool, data: Variant
 
 func _apply_challenge_definition(definition: Dictionary) -> bool:
 	var requested_version := int(definition.get("generator_version", 0))
-	if requested_version != GENERATOR_VERSION:
+	if not _supports_generator_version(requested_version):
 		last_error = "That challenge uses an unsupported generator version."
 		return false
 	var restored_ruleset: Resource = RulesetScript.from_payload(definition.get("ruleset"))
 	if restored_ruleset == null:
 		last_error = "That challenge has invalid rules."
 		return false
-	var validation_error := str(restored_ruleset.call("validate", _get_available_profiles()))
+	var validation_error := str(restored_ruleset.call("validate", _get_available_profiles(requested_version)))
 	if not validation_error.is_empty() or str(restored_ruleset.call("get_fingerprint")) != str(definition.get("ruleset_fingerprint", "")):
 		last_error = "That challenge's rules no longer match this game version."
 		return false
@@ -282,9 +283,18 @@ func _apply_challenge_definition(definition: Dictionary) -> bool:
 	last_error = ""
 	return true
 
-func _get_available_profiles() -> Array:
+func _get_available_profiles(generator_version: int = GENERATOR_VERSION) -> Array:
 	var generator := CourseGeneratorScript.new()
-	return generator.get_profile_catalog(GENERATOR_VERSION)
+	return generator.get_profile_catalog(generator_version)
+
+func _supports_generator_version(generator_version: int) -> bool:
+	return generator_version == GENERATOR_VERSION or generator_version == LEGACY_GENERATOR_VERSION
+
+func _new_default_ruleset(generator_version: int) -> Resource:
+	var default_ruleset := RulesetScript.new() as Resource
+	if generator_version == LEGACY_GENERATOR_VERSION:
+		default_ruleset.set("event_density", 1.0)
+	return default_ruleset
 
 func _is_authenticated() -> bool:
 	var auth_service := get_node_or_null("/root/AuthService")
@@ -308,5 +318,5 @@ func clear_challenge() -> void:
 	generation_version = GENERATOR_VERSION
 	active_challenge_code = ""
 	_custom_challenge_mode = false
-	ruleset = RulesetScript.new()
+	ruleset = _new_default_ruleset(GENERATOR_VERSION)
 	last_error = ""

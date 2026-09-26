@@ -14,6 +14,11 @@ var seed_scores_loaded := false
 var seed_scores_error := false
 var pass_flash_name := ""
 var pass_flash_left := 0.0
+var loot_pending_count := 0
+var speed_debug_visible := false
+var speed_debug_actual := 0.0
+var speed_debug_base := 0.0
+var speed_debug_equipment_percent := 100.0
 
 func _ready() -> void:
 	PlayerAccountProfile.profile_changed.connect(_on_account_profile_changed)
@@ -39,6 +44,20 @@ func _process(delta: float) -> void:
 func update_stats(new_distance_m: float, new_coins: int) -> void:
 	distance_m = new_distance_m
 	run_coins = new_coins
+	queue_redraw()
+
+func set_loot_pending_count(count: int) -> void:
+	loot_pending_count = maxi(count, 0)
+	queue_redraw()
+
+func set_speed_debug_visible(enabled: bool) -> void:
+	speed_debug_visible = enabled
+	queue_redraw()
+
+func set_speed_debug_values(actual_speed: float, base_speed: float, equipment_percent: float) -> void:
+	speed_debug_actual = actual_speed
+	speed_debug_base = base_speed
+	speed_debug_equipment_percent = equipment_percent
 	queue_redraw()
 
 func update_player_status(new_gravity_direction: int, new_cooldown_left: float) -> void:
@@ -81,7 +100,15 @@ func _draw() -> void:
 	if not player_name.is_empty():
 		draw_string(ThemeDB.fallback_font, Vector2(160.0, 22.0), tr("PLAYER: %s") % player_name, HORIZONTAL_ALIGNMENT_LEFT, 135.0, 11, Color("42d6c5"))
 	draw_string(ThemeDB.fallback_font, Vector2(300.0, 22.0), tr("COINS  %02d") % run_coins, HORIZONTAL_ALIGNMENT_LEFT, 82.0, 11, Color("f5d45e"))
-	draw_string(ThemeDB.fallback_font, Vector2(viewport_width - 250.0, 22.0), tr("DISTANCE  %06d m") % int(distance_m / 10.0), HORIZONTAL_ALIGNMENT_RIGHT, 180.0, 15, Color("b8c7dc"))
+	# Leave room for the inventory/shop/pause buttons anchored at the top-right.
+	draw_string(ThemeDB.fallback_font, Vector2(viewport_width - 360.0, 22.0), tr("DISTANCE  %06d m") % int(distance_m / 10.0), HORIZONTAL_ALIGNMENT_RIGHT, 190.0, 15, Color("b8c7dc"))
+	if speed_debug_visible:
+		var debug_rect := Rect2(14.0, 29.0, 360.0, 24.0)
+		draw_rect(debug_rect, Color("101827", 0.92))
+		var debug_text := "F3 DEBUG  ·  %.1f / %.1f px/s  ·  gear %.0f%%" % [speed_debug_actual, speed_debug_base, speed_debug_equipment_percent]
+		draw_string(ThemeDB.fallback_font, Vector2(21.0, 46.0), debug_text, HORIZONTAL_ALIGNMENT_LEFT, 348.0, 12, Color("8ee0a1"))
+	if loot_pending_count > 0:
+		draw_string(ThemeDB.fallback_font, Vector2(viewport_width - 250.0, 42.0), tr("LOOT PENDING · %d") % loot_pending_count, HORIZONTAL_ALIGNMENT_RIGHT, 180.0, 10, Color("42d6c5"))
 	_draw_seed_chase_strip(viewport_width, viewport_height)
 	if pass_flash_left > 0.0:
 		var flash_phase := sin(Time.get_ticks_msec() / 75.0) * 0.5 + 0.5
