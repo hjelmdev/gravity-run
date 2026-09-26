@@ -41,6 +41,14 @@ func get_surface_y_at(_x: float) -> float:
 func get_surface_angle_at(_x: float) -> float:
 	return 0.0
 
+func spikes_point_left() -> bool:
+	return (end_surface_y < start_surface_y) != from_ceiling
+
+func scale_track_height(scale: float) -> void:
+	start_surface_y = 56.0 + (start_surface_y - 56.0) * scale
+	end_surface_y = 56.0 + (end_surface_y - 56.0) * scale
+	queue_redraw()
+
 func get_wall_rect() -> Rect2:
 	var top := minf(start_surface_y, end_surface_y)
 	return Rect2(Vector2(global_position.x - WALL_THICKNESS * 0.5, top), Vector2(WALL_THICKNESS, absf(end_surface_y - start_surface_y)))
@@ -58,7 +66,7 @@ func _spike_triangles_local() -> Array[PackedVector2Array]:
 	var height := absf(end_surface_y - start_surface_y)
 	var count := maxi(2, int(ceil(height / 28.0)))
 	var segment := height / float(count)
-	var points_left := (end_surface_y < start_surface_y) != from_ceiling
+	var points_left := spikes_point_left()
 	var spike_direction := -1.0 if points_left else 1.0
 	for i in range(count):
 		var center_y := top + (float(i) + 0.5) * segment

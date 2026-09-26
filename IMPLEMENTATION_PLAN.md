@@ -120,6 +120,13 @@ Detta är en framtida systemdesign och ska inte byggas in i den första mekanikp
 - I campaign kan collectibles placeras i utmanande men avsiktliga sektioner. Om banor genereras dynamiskt ska genereringen garantera att de tre föremålen finns i nåbara delar av banan.
 - Endless behöver inte ha exakt tre föremål per bana; där kan coins och särskilda distans-/milestone-collectibles passa bättre.
 
+## Achievements / prestationer
+
+- Spelet bör ha ett achievement-system med både skicklighets-, samlar- och uthållighetsutmaningar. Exempel: samla ett visst antal coins inom en tidsgräns, eller klara en bana med högst ett visst antal gravitationsbyten.
+- Prestationer kan belöna achievement-poäng och en badge, eller låsa upp kosmetik, figurer eller annat innehåll. Belöningen ska vara tydlig och systemet bör stödja både engångsbelöningar och upprepningsbara mål där det passar.
+- Campaign-achievements kan knytas till specifika banor; endless-achievements kan använda distans, tid, coin-streaks eller andra milstolpar.
+- Byggs efter att grundläggande spelloop och sparad spelarprofil finns. Spelsystemen rapporterar händelser som coin-insamling, gravitationsbyte och avslutad bana; achievement-systemet följer upp villkor och sparar upplåsningar separat från den aktiva rundans statistik.
+
 ## Hinderinteraktioner – designanteckningar
 
 - Vanlig tunna som träffar en låda: både tunnan och lådan går sönder.
@@ -186,12 +193,15 @@ När Godot är installerat börjar vi med Milstolpe 1, steg 1: skapa huvudscenen
 
 ## Sandbox – aktuella experiment
 
+- Grafikbeslut: fortsätt med enkla placeholder-former i huvudspelet tills en kort spelbar bana fungerar och har provats i desktop- och mobilformat. Legacy-atlasen ligger kvar som ett fristående test, men integreras inte som spelets slutliga tileset nu. Bestäm senare mål för tile-/världsskala, kamerautsnitt och läsbarhet på mobil innan vi skapar eller väljer egna biome-tiles.
 - Hinder är separata återanvändbara scener: spikes, block och tunna.
 - Coins spawnar i små grupper på olika höjder i spelområdet och räknas per runda. Shop, sparad valuta och banornas tre särskilda collectibles är framtida arbete.
 - Återanvändbara ramper kan ändra golvets eller takets höjd; den nya nivån består tills en senare ramp ändrar den igen. Gravitationen förblir lodrät.
 - Testa coin-gruppernas spridning och rampsekvensernas riktning/frekvens innan vi bestämmer slutliga regler eller bygger campaignbanor.
 - En del tunnspawns parar nu en tunna med en låda framför. Vid kollision går båda sönder; det provar grundregeln för framtida låda-collectible-sektioner.
 - Hårda terrängskiften testas från både golv och tak med varierad nivåskillnad och varierat avstånd mellan skiften. Den nya ytan består efter kanten; ospikade kanter blockerar scrollen tills spelaren byter sida och spikar på framkanten är dödliga. Små block är fortsatt separata hinder. Kontrollera särskilt samspelet med slopes och tunnor.
+- Senare banidé: fristående plattformar/"öar" mitt i spelområdet, inte bara ytor vid skärmens golv och tak. Spelaren ska kunna välja när gravitationen vänds: tidigt för att nå taket, eller senare för att landa på öns undersida (som blir spelarens tak vid uppåtriktad gravitation). Byggs först när grundläggande terräng-/biome-generering och kollisioner fungerar; testa då läsbarhet, nåbarhet och om öarna ska vara säkra landningsytor eller kombineras med hinder.
+- Senare terränghinder: avsiktliga hål/avbrott i golv och tak, gärna i varierande längd. Spelaren måste hinna byta gravitation till den motsatta ytan innan hen faller genom hålet; hål är frånvarande terräng/kollision, inte en spike eller ett block. Atlasens korta plattformsbitar verkar kunna visa plattform → öppning → plattform. Klassificera dessutom atlasbitar som mittsegment respektive änd-/ensamsegment, så ändbitar inte upprepas felaktigt i genererade sträckor.
 
 ## Kodstruktur – första uppdelning
 

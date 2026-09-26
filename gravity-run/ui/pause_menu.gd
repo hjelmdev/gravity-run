@@ -1,0 +1,207 @@
+extends CanvasLayer
+
+const MAIN_MENU_SCENE := "res://ui/main_menu.tscn"
+
+var pause_button: Button
+var pause_overlay: Control
+var resume_button: Button
+var menu_layout: VBoxContainer
+var pause_panel: PanelContainer
+var portrait_forced_pause := false
+
+func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	_build_pause_button()
+	_build_pause_overlay()
+
+func _process(_delta: float) -> void:
+	if not OS.has_feature("web"):
+		return
+	var phone_in_portrait := bool(JavaScriptBridge.eval("window.parent.document.documentElement.classList.contains('phone-portrait')"))
+	if phone_in_portrait and not portrait_forced_pause and not get_tree().paused:
+		portrait_forced_pause = true
+		get_tree().paused = true
+	elif not phone_in_portrait and portrait_forced_pause:
+		portrait_forced_pause = false
+		get_tree().paused = false
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_cancel"):
+		_set_paused(not get_tree().paused)
+		get_viewport().set_input_as_handled()
+
+func _build_pause_button() -> void:
+	pause_button = Button.new()
+	pause_button.name = "PauseButton"
+	pause_button.text = ""
+	pause_button.tooltip_text = tr("Pause")
+	pause_button.focus_mode = Control.FOCUS_ALL
+	pause_button.custom_minimum_size = Vector2(40.0, 40.0)
+	pause_button.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	pause_button.offset_left = -52.0
+	pause_button.offset_top = 6.0
+	pause_button.offset_right = -12.0
+	pause_button.offset_bottom = 46.0
+	var pause_icon := Control.new()
+	pause_icon.name = "PauseIcon"
+	pause_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pause_icon.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	pause_button.add_child(pause_icon)
+	for bar_index in range(2):
+		var bar := ColorRect.new()
+		bar.name = "PauseBar%d" % bar_index
+		bar.color = Color("edf3ff")
+		bar.position = Vector2(14.0 + float(bar_index) * 8.0, 12.0)
+		bar.size = Vector2(4.0, 16.0)
+		bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		pause_icon.add_child(bar)
+	pause_button.pressed.connect(_set_paused.bind(true))
+	add_child(pause_button)
+
+func _build_pause_overlay() -> void:
+	pause_overlay = Control.new()
+	pause_overlay.name = "PauseOverlay"
+	pause_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	pause_overlay.visible = false
+	add_child(pause_overlay)
+
+	var dimmer := ColorRect.new()
+	dimmer.name = "GrayFilter"
+	dimmer.color = Color(0.48, 0.51, 0.58, 0.68)
+	dimmer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dimmer.mouse_filter = Control.MOUSE_FILTER_STOP
+	pause_overlay.add_child(dimmer)
+
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	pause_overlay.add_child(center)
+
+	pause_panel = PanelContainer.new()
+	pause_panel.custom_minimum_size = Vector2(360.0, 390.0)
+	pause_panel.add_theme_stylebox_override("panel", _panel_style())
+	center.add_child(pause_panel)
+
+	menu_layout = VBoxContainer.new()
+	menu_layout.add_theme_constant_override("separation", 14)
+	pause_panel.add_child(menu_layout)
+	_show_pause_actions()
+
+func _show_pause_actions() -> void:
+	_clear_menu_layout()
+
+	var title := Label.new()
+	title.text = tr("PAUSED")
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 30)
+	title.add_theme_color_override("font_color", Color("edf3ff"))
+	menu_layout.add_child(title)
+
+	var hint := Label.new()
+	hint.text = tr("Game paused")
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_font_size_override("font_size", 15)
+	hint.add_theme_color_override("font_color", Color("b9c8dc"))
+	menu_layout.add_child(hint)
+	resume_button = Button.new()
+	resume_button.text = tr("Resume")
+	resume_button.custom_minimum_size = Vector2(0.0, 44.0)
+	resume_button.pressed.connect(_set_paused.bind(false))
+	menu_layout.add_child(resume_button)
+
+	var options_button := Button.new()
+	options_button.text = tr("Options")
+	options_button.custom_minimum_size = Vector2(0.0, 44.0)
+	options_button.pressed.connect(_show_control_options)
+	menu_layout.add_child(options_button)
+
+	var menu_button := Button.new()
+	menu_button.text = tr("Quit to main menu")
+	menu_button.custom_minimum_size = Vector2(0.0, 44.0)
+	menu_button.pressed.connect(_quit_to_main_menu)
+	menu_layout.add_child(menu_button)
+
+func _show_control_options() -> void:
+	_clear_menu_layout()
+	var title := Label.new()
+	title.text = tr("OPTIONS")
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 28)
+	title.add_theme_color_override("font_color", Color("edf3ff"))
+	menu_layout.add_child(title)
+
+	var is_touch_device := DisplayServer.is_touchscreen_available()
+	var hint := Label.new()
+	hint.text = tr("Mobile gravity control") if is_touch_device else tr("Desktop gravity control")
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_color_override("font_color", Color("b9c8dc"))
+	menu_layout.add_child(hint)
+
+	var control_options: Array[Dictionary] = []
+	if is_touch_device:
+		control_options.append({"mode": "swipe", "label": tr("Swipe up / down")})
+		control_options.append({"mode": "tap", "label": tr("Tap screen to flip")})
+	else:
+		control_options.append({"mode": "keyboard", "label": tr("Swap with W / S")})
+		control_options.append({"mode": "mouse", "label": tr("Swap with mouse click")})
+	for option in control_options:
+		var mode := str(option["mode"])
+		var button := Button.new()
+		button.text = ("[x]  " if PlayerProfile.flip_control == mode else "") + str(option["label"])
+		button.custom_minimum_size = Vector2(0.0, 44.0)
+		button.pressed.connect(_select_control.bind(mode))
+		menu_layout.add_child(button)
+
+	var back_button := Button.new()
+	var language_row := HBoxContainer.new()
+	language_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	var language_button := Button.new()
+	language_button.text = "‹   %s   ›" % ("Svenska" if PlayerProfile.language == "sv" else "English")
+	language_button.custom_minimum_size = Vector2(0.0, 44.0)
+	language_button.pressed.connect(_cycle_language)
+	language_row.add_child(language_button)
+	menu_layout.add_child(language_row)
+
+	back_button.text = tr("Back to pause menu")
+	back_button.custom_minimum_size = Vector2(0.0, 44.0)
+	back_button.pressed.connect(_show_pause_actions)
+	menu_layout.add_child(back_button)
+	back_button.grab_focus()
+
+func _cycle_language() -> void:
+	PlayerProfile.set_language("en" if PlayerProfile.language == "sv" else "sv")
+	_show_control_options()
+
+func _select_control(mode: String) -> void:
+	PlayerProfile.set_flip_control(mode)
+	_show_control_options()
+
+func _clear_menu_layout() -> void:
+	for child in menu_layout.get_children():
+		menu_layout.remove_child(child)
+		child.queue_free()
+
+func _set_paused(paused: bool) -> void:
+	if not is_inside_tree():
+		return
+	get_tree().paused = paused
+	pause_overlay.visible = paused
+	pause_button.visible = not paused
+	if paused:
+		_show_pause_actions()
+		resume_button.grab_focus()
+
+func _quit_to_main_menu() -> void:
+	get_tree().paused = false
+	get_tree().change_scene_to_file(MAIN_MENU_SCENE)
+
+func _panel_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color("18243a")
+	style.border_color = Color("42d6c5")
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(14)
+	style.content_margin_left = 24.0
+	style.content_margin_right = 24.0
+	style.content_margin_top = 22.0
+	style.content_margin_bottom = 22.0
+	return style

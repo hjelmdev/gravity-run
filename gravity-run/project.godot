@@ -13,11 +13,21 @@ config_version=5
 config/name="Gravity Run"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.svg"
-run/main_scene="res://main.tscn"
+run/main_scene="res://ui/main_menu.tscn"
 
 [autoload]
 
 PlayerProfile="*res://systems/player_profile.gd"
+ChallengeService="*res://systems/challenge_service.gd"
+Leaderboard="*res://systems/leaderboard_service.gd"
+AuthService="*res://systems/auth_service.gd"
+AccountProgress="*res://systems/account_progress.gd"
+PlayerAccountProfile="*res://systems/player_account_profile.gd"
+AchievementService="*res://systems/achievement_service.gd"
+InventoryService="*res://systems/inventory_service.gd"
+
+[internationalization]
+locale/translations=PackedStringArray("res://locale/sv.po")
 
 [display]
 

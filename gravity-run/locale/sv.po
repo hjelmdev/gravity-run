@@ -1,0 +1,879 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Gravity Run\n"
+"Language: sv\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "New Game"
+msgstr "Nytt spel"
+
+msgid "Join challenge"
+msgstr "Gå med i utmaning"
+
+msgid "Challenges"
+msgstr "Utmaningar"
+
+msgid "CHALLENGES"
+msgstr "UTMANINGAR"
+
+msgid "Create challenge"
+msgstr "Skapa utmaning"
+
+msgid "CREATE CHALLENGE"
+msgstr "SKAPA UTMANING"
+
+msgid "Choose a difficulty and the hazards for a fixed, shareable course."
+msgstr "Välj svårighetsgrad och hinder för en fast bana att dela med andra."
+
+msgid "Difficulty"
+msgstr "Svårighetsgrad"
+
+msgid "Easy"
+msgstr "Lätt"
+
+msgid "Normal"
+msgstr "Normal"
+
+msgid "Hard"
+msgstr "Svår"
+
+msgid "Included hazards"
+msgstr "Hinder som ingår"
+
+msgid "Challenge creator nickname"
+msgstr "Ditt nickname"
+
+msgid "My challenges"
+msgstr "Mina utmaningar"
+
+msgid "MY CHALLENGES"
+msgstr "MINA UTMANINGAR"
+
+msgid "Challenge name"
+msgstr "Utmaningens namn"
+
+msgid "Give your challenge a name"
+msgstr "Ge utmaningen ett namn"
+
+msgid "Choose a challenge name with 1–40 characters."
+msgstr "Välj ett namn på utmaningen med 1–40 tecken."
+
+msgid "Loading your challenges..."
+msgstr "Laddar dina utmaningar..."
+
+msgid "No saved challenges yet."
+msgstr "Du har inga sparade utmaningar än."
+
+msgid "Could not sync your challenge list. Showing challenges saved on this device."
+msgstr "Kunde inte synka utmaningslistan. Visar utmaningar sparade på den här enheten."
+
+msgid "Challenge list could not sync; showing this device's saved challenges."
+msgstr "Utmaningslistan kunde inte synkas. Visar utmaningar sparade på den här enheten."
+
+msgid "Challenges are saved on this device."
+msgstr "Utmaningar sparas på den här enheten."
+
+msgid "By %s"
+msgstr "Av %s"
+
+msgid "Remove from my list"
+msgstr "Ta bort från min lista"
+
+msgid "Challenge by %s"
+msgstr "Utmaning av %s"
+
+msgid "Create and start"
+msgstr "Skapa och starta"
+
+msgid "Creating challenge..."
+msgstr "Skapar utmaningen..."
+
+msgid "Select at least one hazard."
+msgstr "Välj minst ett hinder."
+
+msgid "All current hazards"
+msgstr "Alla nuvarande hinder"
+
+msgid "CHALLENGE RECORDS"
+msgstr "UTMANINGSREKORD"
+
+msgid "Loading challenge records..."
+msgstr "Hämtar utmaningsrekord..."
+
+msgid "Challenge records unavailable."
+msgstr "Utmaningsrekorden kunde inte hämtas."
+
+msgid "No results yet — set the first record!"
+msgstr "Inga resultat ännu — sätt det första rekordet!"
+
+msgid "Created by %s · seed %d · hazards: %s"
+msgstr "Skapad av %s · bana %d · hinder: %s"
+
+msgid "Start challenge"
+msgstr "Starta utmaningen"
+
+msgid "Loading challenge..."
+msgstr "Hämtar utmaningen..."
+
+msgid "Preparing a shareable challenge..."
+msgstr "Förbereder en delbar utmaning..."
+
+msgid "Density ×%.2f · size ×%.2f · alternation %.2f · reaction margin %.2f"
+msgstr "Täthet ×%.2f · storlek ×%.2f · sidbyte %.2f · reaktionsmarginal %.2f"
+
+msgid "Hazard: spike_group"
+msgstr "Spikar"
+
+msgid "Hazard: block"
+msgstr "Block"
+
+msgid "Hazard: barrel_chain"
+msgstr "Tunnor"
+
+msgid "Hazard: floor_gap"
+msgstr "Hål i golvet"
+
+msgid "Hazard: ceiling_gap"
+msgstr "Hål i taket"
+
+msgid "Hazard: terrain_step"
+msgstr "Avsatser"
+
+msgid "Hazard: terrain_slope"
+msgstr "Lutningar"
+
+msgid "JOIN CHALLENGE"
+msgstr "GÅ MED I UTMANING"
+
+msgid "Enter a friend's code to play the same course. Your next regular run can also be shared afterwards."
+msgstr "Ange en väns kod för att spela samma bana. Du kan också dela din nästa vanliga runda efteråt."
+
+msgid "Enter a friend's code to play the same course. Your nickname and result will be public on this seed's leaderboard."
+msgstr "Ange en väns kod för att spela samma bana. Ditt nickname och resultat visas offentligt på banans topplista."
+
+msgid "Play a friend's course and compare your distance."
+msgstr "Spela en väns bana och jämför distansen."
+
+msgid "Created by %s"
+msgstr "Skapad av %s"
+
+msgid "Difficulty: %s"
+msgstr "Svårighetsgrad: %s"
+
+msgid "Hazards"
+msgstr "Hinder"
+
+msgid "Custom"
+msgstr "Anpassad"
+
+msgid "Challenge code, e.g. GR2-1234567890"
+msgstr "Utmaningskod, t.ex. GR2-1234567890"
+
+msgid "Invalid challenge code. Use GR2- followed by its number."
+msgstr "Ogiltig utmaningskod. Använd GR2- följt av numret."
+
+msgid "That challenge uses an unsupported generator version."
+msgstr "Utmaningen använder en generatorversion som inte stöds."
+
+msgid "The challenge seed is outside the supported range."
+msgstr "Utmaningens seed ligger utanför intervallet som stöds."
+
+msgid "Share this link so a friend can open the challenge directly."
+msgstr "Dela länken så öppnas utmaningen direkt för din vän."
+
+msgid "Share the code or link so a friend can open the challenge."
+msgstr "Dela koden eller länken så kan en vän öppna utmaningen."
+
+msgid "Challenge code"
+msgstr "Utmaningskod"
+
+msgid "Challenge link"
+msgstr "Utmaningslänk"
+
+msgid "Share this run as a challenge"
+msgstr "Dela rundan som en utmaning"
+
+msgid "Save score to this seed"
+msgstr "Spara resultat på den här banan"
+
+msgid "Use a nickname with 3–16 letters, numbers or underscores."
+msgstr "Använd ett nickname med 3–16 bokstäver, siffror eller understreck."
+
+msgid "Your nickname and result on this seed will be public."
+msgstr "Ditt nickname och resultat på den här banan visas offentligt."
+
+msgid "Enter a nickname to save your result to this seed."
+msgstr "Ange ett nickname för att spara ditt resultat på den här banan."
+
+msgid "Saving your public seed result..."
+msgstr "Sparar ditt offentliga seed-resultat..."
+
+msgid "Seed result saved."
+msgstr "Seed-resultatet är sparat."
+
+msgid "That nickname belongs to a registered player. Sign in to use it."
+msgstr "Det nicknamet tillhör en registrerad spelare. Logga in för att använda det."
+
+msgid "Could not save the seed result. Check your connection and try again."
+msgstr "Kunde inte spara seed-resultatet. Kontrollera anslutningen och försök igen."
+
+msgid "NEXT: %s · %d m"
+msgstr "NÄSTA: %s · %d m"
+
+msgid "FIRST RUN ON THIS SEED"
+msgstr "FÖRSTA RESULTATET PÅ DEN HÄR BANAN"
+
+msgid "SEED LEADERBOARD"
+msgstr "SEED-TOPPLISTA"
+
+msgid "NEW RECORD ON THIS SEED"
+msgstr "NYTT BANREKORD"
+
+msgid "YOU PASSED %s!"
+msgstr "DU PASSERADE %s!"
+
+msgid "No shared runs on this seed yet"
+msgstr "Ingen har delat en runda på den här banan ännu"
+
+msgid "SEED SCORES UNAVAILABLE"
+msgstr "SEED-TOPPLISTAN KUNDE INTE HÄMTAS"
+
+msgid "Could not load this seed's leaderboard"
+msgstr "Kunde inte hämta topplistan för den här banan"
+
+msgid "YOU"
+msgstr "DU"
+
+msgid "Copy challenge link"
+msgstr "Kopiera utmaningslänk"
+
+msgid "Copy challenge code"
+msgstr "Kopiera utmaningskod"
+
+msgid "Challenge link copied. Share it with a friend!"
+msgstr "Utmaningslänken är kopierad. Dela den med en vän!"
+
+msgid "Challenge code copied. Share it with a friend!"
+msgstr "Utmaningskoden är kopierad. Dela den med en vän!"
+
+msgid "Leaderboard"
+msgstr "Topplista"
+
+msgid "Test Lab"
+msgstr "Testlabb"
+
+msgid "Options"
+msgstr "Alternativ"
+
+msgid "Quit Game"
+msgstr "Avsluta spelet"
+
+msgid "LEADERBOARD — TOP 20"
+msgstr "TOPPLISTA — TOPP 20"
+
+msgid "Runs are ranked by distance. Coins are shown separately."
+msgstr "Rundorna rankas efter distans. Mynt visas separat."
+
+msgid "Loading leaderboard..."
+msgstr "Hämtar topplistan..."
+
+msgid "The leaderboard is empty for now."
+msgstr "Topplistan är tom än så länge."
+
+msgid "Back"
+msgstr "Tillbaka"
+
+msgid "%d m"
+msgstr "%d m"
+
+msgid "%d coins"
+msgstr "%d mynt"
+
+msgid "OPTIONS"
+msgstr "ALTERNATIV"
+
+msgid "Mobile gravity control"
+msgstr "Gravitationskontroll för mobil"
+
+msgid "Desktop gravity control"
+msgstr "Gravitationskontroll för dator"
+
+msgid "Swipe up / down"
+msgstr "Svep uppåt / nedåt"
+
+msgid "Tap screen to flip"
+msgstr "Tryck på skärmen för att vända"
+
+msgid "Swap with W / S"
+msgstr "Vänd med W / S"
+
+msgid "Swap with mouse click"
+msgstr "Vänd med musklick"
+
+msgid "Thanks for playing!"
+msgstr "Tack för att du spelade!"
+
+msgid "You can close this browser tab."
+msgstr "Du kan stänga den här webbläsarfliken."
+
+msgid "Back to game"
+msgstr "Tillbaka till spelet"
+
+msgid "Pause"
+msgstr "Paus"
+
+msgid "PAUSED"
+msgstr "PAUSAT"
+
+msgid "Game paused"
+msgstr "Spelet är pausat"
+
+msgid "Resume"
+msgstr "Fortsätt"
+
+msgid "Quit to main menu"
+msgstr "Till huvudmenyn"
+
+msgid "Back to pause menu"
+msgstr "Tillbaka till pausmenyn"
+
+msgid "COINS  %02d"
+msgstr "MYNT  %02d"
+
+msgid "DISTANCE  %06d m"
+msgstr "DISTANS  %06d m"
+
+msgid "PLAYER: %s"
+msgstr "SPELARE: %s"
+
+msgid "GRAVITY: FLOOR"
+msgstr "GRAVITET: GOLV"
+
+msgid "GRAVITY: CEILING"
+msgstr "GRAVITET: TAK"
+
+msgid "READY"
+msgstr "REDO"
+
+msgid "%.1f s"
+msgstr "%.1f s"
+
+msgid "FLIP  "
+msgstr "VÄNDNING  "
+
+msgid "BLOCKED — FLIP GRAVITY"
+msgstr "BLOCKERAD — VÄND GRAVITATIONEN"
+
+msgid "RUN OVER"
+msgstr "RUNDAN ÄR SLUT"
+
+msgid "Distance: %d m"
+msgstr "Distans: %d m"
+
+msgid "Tap the screen, press ENTER or SPACE to try again"
+msgstr "Tryck på skärmen, ENTER eller mellanslag för att försöka igen"
+
+msgid "Distance: %d m     Coins: %02d"
+msgstr "Distans: %d m     Mynt: %02d"
+
+msgid "Enter a name to submit your run to the leaderboard."
+msgstr "Skriv ett namn för att skicka rundan till topplistan."
+
+msgid "Leaderboard name (up to 16 characters)"
+msgstr "Namn på topplistan (max 16 tecken)"
+
+msgid "Your name and score will be public."
+msgstr "Ditt namn och resultat visas offentligt."
+
+msgid "Your name"
+msgstr "Ditt namn"
+
+msgid "Submit score"
+msgstr "Spara resultat"
+
+msgid "New Run"
+msgstr "Ny runda"
+
+msgid "Main Menu"
+msgstr "Huvudmeny"
+
+msgid "Enter a name first."
+msgstr "Skriv ett namn först."
+
+msgid "Submitting score..."
+msgstr "Skickar resultat..."
+
+msgid "Score submitted!"
+msgstr "Resultatet skickades!"
+
+msgid "A leaderboard request is already in progress."
+msgstr "En topplistebegäran pågår redan."
+
+msgid "Could not start loading the leaderboard (code %d)."
+msgstr "Kunde inte starta hämtningen av topplistan (kod %d)."
+
+msgid "A score is already being submitted."
+msgstr "Ett resultat håller redan på att skickas."
+
+msgid "Could not start submitting the score (code %d)."
+msgstr "Kunde inte starta inskickningen (kod %d)."
+
+msgid "Network error while loading leaderboard (code %d)."
+msgstr "Nätverksfel när topplistan skulle hämtas (kod %d)."
+
+msgid "Supabase returned HTTP %d. Check that the leaderboard table is installed."
+msgstr "Supabase svarade med HTTP %d. Kontrollera att topplistetabellen är installerad."
+
+msgid "The leaderboard returned an unexpected response."
+msgstr "Topplistan svarade i ett oväntat format."
+
+msgid "Network error while submitting score (code %d)."
+msgstr "Nätverksfel när resultatet skulle skickas (kod %d)."
+
+msgid "Supabase returned HTTP %d%s"
+msgstr "Supabase svarade med HTTP %d%s"
+
+msgid "Account"
+msgstr "Konto"
+
+msgid "Account: %s"
+msgstr "Konto: %s"
+
+msgid "Account · %s"
+msgstr "Konto · %s"
+
+msgid "ACCOUNT"
+msgstr "KONTO"
+
+msgid "Optional account for future cross-device progress. You can keep playing as a guest."
+msgstr "Valfritt konto för framtida synk mellan enheter. Du kan fortsätta spela som gäst."
+
+msgid "Signed in as %s."
+msgstr "Inloggad som %s."
+
+msgid "Public nickname (3–16 characters)"
+msgstr "Publikt nickname (3–16 tecken)"
+
+msgid "Nickname"
+msgstr "Nickname"
+
+msgid "Save nickname"
+msgstr "Spara nickname"
+
+msgid "Your public nickname: %s"
+msgstr "Ditt publika nickname: %s"
+
+msgid "Choose a unique nickname to finish setting up your player profile."
+msgstr "Välj ett unikt nickname för att slutföra spelarprofilen."
+
+msgid "Saving nickname..."
+msgstr "Sparar nickname..."
+
+msgid "That nickname is already taken. Choose another one."
+msgstr "Det nicknamet är upptaget. Välj ett annat."
+
+msgid "Nickname saved."
+msgstr "Nickname sparat."
+
+msgid "Could not save your nickname."
+msgstr "Kunde inte spara ditt nickname."
+
+msgid "Use 3–16 letters, numbers, or underscores for your nickname."
+msgstr "Använd 3–16 bokstäver, siffror eller understreck i ditt nickname."
+
+msgid "A profile request is already running."
+msgstr "En profilförfrågan pågår redan."
+
+msgid "Could not start the profile request (code %d)."
+msgstr "Kunde inte starta profilförfrågan (kod %d)."
+
+msgid "Network error while contacting the profile service (code %d)."
+msgstr "Nätverksfel vid kontakt med profiltjänsten (kod %d)."
+
+msgid "Your session expired. Please sign in again."
+msgstr "Din session har gått ut. Logga in igen."
+
+msgid "Profile request failed (HTTP %d)."
+msgstr "Profilförfrågan misslyckades (HTTP %d)."
+
+msgid "Account nickname"
+msgstr "Kontots nickname"
+
+msgid "Your account nickname will be used for this score."
+msgstr "Ditt kontos nickname används för resultatet."
+
+msgid "Sign Out"
+msgstr "Logga ut"
+
+msgid "Email address"
+msgstr "E-postadress"
+
+msgid "Password (at least 8 characters)"
+msgstr "Lösenord (minst 8 tecken)"
+
+msgid "Sign In"
+msgstr "Logga in"
+
+msgid "Create Account"
+msgstr "Skapa konto"
+
+msgid "Continue with Google"
+msgstr "Fortsätt med Google"
+
+msgid "Continue with email"
+msgstr "Fortsätt med e-post"
+
+msgid "Email account"
+msgstr "E-postkonto"
+
+msgid "Wallet: %d coins · Total distance: %d m"
+msgstr "Plånbok: %d mynt · Total distans: %d m"
+
+msgid "BANK  %d"
+msgstr "BANK  %d"
+
+msgid "This month"
+msgstr "Den här månaden"
+
+msgid "THIS MONTH — TOP 20"
+msgstr "DEN HÄR MÅNADEN — TOPP 20"
+
+msgid "One entry per account, ranked by distance this calendar month."
+msgstr "En plats per konto, rankat efter distans den här kalendermånaden."
+
+msgid "No account runs this month yet."
+msgstr "Inga kontorundor den här månaden ännu."
+
+msgid "The distance leaderboard returned an unexpected response."
+msgstr "Distanslistan gav ett oväntat svar."
+
+msgid "Could not start loading monthly leaderboard (code %d)."
+msgstr "Kunde inte starta hämtning av månadens topplista (kod %d)."
+
+msgid "Single runs"
+msgstr "Enskilda rundor"
+
+msgid "Total distance"
+msgstr "Total distans"
+
+msgid "TOTAL DISTANCE — TOP 20"
+msgstr "TOTAL DISTANS — TOPP 20"
+
+msgid "One entry per account, ranked by lifetime distance."
+msgstr "En plats per konto, sorterat efter sammanlagd distans."
+
+msgid "No account runs yet."
+msgstr "Inga kontorundor ännu."
+
+msgid "Saving run to your account..."
+msgstr "Sparar rundan på ditt konto..."
+
+msgid "Sign in to save coins and total distance."
+msgstr "Logga in för att spara mynt och total distans."
+
+msgid "Account saved · %d coins · %d m total distance"
+msgstr "Sparat på kontot · %d mynt · %d m total distans"
+
+msgid "Account save pending. It will retry when the connection is available. %s"
+msgstr "Kontosparningen väntar och försöker igen när anslutningen fungerar. %s"
+
+msgid "An account progress request is already in progress."
+msgstr "En kontoförfrågan pågår redan."
+
+msgid "Could not start loading total-distance leaderboard (code %d)."
+msgstr "Kunde inte starta hämtningen av topplistan för total distans (kod %d)."
+
+msgid "Could not start the account progress request (code %d)."
+msgstr "Kunde inte starta kontoförfrågan (kod %d)."
+
+msgid "Network error while saving account progress (code %d)."
+msgstr "Nätverksfel när kontots framsteg skulle sparas (kod %d)."
+
+msgid "Account progress request failed (HTTP %d). %s"
+msgstr "Kontoförfrågan misslyckades (HTTP %d). %s"
+
+msgid "The total-distance leaderboard returned an unexpected response."
+msgstr "Topplistan för total distans gav ett oväntat svar."
+
+msgid "The account progress service returned an unexpected response."
+msgstr "Kontotjänsten gav ett oväntat svar."
+
+msgid "Could not read the Google sign-in response."
+msgstr "Kunde inte läsa svaret från Google-inloggningen."
+
+msgid "Invalid Google sign-in response."
+msgstr "Ogiltigt svar från Google-inloggningen."
+
+msgid "Unexpected Google sign-in callback address."
+msgstr "Oväntad returadress från Google-inloggningen."
+
+msgid "Google sign-in was cancelled."
+msgstr "Google-inloggningen avbröts."
+
+msgid "Google did not return an authorization code."
+msgstr "Google skickade ingen auktoriseringskod."
+
+msgid "An account request is already running."
+msgstr "En kontoförfrågan pågår redan."
+
+msgid "Could not prepare secure Google sign-in."
+msgstr "Kunde inte förbereda en säker Google-inloggning."
+
+msgid "Could not open the local sign-in callback. Close anything using port %d and try again."
+msgstr "Kunde inte öppna den lokala inloggningsreturen. Stäng program som använder port %d och försök igen."
+
+msgid "Could not open the system browser (code %d)."
+msgstr "Kunde inte öppna systemets webbläsare (kod %d)."
+
+msgid "Your browser blocked the sign-in window. Allow pop-ups and try again."
+msgstr "Webbläsaren blockerade inloggningsfönstret. Tillåt popup-fönster och försök igen."
+
+msgid "Could not start Google session exchange (code %d)."
+msgstr "Kunde inte starta utbytet av Google-sessionen (kod %d)."
+
+msgid "Network error while completing Google sign-in (code %d)."
+msgstr "Nätverksfel när Google-inloggningen skulle slutföras (kod %d)."
+
+msgid "Google sign-in failed (HTTP %d). %s"
+msgstr "Google-inloggningen misslyckades (HTTP %d). %s"
+
+msgid "Google sign-in returned an incomplete session."
+msgstr "Google-inloggningen returnerade en ofullständig session."
+
+msgid "Working..."
+msgstr "Arbetar..."
+
+msgid "Signed in successfully."
+msgstr "Inloggningen lyckades."
+
+msgid "Signed out."
+msgstr "Du har loggat ut."
+
+msgid "Sign-in failed. Please try again."
+msgstr "Inloggningen misslyckades. Försök igen."
+
+msgid "An account request is already running."
+msgstr "En kontoförfrågan pågår redan."
+
+msgid "Could not start the request (code %d)."
+msgstr "Kunde inte starta förfrågan (kod %d)."
+
+msgid "Network error while contacting the account service (code %d)."
+msgstr "Nätverksfel vid kontakt med kontotjänsten (kod %d)."
+
+msgid "An account with that email already exists."
+msgstr "Det finns redan ett konto med den e-postadressen."
+
+msgid "Too many attempts. Please wait a little and try again."
+msgstr "För många försök. Vänta en stund och försök igen."
+
+msgid "Account request failed (HTTP %d)."
+msgstr "Kontoförfrågan misslyckades (HTTP %d)."
+
+msgid "The account service returned an unexpected response."
+msgstr "Kontotjänsten gav ett oväntat svar."
+
+msgid "Confirm your email address before signing in."
+msgstr "Bekräfta din e-postadress innan du loggar in."
+
+msgid "Your password is never stored by the game. Your sign-in session is saved on this device."
+msgstr "Spelet sparar aldrig ditt lösenord. Din inloggning sparas på den här enheten."
+
+msgid "Signed out on this device."
+msgstr "Utloggad på den här enheten."
+
+msgid "Achievements"
+msgstr "Prestationer"
+
+msgid "ACHIEVEMENTS"
+msgstr "PRESTATIONER"
+
+msgid "Achievements are tied to your account."
+msgstr "Prestationer är knutna till ditt konto."
+
+msgid "Unlocked %d of %d"
+msgstr "%d av %d upplåsta"
+
+msgid "ACHIEVEMENT UNLOCKED"
+msgstr "PRESTATION UPPLÅST"
+
+msgid "MILESTONE REACHED"
+msgstr "MÅL NÅTT"
+
+msgid "UNLOCKED THIS RUN"
+msgstr "UPPLÅSTA DEN HÄR RUNDA"
+
+msgid "Distance collector I"
+msgstr "Distanssamlare I"
+
+msgid "Distance collector II"
+msgstr "Distanssamlare II"
+
+msgid "Distance collector III"
+msgstr "Distanssamlare III"
+
+msgid "Long run I"
+msgstr "Långkörare I"
+
+msgid "Long run II"
+msgstr "Långkörare II"
+
+msgid "Long run III"
+msgstr "Långkörare III"
+
+msgid "Run 250 m in total."
+msgstr "Spring totalt 250 m."
+
+msgid "Run 500 m in total."
+msgstr "Spring totalt 500 m."
+
+msgid "Run 1,000 m in total."
+msgstr "Spring totalt 1 000 m."
+
+msgid "Reach 250 m in one run."
+msgstr "Nå 250 m under en runda."
+
+msgid "Reach 500 m in one run."
+msgstr "Nå 500 m under en runda."
+
+msgid "Reach 1,000 m in one run."
+msgstr "Nå 1 000 m under en runda."
+
+msgid "Coin saver I"
+msgstr "Myntsamlare I"
+
+msgid "Coin saver II"
+msgstr "Myntsamlare II"
+
+msgid "Coin saver III"
+msgstr "Myntsamlare III"
+
+msgid "Collect 100 coins in total."
+msgstr "Samla totalt 100 mynt."
+
+msgid "Collect 500 coins in total."
+msgstr "Samla totalt 500 mynt."
+
+msgid "Collect 1,000 coins in total."
+msgstr "Samla totalt 1 000 mynt."
+
+msgid "Flip master I"
+msgstr "Gravitationsmästare I"
+
+msgid "Flip master II"
+msgstr "Gravitationsmästare II"
+
+msgid "Flip master III"
+msgstr "Gravitationsmästare III"
+
+msgid "Change gravity 100 times."
+msgstr "Byt gravitation 100 gånger."
+
+msgid "Change gravity 500 times."
+msgstr "Byt gravitation 500 gånger."
+
+msgid "Change gravity 1,000 times."
+msgstr "Byt gravitation 1 000 gånger."
+
+msgid "Sharp eyes I"
+msgstr "Skarp blick I"
+
+msgid "Sharp eyes II"
+msgstr "Skarp blick II"
+
+msgid "Sharp eyes III"
+msgstr "Skarp blick III"
+
+msgid "Encounter 1 different hazard type."
+msgstr "Möt en typ av fara."
+
+msgid "Encounter 4 different hazard types."
+msgstr "Möt 4 olika typer av faror."
+
+msgid "Encounter 7 different hazard types."
+msgstr "Möt 7 olika typer av faror."
+
+msgid "An inventory request is already in progress."
+msgstr "En inventory-begäran pågår redan."
+
+msgid "Could not start the inventory request (code %d)."
+msgstr "Kunde inte starta inventory-begäran (kod %d)."
+
+msgid "Network error while contacting inventory (code %d)."
+msgstr "Nätverksfel vid kontakt med inventory (kod %d)."
+
+msgid "The inventory service returned an unexpected response."
+msgstr "Inventory-tjänsten gav ett oväntat svar."
+
+msgid "You do not have enough coins for this item."
+msgstr "Du har inte tillräckligt med mynt för föremålet."
+
+msgid "You already own this item."
+msgstr "Du äger redan föremålet."
+
+msgid "This item is not available in the shop."
+msgstr "Föremålet finns inte i butiken."
+
+msgid "This item is not in your inventory."
+msgstr "Föremålet finns inte i din väska."
+
+msgid "This item cannot be equipped in that slot."
+msgstr "Föremålet kan inte utrustas på den platsen."
+
+msgid "This item is already equipped in another slot."
+msgstr "Föremålet är redan utrustat på en annan plats."
+
+msgid "Inventory request failed (HTTP %d). %s"
+msgstr "Inventory-begäran misslyckades (HTTP %d). %s"
+
+msgid "Sign in to use inventory and the shop."
+msgstr "Logga in för att använda väskan och butiken."
+
+msgid "Another inventory change is already in progress."
+msgstr "En annan ändring av inventory pågår redan."
+
+msgid "Item purchased."
+msgstr "Föremålet har köpts."
+
+msgid "Equipment updated."
+msgstr "Utrustningen har uppdaterats."
+
+msgid "Showing saved inventory while syncing."
+msgstr "Visar sparad inventory medan synkronisering pågår."
+
+msgid "item.helmet_copper_01.name"
+msgstr "Kopparhjälm"
+
+msgid "item.helmet_copper_01.description"
+msgstr "En enkel hjälm av koppar."
+
+msgid "item.helmet_scout_01.name"
+msgstr "Spejarhuva"
+
+msgid "item.helmet_scout_01.description"
+msgstr "En lätt huva för snabba utflykter."
+
+msgid "item.helmet_night_01.name"
+msgstr "Nattvisir"
+
+msgid "item.helmet_night_01.description"
+msgstr "Ett mörkt visir med ovanlig glans."
+
+msgid "item.boots_canvas_01.name"
+msgstr "Lärkor"
+
+msgid "item.boots_canvas_01.description"
+msgstr "Bekväma tygskor för vardagsrundor."
+
+msgid "item.boots_runner_01.name"
+msgstr "Löparskor"
+
+msgid "item.boots_runner_01.description"
+msgstr "Slitstarka skor för långa rundor."
+
+msgid "item.boots_gravity_01.name"
+msgstr "Gravitationsstövlar"
+
+msgid "item.boots_gravity_01.description"
+msgstr "Stövlar med en märkligt stadig sula."

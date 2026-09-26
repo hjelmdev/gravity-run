@@ -1,0 +1,135 @@
+extends Resource
+class_name CourseHazardProfile
+## Data and route forecast for one generated encounter.
+## Lane bits: floor = 1, ceiling = 2. Custom profiles may override
+## build_threat_intervals() to describe moving/multi-stage hazards.
+
+const FLOOR_LANE := 1
+const CEILING_LANE := 2
+
+@export var profile_id: StringName
+@export var event_kind: StringName
+@export var runtime_scene: PackedScene
+@export_range(0.0, 100.0, 0.1) var weight := 1.0
+@export_flags("Floor", "Ceiling") var allowed_lanes := FLOOR_LANE | CEILING_LANE
+@export var width_range := Vector2(48.0, 64.0)
+@export var count_range := Vector2i(1, 1)
+@export var height_options: PackedFloat32Array = PackedFloat32Array([72.0])
+@export var threat_padding := 17.0
+## Horizontal speed relative to the scrolling course. The range is sampled
+## once per event, so runtime motion and feasibility forecasts use the same
+## value. Equal min/max keeps the hazard deterministic until variation is tuned.
+@export_range(1.0, 4.0, 0.05) var motion_speed_min := 1.0
+@export_range(1.0, 4.0, 0.05) var motion_speed_max := 1.0
+var spawn_lead_distance := 0.0
+## Optional normalized event-space forecasts. Each Vector3 is (start offset,
+## end offset, blocked lane mask); -1 uses the event's chosen lane. A moving
+## hazard can provide multiple windows, including pauses and lane changes.
+@export var threat_windows: Array[Vector3] = []
+
+func create_event(rng: RandomNumberGenerator, course_distance: float, difficulty: Resource = null, preferred_lane: int = 0) -> Dictionary:
+	var event_motion_speed_multiplier := rng.randf_range(
+		minf(motion_speed_min, motion_speed_max),
+		maxf(motion_speed_min, motion_speed_max)
+	)
+	var lane_alternation := float(difficulty.get("lane_alternation")) if difficulty != null else 0.0
+	var lane_mask := _choose_lane(rng, preferred_lane, lane_alternation)
+	var count := rng.randi_range(count_range.x, count_range.y)
+	var width := rng.randf_range(width_range.x, width_range.y)
+	var height := height_options[rng.randi_range(0, height_options.size() - 1)] if not height_options.is_empty() else width
+	var spiked_step := false
+	var slope_direction := 0.0
+	match event_kind:
+		&"spikes":
+			width = float((count - 1) * 32 + 28)
+			height = 32.0
+		&"barrels":
+			width = 54.0 + float(count - 1) * 70.0
+			height = 54.0 if rng.randf() < 0.5 else 76.0
+		&"gap":
+			width = rng.randf_range(width_range.x, width_range.y)
+			height = 0.0
+		&"step":
+			spiked_step = rng.randf() < 0.45
+			width = 240.0 if spiked_step else 36.0
+			if spiked_step:
+				count = rng.randi_range(4, 6)
+			height = height_options[rng.randi_range(0, height_options.size() - 1)] if not height_options.is_empty() else 84.0
+		&"slope":
+			width = width_range.x
+			slope_direction = -1.0 if rng.randi_range(0, 1) == 0 else 1.0
+	if difficulty != null:
+		var size_scale := float(difficulty.get("hazard_size"))
+		match event_kind:
+			&"spikes":
+				count = clampi(roundi(float(count) * size_scale), 2, 10)
+				width = float((count - 1) * 32 + 28)
+				height *= size_scale
+			&"barrels":
+				count = clampi(roundi(float(count) * size_scale), 1, 6)
+				width = 54.0 + float(count - 1) * 70.0
+				height *= size_scale
+			&"step":
+				if spiked_step:
+					count = clampi(roundi(float(count) * size_scale), 2, 10)
+					width = float((count - 1) * 32 + 28)
+				height *= size_scale
+			_:
+				width *= size_scale
+				height *= size_scale
+
+	var event := {
+		"id": profile_id,
+		"kind": event_kind,
+		"course_distance": course_distance,
+		"blocked_lanes": lane_mask,
+		"from_ceiling": bool(lane_mask & CEILING_LANE) and not bool(lane_mask & FLOOR_LANE),
+		"width": width,
+		"height": height,
+		"count": count,
+		"spiked_step": spiked_step,
+		"slope_direction": slope_direction,
+		"motion_speed_multiplier": event_motion_speed_multiplier,
+		"profile": self,
+	}
+	event["threats"] = build_threat_intervals(event)
+	return event
+
+func build_threat_intervals(event: Dictionary) -> Array[Dictionary]:
+	var intervals: Array[Dictionary] = []
+	var center := float(event["course_distance"])
+	var speed_multiplier := maxf(float(event.get("motion_speed_multiplier", 1.0)), 1.0)
+	# A faster hazard reaches the player before its nominal course distance.
+	# Events are instantiated at a fixed lead ahead of the viewport, so account
+	# for that offset as well as compressing each physical threat width by speed.
+	var forecast_center := center - spawn_lead_distance * (1.0 - 1.0 / speed_multiplier)
+	if not threat_windows.is_empty():
+		for window in threat_windows:
+			var mask := int(round(window.z))
+			if mask < 0:
+				mask = int(event["blocked_lanes"])
+			intervals.append({
+				"start": forecast_center + window.x / speed_multiplier,
+				"end": forecast_center + window.y / speed_multiplier,
+				"blocked_lanes": mask,
+			})
+		return intervals
+	var half_width := (float(event["width"]) * 0.5 + threat_padding) / speed_multiplier
+	intervals.append({
+		"start": forecast_center - half_width,
+		"end": forecast_center + half_width,
+		"blocked_lanes": int(event["blocked_lanes"]),
+	})
+	return intervals
+
+func _choose_lane(rng: RandomNumberGenerator, preferred_lane: int = 0, alternation_chance: float = 0.0) -> int:
+	var choices: Array[int] = []
+	if allowed_lanes & FLOOR_LANE:
+		choices.append(FLOOR_LANE)
+	if allowed_lanes & CEILING_LANE:
+		choices.append(CEILING_LANE)
+	if choices.is_empty():
+		return FLOOR_LANE
+	if choices.size() == 2 and preferred_lane in choices and rng.randf() < alternation_chance:
+		return preferred_lane
+	return choices[rng.randi_range(0, choices.size() - 1)]

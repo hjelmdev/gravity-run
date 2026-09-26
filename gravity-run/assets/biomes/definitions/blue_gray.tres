@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="BiomeDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://biomes/biome_definition.gd" id="1"]
+[ext_resource type="TileSet" path="res://assets/biomes/tilesheet_complete_atlas.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+biome_id = &"blue_gray"
+display_name = "Blågrå"
+tile_set = ExtResource("2")
+palette_row = 6
+floor_surface_tiles = Array[Vector2i]([Vector2i(1, 6), Vector2i(2, 6), Vector2i(3, 6), Vector2i(4, 6), Vector2i(5, 6), Vector2i(6, 6), Vector2i(7, 6), Vector2i(8, 6)])
+slope_up_tiles = Array[Vector2i]([Vector2i(1, 7), Vector2i(2, 7)])
+slope_down_tiles = Array[Vector2i]([Vector2i(3, 7), Vector2i(4, 7)])
+ledge_edge_tiles = Array[Vector2i]([Vector2i(0, 6), Vector2i(8, 7), Vector2i(7, 7)])
+background_color = Color(0.063, 0.094, 0.157, 1)

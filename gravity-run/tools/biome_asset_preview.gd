@@ -56,3 +56,17 @@ func _ready() -> void:
 		preview.custom_minimum_size = Vector2(0.0, 160.0)
 		preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		content.add_child(preview)
+
+	var back_button := Button.new()
+	back_button.text = "← TEST HUB"
+	back_button.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	back_button.offset_left = -154.0
+	back_button.offset_top = 12.0
+	back_button.offset_right = -14.0
+	back_button.offset_bottom = 48.0
+	back_button.z_index = 10
+	back_button.pressed.connect(_back_to_hub)
+	add_child(back_button)
+
+func _back_to_hub() -> void:
+	get_tree().change_scene_to_file("res://tools/test_hub.tscn")

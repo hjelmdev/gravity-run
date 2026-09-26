@@ -1,9 +1,11 @@
-[gd_scene format=3 uid="uid://gjejjx05hclq"]
+[gd_scene load_steps=7 format=3 uid="uid://gjejjx05hclq"]
 
 [ext_resource type="Script" uid="uid://yp5yv5l213hv" path="res://main.gd" id="1"]
 [ext_resource type="PackedScene" uid="uid://fwvvfq70cyrk" path="res://player/player.tscn" id="2"]
 [ext_resource type="PackedScene" path="res://ui/hud.tscn" id="3"]
 [ext_resource type="Script" uid="uid://ckyareylom8oo" path="res://systems/run_state.gd" id="4"]
+[ext_resource type="PackedScene" path="res://ui/pause_menu.tscn" id="5"]
+[ext_resource type="Script" path="res://ui/run_end_panel.gd" id="6"]
 
 [node name="GravityRun" type="Node2D" unique_id=1990220616]
 script = ExtResource("1")
@@ -14,3 +16,9 @@ script = ExtResource("1")
 script = ExtResource("4")
 
 [node name="HUD" parent="." unique_id=207651777 instance=ExtResource("3")]
+
+[node name="PauseMenu" parent="." instance=ExtResource("5")]
+
+[node name="RunEndPanel" type="CanvasLayer" parent="."]
+layer = 30
+script = ExtResource("6")

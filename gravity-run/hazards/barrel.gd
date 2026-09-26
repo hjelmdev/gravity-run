@@ -1,20 +1,49 @@
 extends "res://hazards/hazard.gd"
 
 var roll_angle := 0.0
-var roll_speed := 180.0
-const ROLL_SPEED_MIN := 160.0
-const ROLL_SPEED_MAX := 200.0
+var fall_velocity := 0.0
+var is_falling := false
+var motion_speed_multiplier := 1.0
+const FALL_GRAVITY := 1800.0
+const STEP_FALL_THRESHOLD := 14.0
 
 func configure(new_size: Vector2, attach_to_ceiling: bool) -> void:
 	super.configure(new_size, attach_to_ceiling)
-	roll_speed = randf_range(ROLL_SPEED_MIN, ROLL_SPEED_MAX)
+	fall_velocity = 0.0
+	is_falling = false
 
-func advance_motion(delta: float, movement: float, _player_position: Vector2, floor_y_at: Callable, surface_angle_at: Callable) -> void:
+func scale_track_height(scale: float) -> void:
+	fall_velocity *= scale
+
+func set_motion_speed_multiplier(multiplier: float) -> void:
+	motion_speed_multiplier = maxf(multiplier, 1.0)
+
+func advance_motion(delta: float, movement: float, _player_position: Vector2, floor_y_at: Callable, surface_angle_at: Callable, surface_supported_at: Callable = Callable()) -> void:
 	if is_destroying:
 		return
-	var travel := movement + roll_speed * delta
+	# Barrels roll faster than the scrolling course; their profile forecasts this
+	# relative motion so the route planner still reserves the correct danger span.
+	var travel := movement * motion_speed_multiplier
 	position.x -= travel
-	position.y = float(floor_y_at.call(position.x))
+	var floor_y := float(floor_y_at.call(position.x))
+	var floor_supported := true
+	if surface_supported_at.is_valid():
+		floor_supported = bool(surface_supported_at.call(position.x, false))
+	if is_falling:
+		var previous_y := position.y
+		fall_velocity += FALL_GRAVITY * delta
+		position.y += fall_velocity * delta
+		if floor_supported and previous_y <= floor_y and position.y >= floor_y:
+			position.y = floor_y
+			fall_velocity = 0.0
+			is_falling = false
+	else:
+		var floor_delta := floor_y - position.y
+		if not floor_supported or floor_delta > STEP_FALL_THRESHOLD:
+			is_falling = true
+			fall_velocity = 0.0
+		elif floor_delta >= -STEP_FALL_THRESHOLD:
+			position.y = floor_y
 	rotation = float(surface_angle_at.call(position.x, false))
 	var radius := minf(size.x, size.y) * 0.5
 	if radius > 0.0:

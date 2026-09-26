@@ -1,6 +1,7 @@
 extends Node2D
 
 signal status_changed(gravity_direction: int, cooldown_left: float)
+signal gravity_flipped
 
 const PLAYER_X := 180.0
 const PLAYER_SIZE := Vector2(34.0, 44.0)
@@ -8,12 +9,15 @@ const SPRITE_SURFACE_GAP := 1.0
 const PLAYER_SPEED_Y := 680.0
 const GRAVITY_ACCELERATION := 1900.0
 const COOLDOWN_SECONDS := 0.42
+const SWIPE_DISTANCE_MIN := 48.0
 
 var vertical_speed := 0.0
 var gravity_direction := 1
 var grounded := true
 var cooldown_left := 0.0
 var input_enabled := true
+var active_touch_index := -1
+var touch_start_position := Vector2.ZERO
 @onready var effects: Node = $PlayerEffects
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 
@@ -54,7 +58,7 @@ func get_speed_multiplier() -> float:
 func is_spike_immune() -> bool:
 	return bool(effects.call("is_spike_immune"))
 
-func advance(delta: float, floor_surface_y: float, ceiling_surface_y: float) -> void:
+func advance(delta: float, floor_surface_y: float, ceiling_surface_y: float, floor_supported: bool = true, ceiling_supported: bool = true) -> void:
 	cooldown_left = maxf(0.0, cooldown_left - delta)
 	effects.call("tick", delta)
 	vertical_speed += float(gravity_direction) * GRAVITY_ACCELERATION * delta
@@ -62,18 +66,22 @@ func advance(delta: float, floor_surface_y: float, ceiling_surface_y: float) -> 
 	var floor_y := floor_surface_y - PLAYER_SIZE.y * 0.5
 	var ceiling_y := ceiling_surface_y + PLAYER_SIZE.y * 0.5
 	if gravity_direction > 0:
-		if grounded:
+		if not floor_supported:
+			grounded = false
+		elif grounded:
 			position.y = floor_y
 			vertical_speed = 0.0
-		elif vertical_speed >= 0.0 and position.y >= floor_y:
+		elif vertical_speed >= 0.0 and position.y >= floor_y and position.y - floor_y <= 38.0:
 			position.y = floor_y
 			vertical_speed = 0.0
 			grounded = true
 	else:
-		if grounded:
+		if not ceiling_supported:
+			grounded = false
+		elif grounded:
 			position.y = ceiling_y
 			vertical_speed = 0.0
-		elif vertical_speed <= 0.0 and position.y <= ceiling_y:
+		elif vertical_speed <= 0.0 and position.y <= ceiling_y and ceiling_y - position.y <= 38.0:
 			position.y = ceiling_y
 			vertical_speed = 0.0
 			grounded = true
@@ -84,10 +92,15 @@ func _update_sprite_orientation() -> void:
 	sprite.flip_v = gravity_direction < 0
 	sprite.position.y = -float(gravity_direction) * SPRITE_SURFACE_GAP
 
+func _is_pause_button_position(point: Vector2) -> bool:
+	var viewport_width := get_viewport_rect().size.x
+	return Rect2(viewport_width - 88.0, 52.0, 88.0, 88.0).has_point(point)
+
 func _try_flip(new_direction: int) -> void:
 	if not grounded or cooldown_left > 0.0 or new_direction == gravity_direction:
 		return
 	gravity_direction = new_direction
+	gravity_flipped.emit()
 	_update_sprite_orientation()
 	grounded = false
 	vertical_speed = float(gravity_direction) * PLAYER_SPEED_Y
@@ -95,10 +108,33 @@ func _try_flip(new_direction: int) -> void:
 	status_changed.emit(gravity_direction, cooldown_left)
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not input_enabled or not event is InputEventKey or not event.pressed or event.echo:
+	if not input_enabled:
 		return
-	if event.keycode == KEY_UP or event.keycode == KEY_W:
-		_try_flip(-1)
-	elif event.keycode == KEY_DOWN or event.keycode == KEY_S:
-		_try_flip(1)
+	if event is InputEventScreenTouch:
+		if PlayerProfile.flip_control not in ["swipe", "tap"]:
+			return
+		if event.pressed:
+			if active_touch_index == -1 and not _is_pause_button_position(event.position):
+				if PlayerProfile.flip_control == "tap":
+					_try_flip(-gravity_direction)
+				else:
+					active_touch_index = event.index
+					touch_start_position = event.position
+		elif event.index == active_touch_index:
+			var swipe_delta: Vector2 = event.position - touch_start_position
+			active_touch_index = -1
+			if absf(swipe_delta.y) >= SWIPE_DISTANCE_MIN and absf(swipe_delta.y) > absf(swipe_delta.x) * 1.2:
+				_try_flip(-1 if swipe_delta.y < 0.0 else 1)
+		return
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		if PlayerProfile.flip_control == "mouse":
+			_try_flip(-gravity_direction)
+		return
+	if event is InputEventKey and event.pressed and not event.echo:
+		if PlayerProfile.flip_control != "keyboard":
+			return
+		if event.keycode == KEY_UP or event.keycode == KEY_W:
+			_try_flip(-1)
+		elif event.keycode == KEY_DOWN or event.keycode == KEY_S:
+			_try_flip(1)
 
