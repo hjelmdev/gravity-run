@@ -2,6 +2,9 @@ extends Control
 
 const ManifestBuilderScript := preload("res://systems/course_manifest_builder.gd")
 const ManifestScript := preload("res://systems/multiplayer_course_manifest.gd")
+const ReadyIndicatorScript := preload("res://ui/ready_indicator.gd")
+const RunnerFrames := preload("res://assets/character/run_frames.tres")
+const SkinPalette := preload("res://player/skin_palette.gd")
 
 signal back_requested
 signal match_start_requested
@@ -12,7 +15,6 @@ var _name_edit: LineEdit
 var _name_button: Button
 var _room_code_button: Button
 var _mobile_text_entry := false
-var _mobile_text_poll := 0.0
 var _scroll: ScrollContainer
 var _panel: PanelContainer
 var _layout: VBoxContainer
@@ -40,10 +42,12 @@ var _manifest_transfer_parts: Dictionary = {}
 var _manifest_publish_in_progress := false
 var _countdown_remaining := 0.0
 var _busy := false
+var _skin_request_pending := false
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_mobile_text_entry = OS.has_feature("web") and bool(JavaScriptBridge.eval("Boolean(window.parent.GravityRunMobileInput && window.parent.GravityRunMobileInput.isMobile)", true))
+	_mobile_text_entry = MobileTextEntry.is_mobile_web
+	MobileTextEntry.entry_submitted.connect(_on_mobile_text_submitted)
 	_build_ui()
 	MultiplayerService.room_changed.connect(_on_room_changed)
 	MultiplayerService.request_finished.connect(_on_request_finished)
@@ -56,11 +60,6 @@ func _ready() -> void:
 		_on_room_changed(MultiplayerService.room_state)
 
 func _process(_delta: float) -> void:
-	if _mobile_text_entry:
-		_mobile_text_poll += _delta
-		if _mobile_text_poll >= 0.1:
-			_mobile_text_poll = 0.0
-			_read_mobile_text_entry()
 	if _countdown_remaining > 0.0:
 		_countdown_remaining = maxf(_countdown_remaining - _delta, 0.0)
 		if _countdown_remaining <= 0.0:
@@ -294,6 +293,18 @@ func _toggle_ready() -> void:
 	if not already_ready:
 		MultiplayerService.begin_peer_connection()
 
+func _change_skin(direction: int) -> void:
+	if _skin_request_pending or not MultiplayerService.has_room():
+		return
+	var current_skin := 0
+	for member in MultiplayerService.get_members():
+		if member is Dictionary and str(member.get("user_id", "")) == MultiplayerService.identity_user_id:
+			current_skin = posmod(int(member.get("skin_id", 0)), SkinPalette.SKIN_COUNT)
+			break
+	_skin_request_pending = true
+	_update_room(MultiplayerService.room_state)
+	MultiplayerService.set_skin_id(posmod(current_skin + direction, SkinPalette.SKIN_COUNT))
+
 func _request_start() -> void:
 	if not MultiplayerService.can_start_race():
 		_status.text = tr("Every player must be ready, have the same verified course, and be directly connected to the host.")
@@ -361,6 +372,12 @@ func _expect_host_manifest(room: Dictionary, expected_hash: String) -> void:
 	_status.text = tr("Waiting for the host to send the shared course…")
 
 func _on_request_finished(action: String, success: bool, message: String) -> void:
+	if action == "set_skin":
+		_skin_request_pending = false
+		if not success:
+			_status.text = message
+		_update_room(MultiplayerService.room_state)
+		return
 	_set_busy(false)
 	if action == "list_public_rooms":
 		_public_list_busy = false
@@ -528,10 +545,53 @@ func _update_room(room: Dictionary) -> void:
 				present_count += 1
 				everyone_ready = everyone_ready and is_ready and str(member.get("loaded_manifest_hash", "")) == str(room.get("manifest_hash", ""))
 			own_ready = is_ready if own else own_ready
-			var label := Label.new()
-			var member_status := tr(" · offline") if not present else (tr(" · ready") if is_ready else tr(" · waiting"))
-			label.text = "%s%s%s" % [str(member.get("display_name", "Runner")), tr(" (you)") if own else "", member_status]
-			_players.add_child(label)
+			var row := HBoxContainer.new()
+			row.add_theme_constant_override("separation", 8)
+			row.custom_minimum_size.y = 26.0
+			var ready_indicator := Control.new()
+			ready_indicator.set_script(ReadyIndicatorScript)
+			ready_indicator.set("is_ready", is_ready)
+			ready_indicator.set("is_online", present)
+			ready_indicator.custom_minimum_size = Vector2(22.0, 22.0)
+			ready_indicator.tooltip_text = tr("Ready") if is_ready else (tr("Offline") if not present else tr("Not ready"))
+			ready_indicator.accessibility_name = ready_indicator.tooltip_text
+			ready_indicator.mouse_filter = Control.MOUSE_FILTER_STOP
+			row.add_child(ready_indicator)
+			var name_label := Label.new()
+			name_label.text = "%s%s" % [str(member.get("display_name", "Runner")), tr(" (you)") if own else ""]
+			name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			row.add_child(name_label)
+			var skin_id := posmod(int(member.get("skin_id", 0)), SkinPalette.SKIN_COUNT)
+			if own:
+				var previous_skin := _button("<")
+				previous_skin.custom_minimum_size = Vector2(36, 34)
+				previous_skin.tooltip_text = tr("Previous skin")
+				previous_skin.accessibility_name = previous_skin.tooltip_text
+				previous_skin.disabled = _skin_request_pending
+				previous_skin.pressed.connect(_change_skin.bind(-1))
+				row.add_child(previous_skin)
+			var miniature := TextureRect.new()
+			miniature.custom_minimum_size = Vector2(32, 32)
+			miniature.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			miniature.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+			miniature.texture = RunnerFrames.get_frame_texture("run", 0)
+			miniature.material = SkinPalette.make_material(skin_id)
+			miniature.tooltip_text = tr("Runner appearance")
+			row.add_child(miniature)
+			if own:
+				var next_skin := _button(">")
+				next_skin.custom_minimum_size = Vector2(36, 34)
+				next_skin.tooltip_text = tr("Next skin")
+				next_skin.accessibility_name = next_skin.tooltip_text
+				next_skin.disabled = _skin_request_pending
+				next_skin.pressed.connect(_change_skin.bind(1))
+				row.add_child(next_skin)
+			if not present:
+				var offline_label := Label.new()
+				offline_label.text = tr("Offline")
+				offline_label.add_theme_color_override("font_color", Color("8292aa"))
+				row.add_child(offline_label)
+			_players.add_child(row)
 		_ready_button.text = tr("Not ready") if own_ready else tr("Ready")
 	_ready_button.disabled = not in_room or not _course_loaded or str(room.get("manifest_hash", "")).is_empty() or _prepared_hash != str(room.get("manifest_hash", ""))
 	_start_button.disabled = not MultiplayerService.can_start_race()
@@ -570,21 +630,15 @@ func _set_busy(value: bool) -> void:
 			_room_code_button.disabled = value or MultiplayerService.has_room()
 
 func _open_mobile_text_entry(field: String, value: String) -> void:
-	var request := JSON.stringify({"field": field, "value": value})
-	JavaScriptBridge.eval("window.parent.GravityRunMobileInput.open(%s)" % request, true)
+	var label := tr("Display name") if field == "name" else tr("Room code")
+	MobileTextEntry.open(field, value, label, "text", 16 if field == "name" else 8, "text", "off", "words" if field == "name" else "characters")
 
-func _read_mobile_text_entry() -> void:
-	var response: Variant = JavaScriptBridge.eval("window.parent.GravityRunMobileInput.takeResult()", true)
-	if not response is String or response.is_empty():
-		return
-	var entry: Variant = JSON.parse_string(response)
-	if not entry is Dictionary:
-		return
-	match str(entry.get("field", "")):
+func _on_mobile_text_submitted(field: String, value: String) -> void:
+	match field:
 		"name":
-			_name_edit.text = str(entry.get("value", "")).substr(0, 16)
+			_name_edit.text = value.substr(0, 16)
 		"room_code":
-			_room_code.text = str(entry.get("value", "")).substr(0, 8)
+			_room_code.text = value.substr(0, 8)
 	_update_mobile_text_labels()
 
 func _update_mobile_text_labels() -> void:
@@ -595,7 +649,7 @@ func _update_mobile_text_labels() -> void:
 
 func _exit_tree() -> void:
 	if _mobile_text_entry:
-		JavaScriptBridge.eval("window.parent.GravityRunMobileInput.cancel()", true)
+		MobileTextEntry.cancel()
 
 func _button(label_text: String) -> Button:
 	var button := Button.new()

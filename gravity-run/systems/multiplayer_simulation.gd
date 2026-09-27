@@ -50,6 +50,7 @@ func configure(course_manifest: Resource, players: Array) -> String:
 		_players[user_id] = {
 			"user_id": user_id,
 			"display_name": str(player.get("display_name", "Runner")),
+			"skin_id": posmod(int(player.get("skin_id", 0)), 4),
 			"world_x": float(manifest.get("start_x")),
 			"y": floor_y - PLAYER_HEIGHT * 0.5,
 			"vertical_speed": 0.0,
@@ -334,14 +335,6 @@ func _blocks_at_next_x(player: Dictionary, next_x: float) -> bool:
 			var step_rect := HazardRules.step_wall_rect(float(event.get("x", 0.0)), float(event.get("start_y", 0.0)), float(event.get("end_y", 0.0)))
 			var impact := HazardRules.player_impact(player_rect, "step", step_rect, [], Vector2.ZERO, 0.0, false, direction, from_ceiling, float(event.get("start_y", 0.0)), float(event.get("end_y", 0.0)))
 			if impact == HazardRules.PlayerImpact.BLOCKED:
-				return true
-		if kind == "block":
-			var width := float(event.get("width", 48.0))
-			var height := float(event.get("height", 72.0))
-			var edge_y := float(event.get("y", 0.0))
-			var rect_y := edge_y - height if not bool(event.get("from_ceiling", false)) else edge_y
-			var block := Rect2(Vector2(float(event.get("x", 0.0)) - width * 0.5, rect_y), Vector2(width, height))
-			if HazardRules.player_impact(player_rect, "block", block) == HazardRules.PlayerImpact.LETHAL:
 				return true
 	for barrel in _barrels:
 		if not bool(barrel.get("spawned", false)) or bool(barrel.get("destroyed", false)):

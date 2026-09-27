@@ -1055,6 +1055,39 @@ msgstr "Ingen nådde mål"
 msgid "Winner: %s"
 msgstr "Vinnare: %s"
 
+msgid "RACE RESULTS"
+msgstr "LOPPRESULTAT"
+
+msgid "No winner"
+msgstr "Ingen vinnare"
+
+msgid "Return to lobby"
+msgstr "Tillbaka till lobbyn"
+
+msgid "Returning to lobby…"
+msgstr "Återgår till lobbyn…"
+
+msgid "Password entered"
+msgstr "Lösenord angivet"
+
+msgid "Ready"
+msgstr "Redo"
+
+msgid "Not ready"
+msgstr "Inte redo"
+
+msgid "Offline"
+msgstr "Frånkopplad"
+
+msgid "Previous skin"
+msgstr "Föregående utseende"
+
+msgid "Next skin"
+msgstr "Nästa utseende"
+
+msgid "Runner appearance"
+msgstr "Löparens utseende"
+
 msgid "Leave race"
 msgstr "Lämna loppet"
 

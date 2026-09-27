@@ -1,5 +1,7 @@
 extends Control
 
+const ActionIconScript := preload("res://ui/action_icon.gd")
+
 signal start_run_requested
 signal challenges_requested
 signal leaderboard_requested
@@ -83,8 +85,8 @@ func _build() -> void:
 	equipment_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	equipment_row.add_theme_constant_override("separation", 16)
 	layout.add_child(equipment_row)
-	equipment_row.add_child(_make_icon_action("◈", tr("Character and inventory"), tr("Character / Inventory"), character_requested.emit))
-	equipment_row.add_child(_make_icon_action("▤", tr("Shop"), tr("Shop"), shop_requested.emit))
+	equipment_row.add_child(_make_icon_action("inventory", tr("Character and inventory"), tr("Character / Inventory"), character_requested.emit))
+	equipment_row.add_child(_make_icon_action("shop", tr("Shop"), tr("Shop"), shop_requested.emit))
 	var main_menu_button := _make_button(tr("Main menu"), 32.0)
 	main_menu_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	main_menu_button.pressed.connect(main_menu_requested.emit)
@@ -94,15 +96,26 @@ func _build() -> void:
 	AccountProgress.progress_changed.connect(_on_progress_changed)
 	PlayerAccountProfile.profile_changed.connect(_on_profile_changed)
 
-func _make_icon_action(glyph: String, accessible_name: String, caption: String, callback: Callable) -> Control:
+func _make_icon_action(icon_name: String, accessible_name: String, caption: String, callback: Callable) -> Control:
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 3)
 	var button := Button.new()
 	button.custom_minimum_size = Vector2(76.0, 64.0)
 	button.tooltip_text = accessible_name
 	button.accessibility_name = accessible_name
-	button.add_theme_font_size_override("font_size", 26)
-	button.text = glyph
+	var icon := Control.new()
+	icon.set_script(ActionIconScript)
+	icon.set("icon_name", icon_name)
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.anchor_left = 0.5
+	icon.anchor_right = 0.5
+	icon.anchor_top = 0.5
+	icon.anchor_bottom = 0.5
+	icon.offset_left = -15
+	icon.offset_right = 15
+	icon.offset_top = -15
+	icon.offset_bottom = 15
+	button.add_child(icon)
 	button.pressed.connect(callback)
 	column.add_child(button)
 	var label := Label.new()

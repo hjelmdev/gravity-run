@@ -32,9 +32,10 @@ func _initialize() -> void:
 	assert(solo_simulation.match_finished, "a solo host race should run to completion")
 	var configuration_error := simulation.configure(manifest, [
 		{"user_id": "slow", "display_name": "Slow", "run_speed_percent": 10000},
-		{"user_id": "fast", "display_name": "Fast", "run_speed_percent": 10100},
+		{"user_id": "fast", "display_name": "Fast", "run_speed_percent": 10100, "skin_id": 3},
 	])
 	assert(configuration_error.is_empty(), configuration_error)
+	assert(int(simulation.get_player("fast").get("skin_id", -1)) == 3, "player skin selection should be included in authoritative simulation state")
 	simulation.start()
 	assert(simulation.submit_flip("slow", -1))
 	assert(not simulation.submit_flip("slow", 1))
@@ -90,6 +91,21 @@ func _initialize() -> void:
 	for _frame in range(90):
 		spike_simulation.advance_frame(1.0 / 60.0)
 	assert(spike_simulation.get_player("runner_a").get("state", "") == "dead", "floor spikes must be authoritative and lethal")
+	var block_manifest: Resource = _make_manifest([{
+		"event_id": "floor_block",
+		"kind": "block",
+		"x": 600.0,
+		"y": 460.0,
+		"width": 48.0,
+		"height": 72.0,
+		"from_ceiling": false,
+	}], 10000)
+	var block_simulation := SimulationScript.new()
+	assert(block_simulation.configure(block_manifest, [{"user_id": "block_runner"}]).is_empty())
+	block_simulation.start()
+	for _frame in range(90):
+		block_simulation.advance_frame(1.0 / 60.0)
+	assert(block_simulation.get_player("block_runner").get("state", "") == "dead", "a block must kill the player on contact instead of stopping them safely in front")
 	var disconnect_simulation := SimulationScript.new()
 	assert(disconnect_simulation.configure(_make_manifest([], 10000), [
 		{"user_id": "host"},

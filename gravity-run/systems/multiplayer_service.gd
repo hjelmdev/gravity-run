@@ -166,6 +166,10 @@ func set_ready(ready: bool) -> void:
 	if has_room():
 		_lobby_provider.set_ready(get_room_id(), ready, _current_token(), identity_user_id)
 
+func set_skin_id(skin_id: int) -> void:
+	if has_room():
+		_lobby_provider.set_skin(get_room_id(), posmod(skin_id, 4), _current_token(), identity_user_id)
+
 func publish_manifest(manifest_hash: String, seed_value: int, length_px: int) -> void:
 	if has_room() and is_room_owner():
 		_lobby_provider.set_manifest(get_room_id(), seed_value, length_px, manifest_hash, _current_token(), identity_user_id)
@@ -186,7 +190,7 @@ func leave_room() -> void:
 	_lobby_provider.leave_room(get_room_id(), _current_token(), identity_user_id)
 
 func return_to_lobby() -> void:
-	if has_room() and is_room_owner():
+	if has_room():
 		_lobby_provider.return_to_lobby(get_room_id(), _current_token(), identity_user_id)
 
 func set_signaling_connected(connected: bool, message: String = "") -> void:

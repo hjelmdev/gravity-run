@@ -12,6 +12,8 @@ func _ready() -> void:
 	assert(not player.get_node("AnimatedSprite2D").is_playing(), "a newly added multiplayer runner should safely stop its run animation")
 	player.call("set_running", true)
 	assert(player.get_node("AnimatedSprite2D").is_playing(), "the shared player scene should resume its animation")
+	player.call("set_skin_id", 2)
+	assert((player.get_node("AnimatedSprite2D") as AnimatedSprite2D).material is ShaderMaterial, "the shared player scene should support synchronized palette skins")
 	player.queue_free()
 	var manifest: Resource = ManifestScript.new()
 	var events: Array[Dictionary] = [
@@ -26,6 +28,7 @@ func _ready() -> void:
 	manifest.set("events", events)
 	manifest.set("initial_floor_y", 460.0)
 	manifest.set("initial_ceiling_y", 80.0)
+	manifest.set("start_x", 180.0)
 	var match_view: Node2D = MatchScript.new()
 	match_view.set("_manifest", manifest)
 	var course_root := Node2D.new()
@@ -51,6 +54,14 @@ func _ready() -> void:
 	match_view.call("_sync_course_view")
 	assert(MatchScript.distance_m(180.0, 180.0) == 0)
 	assert(MatchScript.distance_m(12005.0, 180.0) == 1182)
+	match_view.call("_build_hud")
+	match_view.set("_snapshot", {"finished": true, "players": [
+		{"user_id": "winner", "display_name": "Winner", "state": "finished", "finish_tick": 20, "world_x": 1200.0},
+		{"user_id": "second", "display_name": "Second", "state": "dead", "finish_tick": -1, "world_x": 900.0},
+	]})
+	match_view.call("_show_results")
+	assert((match_view.get("_results_list") as VBoxContainer).get_child_count() == 2, "the results board should include finishers and eliminated players")
+	assert((match_view.get("_results_panel") as PanelContainer).visible, "the standings should have a visible results panel")
 	match_view.free()
 	print("Multiplayer match presentation tests passed.")
 	get_tree().quit()

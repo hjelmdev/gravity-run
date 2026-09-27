@@ -50,6 +50,7 @@ var _multiplayer_lobby: Control
 var _return_to_hub_after_screen := false
 
 func _ready() -> void:
+	MobileTextEntry.entry_submitted.connect(_on_mobile_text_submitted)
 	Leaderboard.top_runs_received.connect(_on_top_runs_received)
 	AuthService.auth_state_changed.connect(_on_auth_state_changed)
 	AuthService.auth_action_finished.connect(_on_auth_action_finished)
@@ -552,6 +553,7 @@ func _show_challenge_menu(launch_code: String = "") -> void:
 	_challenge_code_edit.text = launch_code
 	_challenge_code_edit.custom_minimum_size.y = 44.0
 	layout.add_child(_challenge_code_edit)
+	_add_mobile_input_button(_challenge_code_edit, "challenge_code", tr("Challenge code"), "text", 24)
 	_challenge_join_button = _make_button(tr("Join challenge"))
 	_challenge_join_button.pressed.connect(_join_seed_challenge)
 	layout.add_child(_challenge_join_button)
@@ -870,6 +872,7 @@ func _show_create_challenge_menu() -> void:
 	_create_challenge_title.max_length = 40
 	_create_challenge_title.placeholder_text = tr("Give your challenge a name")
 	layout.add_child(_create_challenge_title)
+	_add_mobile_input_button(_create_challenge_title, "challenge_title", tr("Challenge name"), "text", 40)
 	var difficulty_label := Label.new()
 	difficulty_label.text = tr("Difficulty")
 	layout.add_child(difficulty_label)
@@ -904,6 +907,8 @@ func _show_create_challenge_menu() -> void:
 	_create_challenge_name.text = PlayerAccountProfile.nickname if PlayerAccountProfile.has_profile else PlayerProfile.leaderboard_name
 	_create_challenge_name.editable = not PlayerAccountProfile.has_profile
 	layout.add_child(_create_challenge_name)
+	if _create_challenge_name.editable:
+		_add_mobile_input_button(_create_challenge_name, "challenge_nickname", tr("Nickname"), "text", 16)
 	_create_challenge_status = Label.new()
 	_create_challenge_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_create_challenge_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1019,6 +1024,7 @@ func _show_account_menu() -> void:
 		_account_nickname.max_length = 16
 		_account_nickname.text = PlayerAccountProfile.nickname
 		layout.add_child(_account_nickname)
+		_add_mobile_input_button(_account_nickname, "account_nickname", tr("Nickname"), "text", 16)
 		_nickname_save_button = _make_button(tr("Save nickname"))
 		_nickname_save_button.pressed.connect(_save_nickname)
 		layout.add_child(_nickname_save_button)
@@ -1068,12 +1074,14 @@ func _show_email_auth_menu() -> void:
 	_account_email.max_length = 254
 	_account_email.focus_entered.connect(_keep_account_input_visible)
 	form.add_child(_account_email)
+	_add_mobile_input_button(_account_email, "account_email", tr("Email address"), "email", 254, "email", "email")
 	_account_password = LineEdit.new()
 	_account_password.placeholder_text = tr("Password (at least 8 characters)")
 	_account_password.secret = true
 	_account_password.max_length = 128
 	_account_password.focus_entered.connect(_keep_account_input_visible)
 	form.add_child(_account_password)
+	_add_mobile_input_button(_account_password, "account_password", tr("Password"), "password", 128, "text", "current-password")
 	_account_status = Label.new()
 	_account_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_account_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1524,6 +1532,39 @@ func _quit_game() -> void:
 		dialog.popup_centered(Vector2i(380, 160))
 		return
 	get_tree().quit()
+
+func _add_mobile_input_button(edit: LineEdit, field: String, label: String, input_type: String, max_length: int, input_mode: String = "text", autocomplete: String = "off") -> void:
+	if not MobileTextEntry.is_mobile_web or not edit.editable:
+		return
+	edit.visible = false
+	var button := _make_button(label)
+	button.custom_minimum_size.y = maxf(edit.custom_minimum_size.y, 44.0)
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.set_meta("mobile_field", field)
+	button.set_meta("mobile_placeholder", label)
+	button.pressed.connect(func() -> void:
+		MobileTextEntry.open(field, edit.text, label, input_type, max_length, input_mode, autocomplete)
+	)
+	edit.get_parent().add_child(button)
+
+func _on_mobile_text_submitted(field: String, value: String) -> void:
+	match field:
+		"account_email":
+			if is_instance_valid(_account_email): _account_email.text = value.substr(0, 254)
+		"account_password":
+			if is_instance_valid(_account_password): _account_password.text = value.substr(0, 128)
+		"account_nickname":
+			if is_instance_valid(_account_nickname): _account_nickname.text = value.substr(0, 16)
+		"challenge_code":
+			if is_instance_valid(_challenge_code_edit): _challenge_code_edit.text = value.substr(0, 24)
+		"challenge_title":
+			if is_instance_valid(_create_challenge_title): _create_challenge_title.text = value.substr(0, 40)
+		"challenge_nickname":
+			if is_instance_valid(_create_challenge_name): _create_challenge_name.text = value.substr(0, 16)
+	for button in find_children("*", "Button", true, false):
+		if str(button.get_meta("mobile_field", "")) != field:
+			continue
+		button.text = (tr("Password entered") if not value.is_empty() else tr("Password")) if field == "account_password" else (value if not value.is_empty() else str(button.get_meta("mobile_placeholder", "")))
 
 func _make_button(label: String) -> Button:
 	var button := Button.new()

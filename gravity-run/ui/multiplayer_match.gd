@@ -11,6 +11,7 @@ const TrackGapScript := preload("res://terrain/track_gap.gd")
 const CourseGenerator := preload("res://systems/course_generator.gd")
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const CourseSurfaceRenderer := preload("res://systems/course_surface_renderer.gd")
+const ResultMedalScript := preload("res://ui/result_medal.gd")
 
 const WORLD_HEIGHT := 540.0
 const CAMERA_LEAD := 180.0
@@ -35,6 +36,9 @@ var _snapshot_elapsed := 0.0
 var _status_label: Label
 var _distance_label: Label
 var _result_label: Label
+var _results_panel: PanelContainer
+var _results_list: VBoxContainer
+var _return_lobby_button: Button
 var _course_root: Node2D
 var _course_nodes: Dictionary = {}
 var _terrain_events: Array[Dictionary] = []
@@ -43,7 +47,6 @@ var _touch_index := -1
 var _touch_start := Vector2.ZERO
 var _run_banner_until := 0.0
 var _return_requested := false
-var _return_delay := 0.0
 
 func _ready() -> void:
 	set_process(true)
@@ -57,6 +60,7 @@ func _ready() -> void:
 	MultiplayerService.peer_data_received.connect(_on_peer_data_received)
 	MultiplayerService.peer_connection_state_changed.connect(_on_peer_connection_state_changed)
 	MultiplayerService.room_changed.connect(_on_room_changed)
+	MultiplayerService.request_finished.connect(_on_request_finished)
 	_build_hud()
 	if _manifest == null or not str(_manifest.call("validate")).is_empty():
 		_show_failure(tr("The shared course is unavailable or failed validation."))
@@ -69,6 +73,7 @@ func _ready() -> void:
 			simulation_players.append({
 				"user_id": str(member.get("user_id", "")),
 				"display_name": str(member.get("display_name", "Runner")),
+				"skin_id": int(member.get("skin_id", 0)),
 				"run_speed_percent": int(runner_profile.run_speed_percent),
 				"flip_cooldown_percent": int(runner_profile.flip_cooldown_percent),
 			})
@@ -118,11 +123,6 @@ func _process(delta: float) -> void:
 		else:
 			_visual_correction = _visual_correction.move_toward(Vector2.ZERO, delta * 420.0)
 			_compose_client_snapshot()
-	if bool(_snapshot.get("finished", false)) and MultiplayerService.is_room_owner() and not _return_requested:
-		_return_delay += delta
-		if _return_delay >= 4.0:
-			_return_requested = true
-			MultiplayerService.return_to_lobby()
 	_update_hud()
 	_sync_player_views()
 	queue_redraw()
@@ -497,6 +497,7 @@ func _sync_player_views() -> void:
 			runner.call("set_input_enabled", false)
 			_player_views[user_id] = runner
 		var view: Node2D = _player_views[user_id]
+		view.call("set_skin_id", int(state.get("skin_id", 0)))
 		var correction := _visual_correction if user_id == _local_user_id and not MultiplayerService.is_room_owner() else Vector2.ZERO
 		view.position = Vector2(float(state.get("world_x", 0.0)), float(state.get("y", 0.0))) + correction
 		var screen_x := float(view.position.x) - camera_left
@@ -535,15 +536,8 @@ func _update_hud() -> void:
 	elif str(own.get("state", "")) == "dead" and _status_label.text != tr("You were eliminated"):
 		_status_label.text = tr("You were eliminated")
 	if bool(_snapshot.get("finished", false)):
-		var placements: Variant = _snapshot.get("placements", [])
-		var result_text := ""
-		if placements is Array and not placements.is_empty():
-			result_text = tr("Winner: %s") % str(placements[0].get("display_name", ""))
-		else:
-			result_text = tr("No one reached the finish")
-		if _result_label.text != result_text:
-			_result_label.text = result_text
-		_result_label.visible = true
+		_show_results()
+		_return_lobby_button.disabled = _return_requested
 
 func _camera_left() -> float:
 	var followed_x := float(_player_state(_local_user_id).get("world_x", 180.0))
@@ -600,6 +594,50 @@ func _build_hud() -> void:
 	_result_label.add_theme_font_size_override("font_size", 30)
 	_result_label.visible = false
 	hud.add_child(_result_label)
+	_results_panel = PanelContainer.new()
+	_results_panel.anchor_left = 0.5
+	_results_panel.anchor_top = 0.5
+	_results_panel.anchor_right = 0.5
+	_results_panel.anchor_bottom = 0.5
+	_results_panel.offset_left = -260
+	_results_panel.offset_right = 260
+	_results_panel.offset_top = -205
+	_results_panel.offset_bottom = 205
+	_results_panel.visible = false
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color("18243a")
+	panel_style.border_color = Color("42d6c5")
+	panel_style.set_border_width_all(2)
+	panel_style.set_corner_radius_all(14)
+	panel_style.content_margin_left = 18
+	panel_style.content_margin_right = 18
+	panel_style.content_margin_top = 16
+	panel_style.content_margin_bottom = 16
+	_results_panel.add_theme_stylebox_override("panel", panel_style)
+	hud.add_child(_results_panel)
+	var results_layout := VBoxContainer.new()
+	results_layout.add_theme_constant_override("separation", 8)
+	_results_panel.add_child(results_layout)
+	var results_title := Label.new()
+	results_title.text = tr("RACE RESULTS")
+	results_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	results_title.add_theme_font_size_override("font_size", 25)
+	results_title.add_theme_color_override("font_color", Color("42d6c5"))
+	results_layout.add_child(results_title)
+	_result_label.text = ""
+	_result_label.custom_minimum_size.y = 30
+	_result_label.add_theme_font_size_override("font_size", 18)
+	_result_label.add_theme_color_override("font_color", Color("f5d45e"))
+	_result_label.get_parent().remove_child(_result_label)
+	results_layout.add_child(_result_label)
+	_results_list = VBoxContainer.new()
+	_results_list.add_theme_constant_override("separation", 5)
+	results_layout.add_child(_results_list)
+	_return_lobby_button = Button.new()
+	_return_lobby_button.text = tr("Return to lobby")
+	_return_lobby_button.custom_minimum_size.y = 44
+	_return_lobby_button.pressed.connect(_return_to_lobby)
+	results_layout.add_child(_return_lobby_button)
 	var leave := Button.new()
 	leave.text = tr("Leave race")
 	leave.anchor_left = 1.0
@@ -610,6 +648,75 @@ func _build_hud() -> void:
 	leave.offset_bottom = 54
 	leave.pressed.connect(_leave_match)
 	hud.add_child(leave)
+func _show_results() -> void:
+	if _results_panel.visible:
+		return
+	_results_panel.visible = true
+	_result_label.visible = true
+	var states: Array[Dictionary] = []
+	var players: Variant = _snapshot.get("players", [])
+	if players is Array:
+		for player in players:
+			if player is Dictionary:
+				states.append(player.duplicate(true))
+	states.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var a_finished := str(a.get("state", "")) == "finished"
+		var b_finished := str(b.get("state", "")) == "finished"
+		if a_finished != b_finished:
+			return a_finished
+		if a_finished and int(a.get("finish_tick", -1)) != int(b.get("finish_tick", -1)):
+			return int(a.get("finish_tick", -1)) < int(b.get("finish_tick", -1))
+		if not is_equal_approx(float(a.get("world_x", 0.0)), float(b.get("world_x", 0.0))):
+			return float(a.get("world_x", 0.0)) > float(b.get("world_x", 0.0))
+		return str(a.get("user_id", "")) < str(b.get("user_id", ""))
+	)
+	var winner_name := str(states[0].get("display_name", "")) if not states.is_empty() else ""
+	_result_label.text = tr("Winner: %s") % winner_name if not winner_name.is_empty() else tr("No winner")
+	for child in _results_list.get_children():
+		child.queue_free()
+	for index in range(states.size()):
+		var state: Dictionary = states[index]
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 12)
+		var rank := Label.new()
+		rank.custom_minimum_size.x = 48
+		rank.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		rank.text = "#%d" % (index + 1)
+		if index < 3:
+			var medal := Control.new()
+			medal.set_script(ResultMedalScript)
+			medal.set("place", index + 1)
+			medal.custom_minimum_size = Vector2(38, 34)
+			medal.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			row.add_child(medal)
+		row.add_child(rank)
+		var player_name := Label.new()
+		player_name.text = str(state.get("display_name", tr("Runner")))
+		player_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(player_name)
+		var player_distance := distance_m(float(state.get("world_x", 0.0)), float(_manifest.get("start_x")))
+		var distance_label := Label.new()
+		distance_label.text = "%d m" % player_distance
+		distance_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		row.add_child(distance_label)
+		_results_list.add_child(row)
+func _return_to_lobby() -> void:
+	if _return_requested:
+		return
+	_return_requested = true
+	_return_lobby_button.disabled = true
+	_return_lobby_button.text = tr("Returning to lobby…")
+	MultiplayerService.return_to_lobby()
+
+func _on_request_finished(action: String, success: bool, message: String) -> void:
+	if action != "return_to_lobby":
+		return
+	if success:
+		return
+	_return_requested = false
+	_return_lobby_button.disabled = false
+	_return_lobby_button.text = tr("Return to lobby")
+	_status_label.text = message
 
 func status_label_color() -> void:
 	_status_label.add_theme_font_size_override("font_size", 28)

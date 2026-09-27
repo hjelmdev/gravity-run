@@ -217,7 +217,7 @@ func _physics_process(delta: float) -> void:
 			for loot_event in loot_spawn_planner.pop_events_until(spawn_line):
 				_spawn_loot_pickup(loot_event)
 		_update_hazard_discoveries()
-		if coin_distance >= COIN_DISTANCE:
+		if not demo_mode and coin_distance >= COIN_DISTANCE:
 			coin_distance -= COIN_DISTANCE
 			_spawn_coin_row()
 

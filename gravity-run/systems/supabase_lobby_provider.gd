@@ -42,6 +42,9 @@ func refresh_room(room_id: String, token: String, context: String) -> void:
 func set_ready(room_id: String, ready: bool, token: String, context: String) -> void:
 	_call("set_ready", "set_multiplayer_ready", {"p_room_id": room_id, "p_ready": ready}, token, context)
 
+func set_skin(room_id: String, skin_id: int, token: String, context: String) -> void:
+	_call("set_skin", "set_multiplayer_skin", {"p_room_id": room_id, "p_skin_id": skin_id}, token, context)
+
 func set_manifest(room_id: String, seed: int, length_px: int, manifest_hash: String, token: String, context: String) -> void:
 	_call("set_manifest", "set_multiplayer_manifest", {
 		"p_room_id": room_id,

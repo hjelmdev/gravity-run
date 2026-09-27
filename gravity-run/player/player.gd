@@ -1,6 +1,7 @@
 extends Node2D
 
 const RunnerMotionScript := preload("res://systems/runner_motion.gd")
+const SkinPalette := preload("res://player/skin_palette.gd")
 
 signal status_changed(gravity_direction: int, cooldown_left: float)
 signal gravity_flipped
@@ -18,6 +19,7 @@ var input_enabled := true
 var _flip_cooldown_multiplier := 1.0
 var active_touch_index := -1
 var touch_start_position := Vector2.ZERO
+var _skin_id := -1
 ## Absolute horizontal course coordinate, independent of camera and viewport.
 var world_x := PLAYER_X
 @onready var effects: Node = $PlayerEffects
@@ -60,6 +62,14 @@ func set_running(running: bool) -> void:
 		sprite.play("run")
 	else:
 		sprite.stop()
+
+func set_skin_id(skin_id: int) -> void:
+	var resolved_skin := posmod(skin_id, SkinPalette.SKIN_COUNT)
+	if resolved_skin == _skin_id:
+		return
+	_skin_id = resolved_skin
+	if is_instance_valid(sprite):
+		sprite.material = SkinPalette.make_material(_skin_id)
 
 func get_player_rect() -> Rect2:
 	return Rect2(global_position - PLAYER_SIZE * 0.5, PLAYER_SIZE)
@@ -151,4 +161,3 @@ func _unhandled_input(event: InputEvent) -> void:
 			_try_flip(-1)
 		elif event.keycode == KEY_DOWN or event.keycode == KEY_S:
 			_try_flip(1)
-

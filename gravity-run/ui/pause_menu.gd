@@ -2,6 +2,7 @@ extends CanvasLayer
 
 const MAIN_MENU_SCENE := "res://ui/main_menu.tscn"
 const INVENTORY_SCREEN_SCENE := preload("res://ui/inventory_screen.tscn")
+const ActionIconScript := preload("res://ui/action_icon.gd")
 
 var pause_button: Button
 var pause_overlay: Control
@@ -65,24 +66,37 @@ func _build_pause_button() -> void:
 		pause_icon.add_child(bar)
 	pause_button.pressed.connect(_set_paused.bind(true))
 	add_child(pause_button)
-	var character_button := _make_hud_action("◈", tr("Character / Inventory"), "character")
+	var character_button := _make_hud_action("inventory", tr("Character / Inventory"), "character")
 	character_button.offset_left = -148.0
 	character_button.offset_right = -108.0
 	add_child(character_button)
-	var shop_button := _make_hud_action("▤", tr("Shop"), "shop")
+	var shop_button := _make_hud_action("shop", tr("Shop"), "shop")
 	shop_button.offset_left = -100.0
 	shop_button.offset_right = -60.0
 	add_child(shop_button)
 
-func _make_hud_action(glyph: String, accessible_name: String, mode: String) -> Button:
+func _make_hud_action(icon_name: String, accessible_name: String, mode: String) -> Button:
 	var button := Button.new()
-	button.text = glyph
+	button.text = ""
 	button.tooltip_text = accessible_name
+	button.accessibility_name = accessible_name
 	button.custom_minimum_size = Vector2(40.0, 40.0)
 	button.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
 	button.offset_top = 6.0
 	button.offset_bottom = 46.0
-	button.add_theme_font_size_override("font_size", 20)
+	var icon := Control.new()
+	icon.set_script(ActionIconScript)
+	icon.set("icon_name", icon_name)
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.anchor_left = 0.5
+	icon.anchor_right = 0.5
+	icon.anchor_top = 0.5
+	icon.anchor_bottom = 0.5
+	icon.offset_left = -15
+	icon.offset_right = 15
+	icon.offset_top = -15
+	icon.offset_bottom = 15
+	button.add_child(icon)
 	button.pressed.connect(_open_inventory.bind(mode))
 	return button
 

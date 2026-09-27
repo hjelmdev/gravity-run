@@ -5,6 +5,7 @@ const COPY_ICON_SCRIPT := preload("res://ui/copy_icon.gd")
 var _distance_m := 0
 var _coins := 0
 var _name_edit: LineEdit
+var _mobile_name_button: Button
 var _name_label: Label
 var _privacy_note: Label
 var _score_label: Label
@@ -33,6 +34,7 @@ var _achievement_index := 0
 var _shown_run_id := ""
 
 func _ready() -> void:
+	MobileTextEntry.entry_submitted.connect(_on_mobile_text_submitted)
 	_build_ui()
 	Leaderboard.submission_finished.connect(_on_submission_finished)
 	ChallengeService.score_submission_finished.connect(_on_seed_score_submission_finished)
@@ -256,6 +258,13 @@ func _build_ui() -> void:
 	_name_edit.text = _preferred_leaderboard_name()
 	_name_edit.focus_entered.connect(_ensure_name_visible)
 	layout.add_child(_name_edit)
+	if MobileTextEntry.is_mobile_web:
+		_name_edit.visible = false
+		_mobile_name_button = _make_button(tr("Your name"))
+		_mobile_name_button.pressed.connect(func() -> void:
+			MobileTextEntry.open("run_end_nickname", _name_edit.text, tr("Your name"), "text", 16)
+		)
+		layout.add_child(_mobile_name_button)
 	_update_name_identity_ui()
 
 	_status_label = Label.new()
@@ -309,6 +318,10 @@ func _submit_score() -> void:
 	_submit_button.disabled = true
 	_status_label.text = tr("Submitting score...")
 	Leaderboard.submit_run(player_name, _distance_m, _coins)
+
+func _on_mobile_text_submitted(field: String, value: String) -> void:
+	if field == "run_end_nickname" and is_instance_valid(_name_edit):
+		_name_edit.text = value.substr(0, 16)
 
 func _share_run_challenge() -> void:
 	var player_name := _preferred_leaderboard_name() if PlayerAccountProfile.has_profile else _name_edit.text.strip_edges()
@@ -475,6 +488,8 @@ func _on_account_profile_changed(_nickname: String, _has_profile: bool) -> void:
 func _update_name_identity_ui() -> void:
 	if is_instance_valid(_name_edit):
 		_name_edit.editable = not PlayerAccountProfile.has_profile
+	if is_instance_valid(_mobile_name_button):
+		_mobile_name_button.visible = not PlayerAccountProfile.has_profile
 	if is_instance_valid(_name_label):
 		_name_label.text = tr("Account nickname") if PlayerAccountProfile.has_profile else tr("Leaderboard name (up to 16 characters)")
 	if is_instance_valid(_privacy_note):

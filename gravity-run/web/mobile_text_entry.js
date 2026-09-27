@@ -73,13 +73,16 @@
 	window.GravityRunMobileInput = {
 		isMobile,
 		open(request) {
-			if (!isMobile || !request || !['name', 'room_code'].includes(request.field)) return false;
+			if (!isMobile || !request || typeof request.field !== 'string' || !request.field) return false;
 			activeField = request.field;
 			keyboardWasVisible = false;
-			label.textContent = request.field === 'name' ? 'Spelarnamn' : 'Rumskod';
+			label.textContent = String(request.label ?? 'Ange text');
+			input.type = ['text', 'email', 'password', 'search', 'url', 'tel'].includes(request.type) ? request.type : 'text';
 			input.value = String(request.value ?? '');
-			input.maxLength = request.field === 'name' ? 16 : 8;
-			input.autocapitalize = request.field === 'name' ? 'words' : 'characters';
+			input.maxLength = Math.max(1, Math.min(254, Number(request.maxLength) || 64));
+			input.inputMode = String(request.inputMode ?? 'text');
+			input.autocomplete = String(request.autocomplete ?? 'off');
+			input.autocapitalize = request.type === 'email' || request.type === 'password' ? 'off' : String(request.autocapitalize ?? 'sentences');
 			entry.hidden = false;
 			positionEntry();
 			input.focus({ preventScroll: true });
