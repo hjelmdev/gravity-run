@@ -9,6 +9,7 @@ const GAME_VERSION := "2"
 const DEFAULT_COURSE_LENGTH_PX := 45000
 
 signal room_changed(room: Dictionary)
+signal public_rooms_loaded(rooms: Array, message: String)
 signal request_finished(action: String, success: bool, message: String)
 signal signaling_message_received(message: Dictionary)
 signal signaling_message_outgoing(message: Dictionary)
@@ -131,12 +132,13 @@ func get_members() -> Array:
 	var members: Variant = room_state.get("members", [])
 	return members if members is Array else []
 
-func create_room(display_name: String = "") -> void:
+func create_room(display_name: String = "", is_public: bool = false) -> void:
 	var random := RandomNumberGenerator.new()
 	random.randomize()
 	var seed_value := random.randi_range(1, 2147483647)
 	_begin_action("create_room", {
 		"display_name": _resolved_display_name(display_name),
+		"is_public": is_public,
 		"game_version": GAME_VERSION,
 		"generator_version": ChallengeService.generation_version,
 		"seed": seed_value,
@@ -151,6 +153,9 @@ func join_room(room_code: String, display_name: String = "") -> void:
 		"generator_version": ChallengeService.generation_version,
 		"protocol_version": PROTOCOL_VERSION,
 	})
+
+func load_public_rooms() -> void:
+	_begin_action("list_public_rooms", {})
 
 func refresh_room() -> void:
 	if not has_room():
@@ -179,6 +184,10 @@ func leave_room() -> void:
 	if not has_room():
 		return
 	_lobby_provider.leave_room(get_room_id(), _current_token(), identity_user_id)
+
+func return_to_lobby() -> void:
+	if has_room() and is_room_owner():
+		_lobby_provider.return_to_lobby(get_room_id(), _current_token(), identity_user_id)
 
 func set_signaling_connected(connected: bool, message: String = "") -> void:
 	if signaling_connected == connected and message.is_empty():
@@ -263,7 +272,7 @@ func _dispatch_pending_action() -> void:
 	match action:
 		"create_room":
 			_lobby_provider.create_room(
-				str(arguments.display_name), str(arguments.game_version), int(arguments.generator_version),
+				str(arguments.display_name), bool(arguments.is_public), str(arguments.game_version), int(arguments.generator_version),
 				int(arguments.seed), int(arguments.course_length_px), _current_token(), identity_user_id
 			)
 		"join_room":
@@ -271,6 +280,8 @@ func _dispatch_pending_action() -> void:
 				str(arguments.room_code), str(arguments.display_name), str(arguments.game_version),
 				int(arguments.generator_version), int(arguments.protocol_version), _current_token(), identity_user_id
 			)
+		"list_public_rooms":
+			_lobby_provider.list_public_rooms(_current_token(), identity_user_id)
 
 func _on_identity_request_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	var action := _pending_identity_action
@@ -298,6 +309,9 @@ func _on_identity_request_completed(result: int, response_code: int, _headers: P
 
 func _on_lobby_request_finished(action: String, success: bool, data: Variant, message: String, context: String) -> void:
 	if context != identity_user_id:
+		return
+	if action == "list_public_rooms":
+		public_rooms_loaded.emit(data if success and data is Array else [], message if not success else "")
 		return
 	if not success:
 		request_finished.emit(action, false, message)

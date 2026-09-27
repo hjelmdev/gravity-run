@@ -17,9 +17,10 @@ func _ready() -> void:
 	_request.request_completed.connect(_on_request_completed)
 	add_child(_request)
 
-func create_room(display_name: String, game_version: String, generator_version: int, seed: int, course_length_px: int, token: String, context: String) -> void:
-	_call("create_room", "create_multiplayer_room", {
+func create_room(display_name: String, is_public: bool, game_version: String, generator_version: int, seed: int, course_length_px: int, token: String, context: String) -> void:
+	_call("create_room", "create_multiplayer_room_with_visibility", {
 		"p_display_name": display_name,
+		"p_is_public": is_public,
 		"p_game_version": game_version,
 		"p_generator_version": generator_version,
 		"p_seed": seed,
@@ -60,6 +61,12 @@ func start_countdown(room_id: String, token: String, context: String) -> void:
 
 func leave_room(room_id: String, token: String, context: String) -> void:
 	_call("leave_room", "leave_multiplayer_room", {"p_room_id": room_id}, token, context)
+
+func list_public_rooms(token: String, context: String) -> void:
+	_call("list_public_rooms", "list_public_multiplayer_rooms", {}, token, context)
+
+func return_to_lobby(room_id: String, token: String, context: String) -> void:
+	_call("return_to_lobby", "return_multiplayer_room_to_lobby", {"p_room_id": room_id}, token, context)
 
 func _call(action: String, rpc_name: String, payload: Dictionary, token: String, context: String) -> void:
 	if _request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:

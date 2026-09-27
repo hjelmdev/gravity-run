@@ -23,6 +23,15 @@ var _start_button: Button
 var _leave_button: Button
 var _create_button: Button
 var _join_button: Button
+var _home_view: VBoxContainer
+var _create_view: VBoxContainer
+var _join_view: VBoxContainer
+var _room_view: VBoxContainer
+var _public_rooms: VBoxContainer
+var _public_toggle: CheckButton
+var _room_summary: Label
+var _active_view := "home"
+var _public_list_busy := false
 var _lobby_buttons: Array[Button] = []
 var _prepared_hash := ""
 var _prepared_manifest: Resource
@@ -42,6 +51,7 @@ func _ready() -> void:
 	MultiplayerService.peer_connection_state_changed.connect(_on_peer_connection_state_changed)
 	MultiplayerService.peer_data_received.connect(_on_peer_data_received)
 	MultiplayerService.race_countdown_received.connect(_on_race_countdown_received)
+	MultiplayerService.public_rooms_loaded.connect(_on_public_rooms_loaded)
 	if MultiplayerService.has_room():
 		_on_room_changed(MultiplayerService.room_state)
 
@@ -86,7 +96,7 @@ func _build_ui() -> void:
 	_title.add_theme_font_size_override("font_size", 24)
 	_layout.add_child(_title)
 	_status = Label.new()
-	_status.text = tr("Create a private room or join with a code.")
+	_status.text = ""
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_layout.add_child(_status)
@@ -101,13 +111,53 @@ func _build_ui() -> void:
 		_name_button = _button(tr("Display name"))
 		_name_button.pressed.connect(func() -> void: _open_mobile_text_entry("name", _name_edit.text))
 		_layout.add_child(_name_button)
+
+	_home_view = VBoxContainer.new()
+	_home_view.add_theme_constant_override("separation", 8)
+	_layout.add_child(_home_view)
+	var create_mode := _button(tr("Create room"))
+	create_mode.pressed.connect(func() -> void: _show_view("create"))
+	_home_view.add_child(create_mode)
+	var join_mode := _button(tr("Join a room"))
+	join_mode.pressed.connect(func() -> void:
+		_show_view("join")
+		_load_public_rooms()
+	)
+	_home_view.add_child(join_mode)
+	var home_back := _button(tr("Back"))
+	home_back.pressed.connect(back_requested.emit)
+	_home_view.add_child(home_back)
+
+	_create_view = VBoxContainer.new()
+	_create_view.add_theme_constant_override("separation", 8)
+	_layout.add_child(_create_view)
+	var create_heading := Label.new()
+	create_heading.text = tr("Create a room")
+	create_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_create_view.add_child(create_heading)
+	_public_toggle = CheckButton.new()
+	_public_toggle.text = tr("Public — show in open rooms")
+	_create_view.add_child(_public_toggle)
+	_create_button = _button(tr("Create room"))
+	_create_button.pressed.connect(_create_room)
+	_create_view.add_child(_create_button)
+	var create_back := _button(tr("Back"))
+	create_back.pressed.connect(func() -> void: _show_view("home"))
+	_create_view.add_child(create_back)
+
+	_join_view = VBoxContainer.new()
+	_join_view.add_theme_constant_override("separation", 8)
+	_layout.add_child(_join_view)
+	var join_heading := Label.new()
+	join_heading.text = tr("Join a room")
+	join_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_join_view.add_child(join_heading)
+	var code_label := Label.new()
+	code_label.text = tr("Private room code")
+	_join_view.add_child(code_label)
 	var create_row := HBoxContainer.new()
 	create_row.add_theme_constant_override("separation", 8)
-	_layout.add_child(create_row)
-	_create_button = _button(tr("Create room"))
-	_create_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_create_button.pressed.connect(_create_room)
-	create_row.add_child(_create_button)
+	_join_view.add_child(create_row)
 	_room_code = LineEdit.new()
 	_room_code.placeholder_text = tr("Room code")
 	_room_code.max_length = 8
@@ -125,44 +175,61 @@ func _build_ui() -> void:
 	_join_button = _button(tr("Join"))
 	_join_button.pressed.connect(_join_room)
 	create_row.add_child(_join_button)
-	var separator := HSeparator.new()
-	_layout.add_child(separator)
-	var code_label := Label.new()
-	code_label.text = tr("Room code")
-	_layout.add_child(code_label)
+	var public_header := HBoxContainer.new()
+	_join_view.add_child(public_header)
+	var public_title := Label.new()
+	public_title.text = tr("Open rooms")
+	public_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	public_header.add_child(public_title)
+	var refresh_public := _button(tr("Refresh"))
+	refresh_public.pressed.connect(_load_public_rooms)
+	public_header.add_child(refresh_public)
+	var public_scroll := ScrollContainer.new()
+	public_scroll.custom_minimum_size.y = 110
+	public_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	public_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_join_view.add_child(public_scroll)
+	_public_rooms = VBoxContainer.new()
+	_public_rooms.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	public_scroll.add_child(_public_rooms)
+	var join_back := _button(tr("Back"))
+	join_back.pressed.connect(func() -> void: _show_view("home"))
+	_join_view.add_child(join_back)
+
+	_room_view = VBoxContainer.new()
+	_room_view.add_theme_constant_override("separation", 8)
+	_layout.add_child(_room_view)
+	_room_summary = Label.new()
+	_room_summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_room_view.add_child(_room_summary)
 	var members_box := PanelContainer.new()
 	members_box.add_theme_stylebox_override("panel", _inner_style())
-	_layout.add_child(members_box)
+	_room_view.add_child(members_box)
 	_players = VBoxContainer.new()
 	_players.add_theme_constant_override("separation", 6)
 	members_box.add_child(_players)
 	_ready_button = _button(tr("Ready"))
 	_ready_button.pressed.connect(_toggle_ready)
 	_ready_button.disabled = true
-	_layout.add_child(_ready_button)
+	_room_view.add_child(_ready_button)
 	_start_button = _button(tr("Start race"))
 	_start_button.disabled = true
 	_start_button.pressed.connect(_request_start)
-	_layout.add_child(_start_button)
+	_room_view.add_child(_start_button)
 	_leave_button = _button(tr("Leave room"))
 	_leave_button.pressed.connect(MultiplayerService.leave_room)
 	_leave_button.visible = false
-	_layout.add_child(_leave_button)
-	var note := Label.new()
-	note.text = tr("The host can start with any number of players from 1 to 4 once everyone present is ready. Other players must be connected to the host.")
-	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	note.add_theme_color_override("font_color", Color("b8c7dc"))
-	_layout.add_child(note)
-	var back := _button(tr("Back"))
-	back.pressed.connect(back_requested.emit)
-	_layout.add_child(back)
+	_room_view.add_child(_leave_button)
+	for view in [_home_view, _create_view, _join_view, _room_view]:
+		view.visible = false
+	_show_view("home")
 	_update_room(MultiplayerService.room_state)
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 
 func _create_room() -> void:
 	_set_busy(true)
 	_release_lobby_input_focus()
-	MultiplayerService.create_room(_name_edit.text)
+	MultiplayerService.create_room(_name_edit.text, _public_toggle.button_pressed)
 
 func _join_room() -> void:
 	if _room_code.text.strip_edges().length() != 8:
@@ -171,6 +238,51 @@ func _join_room() -> void:
 	_set_busy(true)
 	_release_lobby_input_focus()
 	MultiplayerService.join_room(_room_code.text, _name_edit.text)
+
+func _join_public_room(room_code: String) -> void:
+	_room_code.text = room_code
+	_join_room()
+
+func _load_public_rooms() -> void:
+	if _public_list_busy:
+		return
+	_public_list_busy = true
+	for child in _public_rooms.get_children():
+		child.queue_free()
+	var loading := Label.new()
+	loading.text = tr("Loading open rooms…")
+	_public_rooms.add_child(loading)
+	MultiplayerService.load_public_rooms()
+
+func _on_public_rooms_loaded(rooms: Array, message: String) -> void:
+	_public_list_busy = false
+	for child in _public_rooms.get_children():
+		child.queue_free()
+	if not message.is_empty():
+		_status.text = message
+		return
+	if rooms.is_empty():
+		var empty := Label.new()
+		empty.text = tr("No open public rooms right now.")
+		_public_rooms.add_child(empty)
+		return
+	for room in rooms:
+		if not room is Dictionary:
+			continue
+		var room_code := str(room.get("room_code", ""))
+		if room_code.length() != 8:
+			continue
+		var row := HBoxContainer.new()
+		var summary := Label.new()
+		summary.text = "%s · %d/%d" % [str(room.get("host_name", "Host")), int(room.get("player_count", 0)), int(room.get("max_players", 4))]
+		summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(summary)
+		var join := Button.new()
+		join.text = tr("Join")
+		join.custom_minimum_size.y = 36.0
+		join.pressed.connect(_join_public_room.bind(room_code))
+		row.add_child(join)
+		_public_rooms.add_child(row)
 
 func _toggle_ready() -> void:
 	var already_ready := false
@@ -250,6 +362,8 @@ func _expect_host_manifest(room: Dictionary, expected_hash: String) -> void:
 
 func _on_request_finished(action: String, success: bool, message: String) -> void:
 	_set_busy(false)
+	if action == "list_public_rooms":
+		_public_list_busy = false
 	if not success:
 		if action == "set_manifest":
 			_manifest_publish_in_progress = false
@@ -380,6 +494,10 @@ func _update_room(room: Dictionary) -> void:
 	for child in _players.get_children():
 		child.queue_free()
 	var in_room := not room.is_empty()
+	if in_room:
+		_show_view("room")
+	elif _active_view == "room":
+		_show_view("home")
 	_create_button.disabled = _busy or in_room
 	_join_button.disabled = _busy or in_room
 	_room_code.editable = not in_room and not _busy
@@ -389,11 +507,13 @@ func _update_room(room: Dictionary) -> void:
 	_start_button.disabled = true
 	_leave_button.visible = in_room
 	if not in_room:
-		_status.text = tr("Create a private room or join with a code.") if not _busy else _status.text
+		if not _busy and _status.text.contains("Room code:"):
+			_status.text = ""
 		return
 	_room_code.text = str(room.get("room_code", ""))
 	_update_mobile_text_labels()
 	var members: Variant = room.get("members", [])
+	_room_summary.text = tr("Room %s · %d/%d players") % [str(room.get("room_code", "")), members.size() if members is Array else 0, int(room.get("max_players", 4))]
 	var own_ready := false
 	var everyone_ready := true
 	var present_count := 0
@@ -416,11 +536,30 @@ func _update_room(room: Dictionary) -> void:
 	_ready_button.disabled = not in_room or not _course_loaded or str(room.get("manifest_hash", "")).is_empty() or _prepared_hash != str(room.get("manifest_hash", ""))
 	_start_button.disabled = not MultiplayerService.can_start_race()
 	if MultiplayerService.is_room_owner():
-		_status.text = tr("Room code: %s · %d players present (max 4)") % [str(room.get("room_code", "")), present_count]
+		_status.text = tr("Share the room code with friends.")
 	else:
-		_status.text = tr("Joined room %s · preparing shared course") % str(room.get("room_code", ""))
+		_status.text = tr("Waiting for the host to start.")
 	if everyone_ready and present_count > 0:
-		_status.text += "\n" + tr("All players are ready. Match networking is still under construction.")
+		_status.text = tr("Everyone is ready.")
+
+func _show_view(view_name: String) -> void:
+	_active_view = view_name
+	if is_instance_valid(_home_view):
+		_home_view.visible = view_name == "home"
+		_create_view.visible = view_name == "create"
+		_join_view.visible = view_name == "join"
+		_room_view.visible = view_name == "room"
+	var needs_name := view_name in ["create", "join"]
+	if is_instance_valid(_name_edit):
+		_name_edit.visible = needs_name and not _mobile_text_entry
+	if is_instance_valid(_name_button):
+		_name_button.visible = needs_name
+	if is_instance_valid(_room_code):
+		_room_code.visible = view_name == "join" and not _mobile_text_entry
+	if is_instance_valid(_room_code_button):
+		_room_code_button.visible = view_name == "join"
+	if is_instance_valid(_public_toggle):
+		_public_toggle.disabled = _busy
 
 func _set_busy(value: bool) -> void:
 	_busy = value

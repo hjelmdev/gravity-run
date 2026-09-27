@@ -42,6 +42,8 @@ var _gap_events: Array[Dictionary] = []
 var _touch_index := -1
 var _touch_start := Vector2.ZERO
 var _run_banner_until := 0.0
+var _return_requested := false
+var _return_delay := 0.0
 
 func _ready() -> void:
 	set_process(true)
@@ -54,6 +56,7 @@ func _ready() -> void:
 	add_child(_course_root)
 	MultiplayerService.peer_data_received.connect(_on_peer_data_received)
 	MultiplayerService.peer_connection_state_changed.connect(_on_peer_connection_state_changed)
+	MultiplayerService.room_changed.connect(_on_room_changed)
 	_build_hud()
 	if _manifest == null or not str(_manifest.call("validate")).is_empty():
 		_show_failure(tr("The shared course is unavailable or failed validation."))
@@ -115,6 +118,11 @@ func _process(delta: float) -> void:
 		else:
 			_visual_correction = _visual_correction.move_toward(Vector2.ZERO, delta * 420.0)
 			_compose_client_snapshot()
+	if bool(_snapshot.get("finished", false)) and MultiplayerService.is_room_owner() and not _return_requested:
+		_return_delay += delta
+		if _return_delay >= 4.0:
+			_return_requested = true
+			MultiplayerService.return_to_lobby()
 	_update_hud()
 	_sync_player_views()
 	queue_redraw()
@@ -470,7 +478,7 @@ func _sync_course_view() -> void:
 					node.call("destroy")
 
 func _sync_player_views() -> void:
-	var camera_left := maxf(float(_player_state(_local_user_id).get("world_x", 180.0)) - CAMERA_LEAD, 0.0)
+	var camera_left := _camera_left()
 	_course_root.position.x = -camera_left
 	_sync_course_view()
 	var states: Variant = _snapshot.get("players", [])
@@ -536,6 +544,20 @@ func _update_hud() -> void:
 		if _result_label.text != result_text:
 			_result_label.text = result_text
 		_result_label.visible = true
+
+func _camera_left() -> float:
+	var followed_x := float(_player_state(_local_user_id).get("world_x", 180.0))
+	if str(_player_state(_local_user_id).get("state", "running")) != "running":
+		var players: Variant = _snapshot.get("players", [])
+		if players is Array:
+			for player in players:
+				if player is Dictionary and str(player.get("state", "")) == "running":
+					followed_x = maxf(followed_x, float(player.get("world_x", followed_x)))
+	return maxf(followed_x - CAMERA_LEAD, 0.0)
+
+func _on_room_changed(room: Dictionary) -> void:
+	if not room.is_empty() and str(room.get("phase", "")) == "OPEN":
+		get_tree().change_scene_to_file("res://ui/multiplayer_lobby.tscn")
 
 static func distance_m(world_x: float, start_x: float) -> int:
 	return maxi(0, int((world_x - start_x) / 10.0))
@@ -604,7 +626,7 @@ func _leave_match() -> void:
 func _draw() -> void:
 	var view_size := get_viewport_rect().size
 	draw_rect(Rect2(Vector2.ZERO, view_size), Color("101827"))
-	var camera_left := maxf(float(_player_state(_local_user_id).get("world_x", 180.0)) - CAMERA_LEAD, 0.0)
+	var camera_left := _camera_left()
 	for index in range(18):
 		var star_x := fposmod(float(index * 83) + camera_left * 0.12, view_size.x)
 		draw_circle(Vector2(star_x, 58.0 + float((index * 47) % 390)), 1.5, Color("26364b"))
