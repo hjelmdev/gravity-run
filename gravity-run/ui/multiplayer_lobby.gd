@@ -52,7 +52,9 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_mobile_text_entry = MobileTextEntry.is_mobile_web
 	MobileTextEntry.entry_submitted.connect(_on_mobile_text_submitted)
+	PlayerAccountProfile.profile_changed.connect(_on_player_account_profile_changed)
 	_build_ui()
+	_on_player_account_profile_changed(PlayerAccountProfile.nickname, PlayerAccountProfile.has_profile)
 	MultiplayerService.room_changed.connect(_on_room_changed)
 	MultiplayerService.request_finished.connect(_on_request_finished)
 	MultiplayerService.signaling_state_changed.connect(_on_signaling_state_changed)
@@ -707,6 +709,12 @@ func _on_mobile_text_submitted(field: String, value: String) -> void:
 			_name_edit.text = value.substr(0, 16)
 		"room_code":
 			_room_code.text = value.substr(0, 8)
+	_update_mobile_text_labels()
+
+func _on_player_account_profile_changed(nickname: String, has_profile: bool) -> void:
+	if not has_profile or not is_instance_valid(_name_edit) or not _name_edit.text.strip_edges().is_empty():
+		return
+	_name_edit.text = nickname.left(16)
 	_update_mobile_text_labels()
 
 func _update_mobile_text_labels() -> void:

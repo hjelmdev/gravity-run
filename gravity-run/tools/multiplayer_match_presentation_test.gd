@@ -63,5 +63,17 @@ func _ready() -> void:
 	assert((match_view.get("_results_list") as VBoxContainer).get_child_count() == 2, "the results board should include finishers and eliminated players")
 	assert((match_view.get("_results_panel") as PanelContainer).visible, "the standings should have a visible results panel")
 	match_view.free()
+	var tie_view: Node2D = MatchScript.new()
+	tie_view.set("_manifest", manifest)
+	tie_view.call("_build_hud")
+	tie_view.set("_snapshot", {"finished": true, "players": [
+		{"user_id": "alpha", "display_name": "Alpha", "state": "dead", "world_x": 900.0},
+		{"user_id": "beta", "display_name": "Beta", "state": "dead", "world_x": 900.0},
+	]})
+	tie_view.call("_show_results")
+	assert((tie_view.get("_result_label") as Label).text == tr("No winner"), "an exact distance tie after elimination must not arbitrarily name a winner")
+	var tie_rows: VBoxContainer = tie_view.get("_results_list")
+	assert((tie_rows.get_child(0).get_child(1) as Label).text == "#1" and (tie_rows.get_child(1).get_child(1) as Label).text == "#1", "players eliminated at the same distance should share a place")
+	tie_view.free()
 	print("Multiplayer match presentation tests passed.")
 	get_tree().quit()

@@ -441,6 +441,8 @@ func _current_token() -> String:
 
 func _resolved_display_name(requested: String) -> String:
 	var display_name := requested.strip_edges()
+	if display_name.is_empty() and PlayerAccountProfile.has_profile:
+		display_name = str(PlayerAccountProfile.nickname).strip_edges()
 	if display_name.is_empty():
 		display_name = str(PlayerProfile.leaderboard_name).strip_edges()
 	if display_name.is_empty():

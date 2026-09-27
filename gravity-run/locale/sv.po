@@ -1061,8 +1061,23 @@ msgstr "LOPPRESULTAT"
 msgid "No winner"
 msgstr "Ingen vinnare"
 
+msgid "A player"
+msgstr "En spelare"
+
 msgid "Return to lobby"
 msgstr "Tillbaka till lobbyn"
+
+msgid "Return everyone to lobby"
+msgstr "Återför alla till lobbyn"
+
+msgid "Ask host to return"
+msgstr "Be värden återgå till lobbyn"
+
+msgid "%s asked to return to the lobby. The host can confirm with the button below."
+msgstr "%s vill återgå till lobbyn. Värden kan bekräfta med knappen nedan."
+
+msgid "Return request sent. The host must confirm before everyone returns to the lobby."
+msgstr "Förfrågan skickad. Värden måste bekräfta innan alla återgår till lobbyn."
 
 msgid "Returning to lobby…"
 msgstr "Återgår till lobbyn…"

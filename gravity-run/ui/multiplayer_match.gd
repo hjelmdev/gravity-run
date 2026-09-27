@@ -52,6 +52,7 @@ var _touch_start := Vector2.ZERO
 var _run_banner_until := 0.0
 var _return_requested := false
 var _return_request_started_at := 0.0
+var _return_requester_name := ""
 var _leaving_match := false
 var _last_snapshot_receive_msec := 0
 var _snapshot_interarrival_total_msec := 0
@@ -109,7 +110,7 @@ func _process(delta: float) -> void:
 	if _return_requested and not MultiplayerService.is_room_owner() and _return_request_started_at > 0.0 and _network_clock - _return_request_started_at >= 10.0:
 		_return_requested = false
 		_return_lobby_button.disabled = false
-		_return_lobby_button.text = tr("Return to lobby")
+		_return_lobby_button.text = tr("Ask host to return")
 		_status_label.text = tr("The host has not returned the room yet. You can retry or leave the race.")
 		_return_request_started_at = 0.0
 	if _go_start_at > 0.0 and _network_clock >= _go_start_at and not _simulation.started:
@@ -198,8 +199,9 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 				if bool(_received_runner_profile.get(peer_user_id, false)):
 					MultiplayerService.queue_reliable_peer_message(peer_user_id, {"kind": "match_setup_ack", "room_id": MultiplayerService.get_room_id()})
 			"return_lobby_request":
-				if str(payload.get("room_id", "")) == MultiplayerService.get_room_id():
-					MultiplayerService.return_to_lobby()
+				if str(payload.get("room_id", "")) == MultiplayerService.get_room_id() and bool(_snapshot.get("finished", false)):
+					_return_requester_name = _member_display_name(peer_user_id)
+					_status_label.text = tr("%s asked to return to the lobby. The host can confirm with the button below.") % _return_requester_name
 			"race_go_ack":
 				print("[MP_DIAG] ", JSON.stringify({"event": "race_go_ack", "room_id": MultiplayerService.get_room_id(), "peer_id": peer_user_id, "at_ms": Time.get_ticks_msec()}))
 			"flip":
@@ -347,6 +349,10 @@ func _compose_client_snapshot() -> void:
 			interpolated.state = from.get("state", to.get("state", "running"))
 		displayed.append(interpolated)
 	_snapshot = _authoritative_snapshot.duplicate(true)
+	# Results must use the exact same terminal state on every client. Never
+	# freeze a delayed/interpolated sample while displaying the final standings.
+	if bool(_authoritative_snapshot.get("finished", false)):
+		return
 	_snapshot.players = displayed
 	var earlier_hazards: Variant = earlier_state.get("world_hazards", {})
 	var later_hazards: Variant = later_state.get("world_hazards", {})
@@ -443,6 +449,12 @@ func _is_active_room_member(user_id: String) -> bool:
 		if member is Dictionary and bool(member.get("is_connected", true)) and str(member.get("user_id", "")) == user_id:
 			return true
 	return false
+
+func _member_display_name(user_id: String) -> String:
+	for member in MultiplayerService.get_members():
+		if member is Dictionary and str(member.get("user_id", "")) == user_id:
+			return str(member.get("display_name", tr("Runner")))
+	return tr("A player")
 
 func _player_state(user_id: String) -> Dictionary:
 	var players: Variant = _snapshot.get("players", [])
@@ -625,8 +637,11 @@ func _update_hud() -> void:
 			_status_label.text = tr("BLOCKED — FLIP GRAVITY")
 		elif _network_clock >= _run_banner_until and _status_label.text != "":
 			_status_label.text = ""
-	elif str(own.get("state", "")) == "dead" and _status_label.text != tr("You were eliminated"):
-		_status_label.text = tr("You were eliminated")
+	elif str(own.get("state", "")) == "dead":
+		if not _return_requester_name.is_empty():
+			_status_label.text = tr("%s asked to return to the lobby. The host can confirm with the button below.") % _return_requester_name
+		elif _status_label.text != tr("You were eliminated"):
+			_status_label.text = tr("You were eliminated")
 	if bool(_snapshot.get("finished", false)):
 		_show_results()
 		_return_lobby_button.disabled = _return_requested
@@ -733,7 +748,7 @@ func _build_hud() -> void:
 	_results_list.add_theme_constant_override("separation", 5)
 	results_layout.add_child(_results_list)
 	_return_lobby_button = Button.new()
-	_return_lobby_button.text = tr("Return to lobby")
+	_return_lobby_button.text = tr("Return everyone to lobby") if MultiplayerService.is_room_owner() else tr("Ask host to return")
 	_return_lobby_button.custom_minimum_size.y = 44
 	_return_lobby_button.pressed.connect(_return_to_lobby)
 	results_layout.add_child(_return_lobby_button)
@@ -769,10 +784,25 @@ func _show_results() -> void:
 			return float(a.get("world_x", 0.0)) > float(b.get("world_x", 0.0))
 		return str(a.get("user_id", "")) < str(b.get("user_id", ""))
 	)
-	var winner_name := str(states[0].get("display_name", "")) if not states.is_empty() else ""
+	var winner_name := ""
+	if not states.is_empty():
+		var first_state: Dictionary = states[0]
+		if str(first_state.get("state", "")) == "finished":
+			winner_name = str(first_state.get("display_name", ""))
+		else:
+			var leading_distance := float(first_state.get("world_x", 0.0))
+			var tied_for_lead := false
+			for index in range(1, states.size()):
+				var candidate: Dictionary = states[index]
+				if is_equal_approx(float(candidate.get("world_x", 0.0)), leading_distance):
+					tied_for_lead = true
+					break
+			winner_name = str(first_state.get("display_name", "")) if not tied_for_lead else ""
 	_result_label.text = tr("Winner: %s") % winner_name if not winner_name.is_empty() else tr("No winner")
 	for child in _results_list.get_children():
 		child.queue_free()
+	var previous_place := 0
+	var previous_distance := NAN
 	for index in range(states.size()):
 		var state: Dictionary = states[index]
 		var row := HBoxContainer.new()
@@ -780,11 +810,15 @@ func _show_results() -> void:
 		var rank := Label.new()
 		rank.custom_minimum_size.x = 48
 		rank.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		rank.text = "#%d" % (index + 1)
+		var state_distance := float(state.get("world_x", 0.0))
+		var place := index + 1
+		if index > 0 and is_equal_approx(state_distance, previous_distance) and str(state.get("state", "")) != "finished" and str(states[index - 1].get("state", "")) != "finished":
+			place = previous_place
+		rank.text = "#%d" % place
 		if index < 3:
 			var medal := Control.new()
 			medal.set_script(ResultMedalScript)
-			medal.set("place", index + 1)
+			medal.set("place", place)
 			medal.custom_minimum_size = Vector2(38, 34)
 			medal.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			row.add_child(medal)
@@ -799,6 +833,8 @@ func _show_results() -> void:
 		distance_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		row.add_child(distance_label)
 		_results_list.add_child(row)
+		previous_place = place
+		previous_distance = state_distance
 func _return_to_lobby() -> void:
 	if _return_requested:
 		return
@@ -812,10 +848,11 @@ func _return_to_lobby() -> void:
 		if queued:
 			_return_request_started_at = _network_clock
 			_return_lobby_button.text = tr("Return request sent to host…")
+			_status_label.text = tr("Return request sent. The host must confirm before everyone returns to the lobby.")
 		else:
 			_return_requested = false
 			_return_lobby_button.disabled = false
-			_return_lobby_button.text = tr("Return to lobby")
+			_return_lobby_button.text = tr("Ask host to return")
 			_status_label.text = tr("Could not send a return request to the host.")
 
 func _on_request_finished(action: String, success: bool, message: String) -> void:
@@ -830,7 +867,7 @@ func _on_request_finished(action: String, success: bool, message: String) -> voi
 	_return_requested = false
 	_return_request_started_at = 0.0
 	_return_lobby_button.disabled = false
-	_return_lobby_button.text = tr("Return to lobby")
+	_return_lobby_button.text = tr("Ask host to return")
 	_status_label.text = message
 
 func status_label_color() -> void:

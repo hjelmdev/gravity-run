@@ -21,8 +21,9 @@ var _started := false
 func configure(room: Dictionary, local_user_id: String) -> void:
 	var new_room_id := str(room.get("room_id", ""))
 	var new_phase := str(room.get("phase", "OPEN"))
-	var returning_to_lobby := new_room_id == _room_id and new_phase == "OPEN" and _room_phase != "" and _room_phase != "OPEN"
-	if new_room_id != _room_id or local_user_id != _local_user_id or returning_to_lobby:
+	# A match returning to OPEN is still the same room and the same peers. Keep
+	# their direct channels alive so the next lobby/match does not renegotiate ICE.
+	if new_room_id != _room_id or local_user_id != _local_user_id:
 		close_all()
 		_started = false
 		_retry_count_by_peer.clear()
