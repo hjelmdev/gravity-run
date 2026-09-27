@@ -41,6 +41,8 @@ var _course_loaded := false
 var _manifest_transfer_parts: Dictionary = {}
 var _manifest_publish_in_progress := false
 var _countdown_remaining := 0.0
+var _countdown_active := false
+var _match_transition_requested := false
 var _busy := false
 var _skin_request_pending := false
 
@@ -60,10 +62,13 @@ func _ready() -> void:
 		_on_room_changed(MultiplayerService.room_state)
 
 func _process(_delta: float) -> void:
-	if _countdown_remaining > 0.0:
-		_countdown_remaining = maxf(_countdown_remaining - _delta, 0.0)
-		if _countdown_remaining <= 0.0:
-			match_start_requested.emit()
+	if not _countdown_active:
+		return
+	_countdown_remaining = maxf(float(MultiplayerService.race_start_at_unix) - Time.get_unix_time_from_system(), 0.0)
+	_status.text = tr("Race starts in %d…") % ceili(_countdown_remaining)
+	if _countdown_remaining <= 0.0 and not _match_transition_requested:
+		_match_transition_requested = true
+		match_start_requested.emit()
 
 func _build_ui() -> void:
 	_panel = PanelContainer.new()
@@ -314,11 +319,25 @@ func _request_start() -> void:
 func _on_room_changed(room: Dictionary) -> void:
 	_update_room(room)
 	if room.is_empty():
+		_countdown_active = false
+		_countdown_remaining = 0.0
+		_match_transition_requested = false
 		_prepared_hash = ""
 		_prepared_manifest = null
 		_course_loaded = false
 		_manifest_publish_in_progress = false
 		_manifest_transfer_parts.clear()
+		return
+	if str(room.get("phase", "OPEN")) == "COUNTDOWN":
+		# Room state is the durable fallback if the one-shot WebRTC start packet
+		# was lost while a peer was reconnecting or returning from a prior race.
+		var countdown_started_at := float(room.get("countdown_start_at_unix", 0.0))
+		var start_at := countdown_started_at + 5.0
+		if countdown_started_at <= 0.0:
+			start_at = Time.get_unix_time_from_system() + 5.0
+		elif start_at <= Time.get_unix_time_from_system():
+			start_at = Time.get_unix_time_from_system() + 0.25
+		_on_race_countdown_received(start_at)
 		return
 	var remote_hash := str(room.get("manifest_hash", ""))
 	if MultiplayerService.is_room_owner():
@@ -385,6 +404,8 @@ func _on_request_finished(action: String, success: bool, message: String) -> voi
 		if action == "set_manifest":
 			_manifest_publish_in_progress = false
 		_status.text = message
+		if action == "leave_room":
+			_update_room(MultiplayerService.room_state)
 		return
 	if action == "leave_room":
 		_update_room({})
@@ -400,7 +421,7 @@ func _on_request_finished(action: String, success: bool, message: String) -> voi
 		_status.text = tr("Shared course verified. Mark yourself ready when you are connected.")
 		_update_room(MultiplayerService.room_state)
 	elif action == "start_countdown":
-		_status.text = tr("Race starts in 5 seconds!")
+		_update_room(MultiplayerService.room_state)
 
 func _on_signaling_state_changed(state: String, message: String) -> void:
 	if not message.is_empty():
@@ -450,11 +471,18 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 		_receive_manifest_chunk(peer_user_id, payload)
 	elif str(payload.get("kind", "")) == "race_start" and not MultiplayerService.is_room_owner():
 		if str(payload.get("room_id", "")) == MultiplayerService.get_room_id():
-			_on_race_countdown_received(float(payload.get("countdown_seconds", 5.0)))
+			var start_at := float(payload.get("start_at_unix", 0.0))
+			if start_at <= 0.0:
+				start_at = Time.get_unix_time_from_system() + float(payload.get("countdown_seconds", 5.0))
+			_on_race_countdown_received(start_at)
 
-func _on_race_countdown_received(countdown_seconds: float) -> void:
-	if countdown_seconds > 0.0 and _countdown_remaining <= 0.0:
-		_countdown_remaining = clampf(countdown_seconds, 0.5, 10.0)
+func _on_race_countdown_received(start_at_unix: float) -> void:
+	if _match_transition_requested:
+		return
+	if start_at_unix > 0.0:
+		MultiplayerService.race_start_at_unix = start_at_unix
+		_countdown_active = true
+		_countdown_remaining = maxf(start_at_unix - Time.get_unix_time_from_system(), 0.0)
 		_status.text = tr("Race starts in %d…") % ceili(_countdown_remaining)
 
 func _receive_manifest_chunk(peer_user_id: String, chunk: Dictionary) -> void:
@@ -525,7 +553,7 @@ func _update_room(room: Dictionary) -> void:
 	_start_button.disabled = true
 	_leave_button.visible = in_room
 	if not in_room:
-		if not _busy and _status.text.contains("Room code:"):
+		if not _busy:
 			_status.text = ""
 		return
 	_room_code.text = str(room.get("room_code", ""))
@@ -568,7 +596,7 @@ func _update_room(room: Dictionary) -> void:
 				previous_skin.custom_minimum_size = Vector2(36, 34)
 				previous_skin.tooltip_text = tr("Previous skin")
 				previous_skin.accessibility_name = previous_skin.tooltip_text
-				previous_skin.disabled = _skin_request_pending
+				previous_skin.disabled = _skin_request_pending or str(room.get("phase", "OPEN")) != "OPEN"
 				previous_skin.pressed.connect(_change_skin.bind(-1))
 				row.add_child(previous_skin)
 			var miniature := TextureRect.new()
@@ -584,7 +612,7 @@ func _update_room(room: Dictionary) -> void:
 				next_skin.custom_minimum_size = Vector2(36, 34)
 				next_skin.tooltip_text = tr("Next skin")
 				next_skin.accessibility_name = next_skin.tooltip_text
-				next_skin.disabled = _skin_request_pending
+				next_skin.disabled = _skin_request_pending or str(room.get("phase", "OPEN")) != "OPEN"
 				next_skin.pressed.connect(_change_skin.bind(1))
 				row.add_child(next_skin)
 			if not present:
@@ -594,8 +622,13 @@ func _update_room(room: Dictionary) -> void:
 				row.add_child(offline_label)
 			_players.add_child(row)
 		_ready_button.text = tr("Not ready") if own_ready else tr("Ready")
-	_ready_button.disabled = not in_room or not _course_loaded or str(room.get("manifest_hash", "")).is_empty() or _prepared_hash != str(room.get("manifest_hash", ""))
+	_ready_button.disabled = not in_room or str(room.get("phase", "OPEN")) != "OPEN" or not _course_loaded or str(room.get("manifest_hash", "")).is_empty() or _prepared_hash != str(room.get("manifest_hash", ""))
 	_start_button.disabled = not MultiplayerService.can_start_race()
+	if _countdown_active or str(room.get("phase", "OPEN")) == "COUNTDOWN":
+		_ready_button.disabled = true
+		_start_button.disabled = true
+		_status.text = tr("Race starting…")
+		return
 	var room_manifest_hash := str(room.get("manifest_hash", ""))
 	if room_manifest_hash.is_empty():
 		_status.text = tr("Preparing the shared course…")
@@ -606,7 +639,10 @@ func _update_room(room: Dictionary) -> void:
 	else:
 		_status.text = tr("Waiting for the host to start.")
 	if everyone_ready and present_count > 0:
-		_status.text = tr("Everyone is ready.")
+		if MultiplayerService.is_room_owner() and not room_manifest_hash.is_empty() and _course_loaded and not MultiplayerService.can_start_race():
+			_status.text = tr("Everyone is ready — waiting for a direct connection.")
+		else:
+			_status.text = tr("Everyone is ready.")
 
 func _show_view(view_name: String) -> void:
 	_active_view = view_name

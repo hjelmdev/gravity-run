@@ -358,6 +358,15 @@ func _hits_lethal_event(player: Dictionary) -> bool:
 			var triangles: Array = HazardRules.spike_group_triangles(x, float(event.get("y", 0.0)), int(event.get("count", 1)), float(event.get("spacing", CourseGenerator.SPIKE_GROUP_SPACING)), CourseGenerator.SPIKE_WIDTH, CourseGenerator.SPIKE_HEIGHT, bool(event.get("from_ceiling", false)))
 			if HazardRules.player_impact(rect, "spikes", Rect2(), triangles) == HazardRules.PlayerImpact.LETHAL:
 				return true
+		if kind == "step" and bool(event.get("spiked", false)):
+			var triangles := HazardRules.step_spike_triangles(
+				float(event.get("x", 0.0)),
+				float(event.get("start_y", 0.0)),
+				float(event.get("end_y", 0.0)),
+				bool(event.get("from_ceiling", false))
+			)
+			if HazardRules.player_impact(rect, "spikes", Rect2(), triangles) == HazardRules.PlayerImpact.LETHAL:
+				return true
 		if kind == "block":
 			var width := float(event.get("width", 48.0))
 			var height := float(event.get("height", 72.0))

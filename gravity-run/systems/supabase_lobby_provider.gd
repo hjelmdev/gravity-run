@@ -7,6 +7,7 @@ signal request_finished(action: String, success: bool, data: Variant, message: S
 var _request: HTTPRequest
 var _active_action := ""
 var _active_context := ""
+var _queued_leave: Dictionary = {}
 
 func _ready() -> void:
 	_request = HTTPRequest.new()
@@ -63,6 +64,11 @@ func start_countdown(room_id: String, token: String, context: String) -> void:
 	_call("start_countdown", "start_multiplayer_countdown", {"p_room_id": room_id}, token, context)
 
 func leave_room(room_id: String, token: String, context: String) -> void:
+	if _request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+		# A periodic refresh or another lobby RPC must not silently discard the
+		# leave request; otherwise the client exits but the public room survives.
+		_queued_leave = {"room_id": room_id, "token": token, "context": context}
+		return
 	_call("leave_room", "leave_multiplayer_room", {"p_room_id": room_id}, token, context)
 
 func list_public_rooms(token: String, context: String) -> void:
@@ -104,11 +110,21 @@ func _on_request_completed(result: int, response_code: int, _headers: PackedStri
 	var parsed: Variant = JSON.parse_string(response_text) if not response_text.is_empty() else null
 	if result != HTTPRequest.RESULT_SUCCESS:
 		request_finished.emit(action, false, null, tr("Network error while contacting the lobby service (code %d).") % result, context)
+		call_deferred("_dispatch_queued_leave")
 		return
 	if response_code < 200 or response_code >= 300:
 		request_finished.emit(action, false, null, _friendly_error(parsed, response_code), context)
+		call_deferred("_dispatch_queued_leave")
 		return
 	request_finished.emit(action, true, parsed, "", context)
+	call_deferred("_dispatch_queued_leave")
+
+func _dispatch_queued_leave() -> void:
+	if _queued_leave.is_empty():
+		return
+	var request := _queued_leave
+	_queued_leave = {}
+	leave_room(str(request.get("room_id", "")), str(request.get("token", "")), str(request.get("context", "")))
 
 func _friendly_error(response: Variant, response_code: int) -> String:
 	var detail := ""

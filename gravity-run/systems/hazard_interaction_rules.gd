@@ -30,6 +30,25 @@ static func spike_group_triangles(start_x: float, surface_y: float, count: int, 
 		]))
 	return triangles
 
+static func step_spike_triangles(x: float, start_y: float, end_y: float, from_ceiling: bool, depth: float = 24.0) -> Array[PackedVector2Array]:
+	var triangles: Array[PackedVector2Array] = []
+	var height := absf(end_y - start_y)
+	if height <= 0.0:
+		return triangles
+	var top := minf(start_y, end_y)
+	var count := maxi(2, int(ceil(height / 28.0)))
+	var segment := height / float(count)
+	var points_left := (end_y < start_y) != from_ceiling
+	var tip_x := x - depth if points_left else x + depth
+	for index in range(count):
+		var center_y := top + (float(index) + 0.5) * segment
+		triangles.append(PackedVector2Array([
+			Vector2(x, top + float(index) * segment),
+			Vector2(x, top + float(index + 1) * segment),
+			Vector2(tip_x, center_y),
+		]))
+	return triangles
+
 static func triangle_intersects_rect(triangle: PackedVector2Array, rect: Rect2) -> bool:
 	if triangle.size() != 3:
 		return false

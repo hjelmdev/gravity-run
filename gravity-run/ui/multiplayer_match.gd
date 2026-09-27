@@ -105,6 +105,8 @@ func _process(delta: float) -> void:
 		_simulation.start()
 		_status_label.text = tr("RUN!")
 		_run_banner_until = _network_clock + 1.3
+	elif _go_start_at > 0.0 and not _simulation.started:
+		_status_label.text = tr("RUN in %d…") % ceili(maxf(_go_start_at - _network_clock, 0.0))
 	if MultiplayerService.is_room_owner() and not _simulation.started and _go_start_at <= 0.0:
 		_try_schedule_start()
 		if _network_clock - _waiting_since > 15.0 and _go_start_at <= 0.0:
@@ -184,8 +186,8 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 					_simulation.submit_flip(peer_user_id, int(payload.get("gravity_direction", 0)))
 	elif not MultiplayerService.is_room_owner():
 		if channel_name == "control" and str(payload.get("kind", "")) == "race_go":
-			_go_start_at = _network_clock + clampf(float(payload.get("start_delay_seconds", 2.0)), 0.5, 5.0)
-			_status_label.text = tr("Get ready…")
+			_go_start_at = _network_clock + clampf(float(payload.get("start_delay_seconds", 5.0)), 0.5, 5.0)
+			_status_label.text = tr("RUN in %d…") % ceili(_go_start_at - _network_clock)
 		elif channel_name == "snapshot" and str(payload.get("kind", "")) == "snapshot":
 			var new_snapshot: Variant = payload.get("state", {})
 			if _accept_authoritative_snapshot(new_snapshot):
@@ -341,10 +343,10 @@ func _try_schedule_start() -> void:
 		var user_id := str(member.get("user_id", ""))
 		if not bool(_received_match_ready.get(user_id, false)):
 			return
-	const START_DELAY_SECONDS := 2.0
+	const START_DELAY_SECONDS := 5.0
 	_go_start_at = _network_clock + START_DELAY_SECONDS
 	MultiplayerService.send_peer_message_to_all("control", {"kind": "race_go", "start_delay_seconds": START_DELAY_SECONDS})
-	_status_label.text = tr("Get ready…")
+	_status_label.text = tr("RUN in %d…") % ceili(START_DELAY_SECONDS)
 
 func _is_active_room_member(user_id: String) -> bool:
 	for member in MultiplayerService.get_members():

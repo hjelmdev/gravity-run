@@ -62,19 +62,11 @@ func _draw() -> void:
 
 func _spike_triangles_local() -> Array[PackedVector2Array]:
 	var triangles: Array[PackedVector2Array] = []
-	var top := minf(start_surface_y, end_surface_y) - global_position.y
-	var height := absf(end_surface_y - start_surface_y)
-	var count := maxi(2, int(ceil(height / 28.0)))
-	var segment := height / float(count)
-	var points_left := spikes_point_left()
-	var spike_direction := -1.0 if points_left else 1.0
-	for i in range(count):
-		var center_y := top + (float(i) + 0.5) * segment
-		triangles.append(PackedVector2Array([
-			Vector2(0.0, center_y - segment * 0.5),
-			Vector2(0.0, center_y + segment * 0.5),
-			Vector2(spike_direction * SPIKE_DEPTH, center_y)
-		]))
+	for world_triangle in HazardRules.step_spike_triangles(global_position.x, start_surface_y, end_surface_y, from_ceiling, SPIKE_DEPTH):
+		var local_triangle := PackedVector2Array()
+		for point in world_triangle:
+			local_triangle.append(point - global_position)
+		triangles.append(local_triangle)
 	return triangles
 
 func _draw_side_spikes() -> void:
@@ -94,15 +86,9 @@ func intersects_spikes(rect: Rect2) -> bool:
 	return false
 
 func get_world_spike_triangles() -> Array[PackedVector2Array]:
-	var triangles: Array[PackedVector2Array] = []
 	if not has_spikes:
-		return triangles
-	for local_triangle in _spike_triangles_local():
-		var triangle := PackedVector2Array()
-		for point in local_triangle:
-			triangle.append(to_global(point))
-		triangles.append(triangle)
-	return triangles
+		return []
+	return HazardRules.step_spike_triangles(global_position.x, start_surface_y, end_surface_y, from_ceiling, SPIKE_DEPTH)
 
 func _triangle_intersects_rect(triangle: PackedVector2Array, rect: Rect2) -> bool:
 	return HazardRules.triangle_intersects_rect(triangle, rect)

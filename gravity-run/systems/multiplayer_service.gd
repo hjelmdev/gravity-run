@@ -67,7 +67,10 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if not room_state.is_empty():
 		_lobby_poll_elapsed += delta
-		if _lobby_poll_elapsed >= 3.0:
+		# Roster/readiness/countdown changes should not wait several seconds.
+		# Keep match polling less frequent, where snapshots already carry motion.
+		var poll_interval := 1.0 if str(room_state.get("phase", "OPEN")) in ["OPEN", "COUNTDOWN"] else 3.0
+		if _lobby_poll_elapsed >= poll_interval:
 			_lobby_poll_elapsed = 0.0
 			refresh_room()
 
@@ -187,7 +190,13 @@ func request_start() -> void:
 func leave_room() -> void:
 	if not has_room():
 		return
-	_lobby_provider.leave_room(get_room_id(), _current_token(), identity_user_id)
+	# Det lokala UI:t får aldrig bli gisslan för en stale/missing room på
+	# serversidan. Spara request-parametrarna innan vi nollställer rummet.
+	var room_id := get_room_id()
+	var token := _current_token()
+	var user_id := identity_user_id
+	_clear_local_room()
+	_lobby_provider.leave_room(room_id, token, user_id)
 
 func return_to_lobby() -> void:
 	if has_room():
@@ -320,15 +329,23 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 	if action == "list_public_rooms":
 		public_rooms_loaded.emit(data if success and data is Array else [], message if not success else "")
 		return
+	# Ignore replies from a request that was already in flight when the player
+	# left; otherwise a stale refresh/ready response can put the old room back.
+	if action not in ["create_room", "join_room", "leave_room"] and not has_room():
+		return
 	if not success:
+		if action == "leave_room" and ("room_not_found" in message.to_lower() or "room_not_member" in message.to_lower()):
+			request_finished.emit(action, true, tr("You left the room."))
+			return
+		if has_room() and ("room_not_found" in message.to_lower() or "room_not_member" in message.to_lower()):
+			_clear_local_room()
+			request_finished.emit(action, false, tr("The room is no longer available. You have been returned to the lobby menu."))
+			return
+		if action == "set_ready" and "room_not_open" in message.to_lower():
+			refresh_room()
 		request_finished.emit(action, false, message)
 		return
 	if action == "leave_room":
-		room_state.clear()
-		course_manifest = null
-		race_start_at_unix = 0.0
-		_lobby_poll_elapsed = 0.0
-		room_changed.emit(room_state.duplicate(true))
 		request_finished.emit(action, true, tr("You left the room."))
 		return
 	if data is Dictionary:
@@ -336,16 +353,31 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 		if resolved_room is Dictionary:
 			room_state = resolved_room.duplicate(true)
 			room_changed.emit(room_state.duplicate(true))
+			if action == "start_countdown":
+				var start_at := float(data.get("start_at_unix", 0.0))
+				if start_at <= 0.0:
+					start_at = Time.get_unix_time_from_system() + 5.0
+				race_start_at_unix = start_at
+				race_countdown_received.emit(start_at)
 			if action == "refresh_room" and not _pending_member_signals.is_empty():
 				var pending_signals := _pending_member_signals.duplicate(true)
 				_pending_member_signals.clear()
 				for pending_signal in pending_signals:
 					receive_signal(pending_signal)
 	if action == "start_countdown":
-		race_start_at_unix = Time.get_unix_time_from_system() + 5.0
-		send_peer_message_to_all("control", {"kind": "race_start", "room_id": get_room_id(), "countdown_seconds": 5.0})
-		race_countdown_received.emit(5.0)
+		var start_at := race_start_at_unix if race_start_at_unix > 0.0 else Time.get_unix_time_from_system() + 5.0
+		send_peer_message_to_all("control", {"kind": "race_start", "room_id": get_room_id(), "start_at_unix": start_at})
 	request_finished.emit(action, true, "")
+
+func _clear_local_room() -> void:
+	room_state.clear()
+	course_manifest = null
+	race_start_at_unix = 0.0
+	_lobby_poll_elapsed = 0.0
+	_pending_member_signals.clear()
+	if _webrtc_transport != null:
+		_webrtc_transport.close_all()
+	room_changed.emit(room_state.duplicate(true))
 
 func _on_room_changed_for_signaling(room: Dictionary) -> void:
 	if room.is_empty():

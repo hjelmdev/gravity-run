@@ -9,6 +9,7 @@ const CONNECTION_TIMEOUT_SECONDS := 18.0
 const MAX_CONNECTION_RETRIES := 1
 
 var _room_id := ""
+var _room_phase := ""
 var _local_user_id := ""
 var _owner_user_id := ""
 var _is_owner := false
@@ -19,11 +20,14 @@ var _started := false
 
 func configure(room: Dictionary, local_user_id: String) -> void:
 	var new_room_id := str(room.get("room_id", ""))
-	if new_room_id != _room_id or local_user_id != _local_user_id:
+	var new_phase := str(room.get("phase", "OPEN"))
+	var returning_to_lobby := new_room_id == _room_id and new_phase == "OPEN" and _room_phase != "" and _room_phase != "OPEN"
+	if new_room_id != _room_id or local_user_id != _local_user_id or returning_to_lobby:
 		close_all()
 		_started = false
 		_retry_count_by_peer.clear()
 	_room_id = new_room_id
+	_room_phase = new_phase
 	_local_user_id = local_user_id
 	_owner_user_id = str(room.get("owner_user_id", ""))
 	_is_owner = not _owner_user_id.is_empty() and _owner_user_id == _local_user_id
@@ -136,6 +140,7 @@ func close_all() -> void:
 	_entries.clear()
 	_attempt_by_peer.clear()
 	_room_id = ""
+	_room_phase = ""
 	_owner_user_id = ""
 	_is_owner = false
 	_started = false

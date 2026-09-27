@@ -9,6 +9,8 @@ const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 func _initialize() -> void:
 	assert(not HazardRules.spike_group_intersects_rect(1000.0, 460.0, 1, 32.0, 28.0, 32.0, false, Rect2(Vector2(986.0, 428.0), Vector2(2.0, 2.0))), "the triangular spike tip must not collide like its old bounding box")
 	assert(HazardRules.spike_group_intersects_rect(1000.0, 460.0, 1, 32.0, 28.0, 32.0, false, Rect2(Vector2(999.0, 427.0), Vector2(2.0, 3.0))), "the actual triangular spike tip must collide in shared geometry")
+	var side_spikes := HazardRules.step_spike_triangles(600.0, 460.0, 520.0, false)
+	assert(HazardRules.triangle_intersects_rect(side_spikes[0], Rect2(Vector2(610.0, 465.0), Vector2(8.0, 10.0))), "side spikes on a floor step must collide with their visible triangles")
 	var manifest: Resource = ManifestScript.new()
 	manifest.set("generator_version", 4)
 	manifest.set("course_identity", "sim-test")
@@ -91,6 +93,21 @@ func _initialize() -> void:
 	for _frame in range(90):
 		spike_simulation.advance_frame(1.0 / 60.0)
 	assert(spike_simulation.get_player("runner_a").get("state", "") == "dead", "floor spikes must be authoritative and lethal")
+	var spiked_step_manifest: Resource = _make_manifest([{
+		"event_id": "spiked_floor_step",
+		"kind": "step",
+		"x": 600.0,
+		"start_y": 460.0,
+		"end_y": 520.0,
+		"from_ceiling": false,
+		"spiked": true,
+	}], 10000)
+	var spiked_step_simulation := SimulationScript.new()
+	assert(spiked_step_simulation.configure(spiked_step_manifest, [{"user_id": "step_runner"}]).is_empty())
+	spiked_step_simulation.start()
+	for _frame in range(90):
+		spiked_step_simulation.advance_frame(1.0 / 60.0)
+	assert(spiked_step_simulation.get_player("step_runner").get("state", "") == "dead", "spikes attached to step walls must kill in multiplayer")
 	var block_manifest: Resource = _make_manifest([{
 		"event_id": "floor_block",
 		"kind": "block",
