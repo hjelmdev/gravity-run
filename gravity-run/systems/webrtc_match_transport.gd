@@ -86,10 +86,9 @@ func handle_signal(envelope: Dictionary) -> void:
 			else:
 				entry.remote_description_set = true
 				_apply_buffered_candidates(sender)
-				if sdp_type == "offer":
-					var answer_error: int = connection.create_answer()
-					if answer_error != OK:
-						_fail_peer(sender, "Could not create a WebRTC answer (code %d)." % answer_error)
+				# Godot emits session_description_created with the answer after
+				# set_remote_description("offer", ...); _on_session_description_created
+				# applies it locally and forwards it through the signaling channel.
 		"ice":
 			var candidate := {"media": str(body.get("media", "")), "index": int(body.get("index", -1)), "candidate": str(body.get("candidate", ""))}
 			if candidate.media.is_empty() or candidate.index < 0 or candidate.candidate.is_empty() or candidate.candidate.length() > 4096:
