@@ -54,6 +54,8 @@ func set_input_enabled(enabled: bool) -> void:
 	set_running(enabled)
 
 func set_running(running: bool) -> void:
+	if not is_instance_valid(sprite):
+		return
 	if running:
 		sprite.play("run")
 	else:
@@ -93,6 +95,8 @@ func advance(delta: float, floor_surface_y: float, ceiling_surface_y: float, flo
 	status_changed.emit(gravity_direction, cooldown_left)
 
 func _update_sprite_orientation() -> void:
+	if not is_instance_valid(sprite):
+		return
 	sprite.flip_v = gravity_direction < 0
 	sprite.position.y = -float(gravity_direction) * SPRITE_SURFACE_GAP
 

@@ -478,8 +478,8 @@ func _sync_player_views() -> void:
 		if not _player_views.has(user_id):
 			var runner: Node2D = PlayerScene.instantiate()
 			runner.name = "Runner_%s" % user_id.left(8)
-			runner.call("set_input_enabled", false)
 			_course_root.add_child(runner)
+			runner.call("set_input_enabled", false)
 			_player_views[user_id] = runner
 		var view: Node2D = _player_views[user_id]
 		var correction := _visual_correction if user_id == _local_user_id and not MultiplayerService.is_room_owner() else Vector2.ZERO

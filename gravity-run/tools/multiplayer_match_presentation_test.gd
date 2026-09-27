@@ -2,8 +2,17 @@ extends Node
 
 const MatchScript := preload("res://ui/multiplayer_match.gd")
 const ManifestScript := preload("res://systems/multiplayer_course_manifest.gd")
+const PlayerScene := preload("res://player/player.tscn")
 
 func _ready() -> void:
+	var player := PlayerScene.instantiate()
+	player.call("set_input_enabled", false)
+	add_child(player)
+	player.call("set_input_enabled", false)
+	assert(not player.get_node("AnimatedSprite2D").is_playing(), "a newly added multiplayer runner should safely stop its run animation")
+	player.call("set_running", true)
+	assert(player.get_node("AnimatedSprite2D").is_playing(), "the shared player scene should resume its animation")
+	player.queue_free()
 	var manifest: Resource = ManifestScript.new()
 	var events: Array[Dictionary] = [
 		{"event_id": "block_a", "kind": "block", "x": 120.0, "y": 460.0, "width": 48.0, "height": 72.0, "from_ceiling": false},
