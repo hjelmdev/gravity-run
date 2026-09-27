@@ -198,7 +198,10 @@ func set_signaling_connected(connected: bool, message: String = "") -> void:
 		return
 	signaling_connected = connected
 	signaling_state_changed.emit("connected" if connected else "disconnected", message)
-	if connected and has_room() and _identity_is_ready():
+	# The lobby peer channel carries the host's authoritative course manifest.
+	# Connect before anyone can be ready; otherwise guests cannot load that
+	# manifest until ready, while ready itself is gated on loading it.
+	if connected and has_room():
 		_webrtc_transport.begin_connection()
 
 func publish_signal(message: Dictionary) -> void:
@@ -351,14 +354,8 @@ func _on_room_changed_for_signaling(room: Dictionary) -> void:
 	else:
 		_signaling_transport.connect_room(str(room.get("signaling_topic", "")), _current_token())
 		_webrtc_transport.configure(room, identity_user_id)
-		if signaling_connected and _identity_is_ready():
+		if signaling_connected:
 			_webrtc_transport.begin_connection()
-
-func _identity_is_ready() -> bool:
-	for member in get_members():
-		if member is Dictionary and str(member.get("user_id", "")) == identity_user_id:
-			return bool(member.get("is_ready", false))
-	return false
 
 func _on_peer_connection_state_changed(peer_user_id: String, state: String, message: String) -> void:
 	peer_connection_state_changed.emit(peer_user_id, state, message)

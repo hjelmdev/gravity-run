@@ -595,7 +595,12 @@ func _update_room(room: Dictionary) -> void:
 		_ready_button.text = tr("Not ready") if own_ready else tr("Ready")
 	_ready_button.disabled = not in_room or not _course_loaded or str(room.get("manifest_hash", "")).is_empty() or _prepared_hash != str(room.get("manifest_hash", ""))
 	_start_button.disabled = not MultiplayerService.can_start_race()
-	if MultiplayerService.is_room_owner():
+	var room_manifest_hash := str(room.get("manifest_hash", ""))
+	if room_manifest_hash.is_empty():
+		_status.text = tr("Preparing the shared course…")
+	elif not _course_loaded or _prepared_hash != room_manifest_hash:
+		_status.text = tr("Connecting to the host to verify the course…")
+	elif MultiplayerService.is_room_owner():
 		_status.text = tr("Share the room code with friends.")
 	else:
 		_status.text = tr("Waiting for the host to start.")
