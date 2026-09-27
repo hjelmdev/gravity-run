@@ -9,6 +9,8 @@ signal match_start_requested
 var _status: Label
 var _room_code: LineEdit
 var _name_edit: LineEdit
+var _scroll: ScrollContainer
+var _panel: PanelContainer
 var _players: VBoxContainer
 var _ready_button: Button
 var _start_button: Button
@@ -19,6 +21,7 @@ var _prepared_hash := ""
 var _prepared_manifest: Resource
 var _course_loaded := false
 var _manifest_transfer_parts: Dictionary = {}
+var _manifest_publish_in_progress := false
 var _countdown_remaining := 0.0
 var _busy := false
 
@@ -41,29 +44,29 @@ func _process(_delta: float) -> void:
 			match_start_requested.emit()
 
 func _build_ui() -> void:
-	var panel := PanelContainer.new()
-	panel.anchor_left = 0.5
-	panel.anchor_right = 0.5
-	panel.anchor_top = 0.5
-	panel.anchor_bottom = 0.5
+	_panel = PanelContainer.new()
+	_panel.anchor_left = 0.5
+	_panel.anchor_right = 0.5
+	_panel.anchor_top = 0.5
+	_panel.anchor_bottom = 0.5
 	var viewport := get_viewport_rect().size
-	var panel_width := minf(620.0, viewport.x - 32.0)
-	var panel_height := minf(600.0, viewport.y - 28.0)
-	panel.offset_left = -panel_width * 0.5
-	panel.offset_right = panel_width * 0.5
-	panel.offset_top = -panel_height * 0.5
-	panel.offset_bottom = panel_height * 0.5
-	panel.add_theme_stylebox_override("panel", _panel_style())
-	add_child(panel)
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	panel.add_child(scroll)
+	var panel_width := minf(620.0, maxf(viewport.x - 32.0, 280.0))
+	var panel_height := minf(600.0, maxf(viewport.y - 28.0, 200.0))
+	_panel.offset_left = -panel_width * 0.5
+	_panel.offset_right = panel_width * 0.5
+	_panel.offset_top = -panel_height * 0.5
+	_panel.offset_bottom = panel_height * 0.5
+	_panel.add_theme_stylebox_override("panel", _panel_style())
+	add_child(_panel)
+	_scroll = ScrollContainer.new()
+	_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_panel.add_child(_scroll)
 	var layout := VBoxContainer.new()
 	layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	layout.add_theme_constant_override("separation", 10)
-	scroll.add_child(layout)
+	_scroll.add_child(layout)
 	var title := Label.new()
 	title.text = tr("MULTIPLAYER LOBBY")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -77,6 +80,7 @@ func _build_ui() -> void:
 	_name_edit = LineEdit.new()
 	_name_edit.placeholder_text = tr("Display name")
 	_name_edit.max_length = 16
+	_name_edit.focus_entered.connect(_ensure_focused_input_visible)
 	layout.add_child(_name_edit)
 	var create_row := HBoxContainer.new()
 	create_row.add_theme_constant_override("separation", 8)
@@ -88,6 +92,7 @@ func _build_ui() -> void:
 	_room_code = LineEdit.new()
 	_room_code.placeholder_text = tr("Room code")
 	_room_code.max_length = 8
+	_room_code.focus_entered.connect(_ensure_focused_input_visible)
 	_room_code.text_submitted.connect(func(_value: String) -> void: _join_room())
 	_room_code.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	create_row.add_child(_room_code)
@@ -126,6 +131,7 @@ func _build_ui() -> void:
 	back.pressed.connect(back_requested.emit)
 	layout.add_child(back)
 	_update_room(MultiplayerService.room_state)
+	get_viewport().size_changed.connect(_on_viewport_size_changed)
 
 func _create_room() -> void:
 	_set_busy(true)
@@ -160,13 +166,26 @@ func _on_room_changed(room: Dictionary) -> void:
 		_prepared_hash = ""
 		_prepared_manifest = null
 		_course_loaded = false
+		_manifest_publish_in_progress = false
 		_manifest_transfer_parts.clear()
 		return
 	var remote_hash := str(room.get("manifest_hash", ""))
-	if remote_hash.is_empty() and MultiplayerService.is_room_owner():
-		_build_and_publish_manifest(room)
-	elif not remote_hash.is_empty() and remote_hash != _prepared_hash:
-		_build_and_ack_manifest(room, remote_hash)
+	if MultiplayerService.is_room_owner():
+		if remote_hash.is_empty():
+			if _prepared_manifest == null and not _manifest_publish_in_progress:
+				_build_and_publish_manifest(room)
+		elif _prepared_manifest == null or remote_hash != str(_prepared_manifest.get("manifest_hash")):
+			# The room owner is the source of truth. If a poll returns a stale or
+			# inconsistent hash, republish the already prepared manifest instead
+			# of trying to verify it by independently generating the course again.
+			if not _manifest_publish_in_progress:
+				if _prepared_manifest == null:
+					_build_and_publish_manifest(room)
+				else:
+					_publish_prepared_manifest(room)
+		return
+	if not remote_hash.is_empty() and remote_hash != _prepared_hash:
+		_expect_host_manifest(room, remote_hash)
 
 func _build_and_publish_manifest(room: Dictionary) -> void:
 	var builder := ManifestBuilderScript.new()
@@ -180,29 +199,32 @@ func _build_and_publish_manifest(room: Dictionary) -> void:
 	_course_loaded = false
 	MultiplayerService.course_manifest = manifest
 	_status.text = tr("Preparing shared course…")
+	_publish_prepared_manifest(room)
+
+func _publish_prepared_manifest(room: Dictionary) -> void:
+	if _prepared_manifest == null or _manifest_publish_in_progress:
+		return
+	_prepared_hash = str(_prepared_manifest.get("manifest_hash"))
+	_course_loaded = false
+	_manifest_publish_in_progress = true
 	MultiplayerService.publish_manifest(_prepared_hash, int(room.seed), int(room.course_length_px))
 
-func _build_and_ack_manifest(room: Dictionary, expected_hash: String) -> void:
-	var builder := ManifestBuilderScript.new()
-	var result: Dictionary = builder.build(int(room.get("seed", 0)), int(room.get("course_length_px", 0)), int(room.get("generator_version", 0)))
-	if result.get("manifest") == null:
-		_status.text = tr("Could not verify the shared course: %s") % str(result.get("error", "unknown error"))
-		return
-	var manifest: Resource = result.manifest
-	var actual_hash := str(manifest.get("manifest_hash"))
-	if actual_hash != expected_hash:
-		_prepared_hash = ""
-		_status.text = tr("Course verification failed: this device generated a different course.")
-		return
+
+func _expect_host_manifest(room: Dictionary, expected_hash: String) -> void:
+	# Guests validate the host's canonical manifest instead of requiring the
+	# local generator to reproduce every float/random decision bit-for-bit.
 	_prepared_hash = expected_hash
-	_prepared_manifest = manifest
 	_course_loaded = false
-	MultiplayerService.course_manifest = manifest
-	_status.text = tr("Local course generated. Connecting to the host to receive and verify its manifest…")
+	_prepared_manifest = null
+	_manifest_transfer_parts.clear()
+	MultiplayerService.course_manifest = null
+	_status.text = tr("Waiting for the host to send the shared course…")
 
 func _on_request_finished(action: String, success: bool, message: String) -> void:
 	_set_busy(false)
 	if not success:
+		if action == "set_manifest":
+			_manifest_publish_in_progress = false
 		_status.text = message
 		return
 	if action == "leave_room":
@@ -210,6 +232,7 @@ func _on_request_finished(action: String, success: bool, message: String) -> voi
 	elif action == "create_room" or action == "join_room":
 		_status.text = tr("Room created. Share the code with friends.")
 	elif action == "set_manifest":
+		_manifest_publish_in_progress = false
 		_status.text = tr("Shared course prepared. Each player must verify it and ready up.")
 		if _prepared_hash == str(MultiplayerService.room_state.get("manifest_hash", "")):
 			MultiplayerService.acknowledge_manifest(_prepared_hash)
@@ -308,7 +331,13 @@ func _receive_manifest_chunk(peer_user_id: String, chunk: Dictionary) -> void:
 		return
 	var manifest: Resource = ManifestScript.new()
 	if not manifest.load_canonical_dictionary(parsed) or str(manifest.get("manifest_hash")) != hash_value or str(manifest.get("manifest_hash")) != _prepared_hash:
-		_status.text = tr("The host's course manifest did not match this device; cannot ready up.")
+		_status.text = tr("The host's course manifest failed its integrity check; cannot ready up.")
+		return
+	var room := MultiplayerService.room_state
+	if int(manifest.get("seed_value")) != int(room.get("seed", -1)) \
+		or int(manifest.get("course_length_px")) != int(room.get("course_length_px", -1)) \
+		or int(manifest.get("generator_version")) != int(room.get("generator_version", -1)):
+		_status.text = tr("The host's course manifest does not match this room; cannot ready up.")
 		return
 	_prepared_manifest = manifest
 	_prepared_hash = hash_value
@@ -368,6 +397,28 @@ func _button(label_text: String) -> Button:
 	button.text = label_text
 	button.custom_minimum_size.y = 40.0
 	return button
+
+func _on_viewport_size_changed() -> void:
+	var viewport := get_viewport().get_visible_rect().size
+	if is_instance_valid(_panel):
+		var panel_width := minf(620.0, maxf(viewport.x - 32.0, 280.0))
+		var panel_height := minf(600.0, maxf(viewport.y - 28.0, 200.0))
+		_panel.offset_left = -panel_width * 0.5
+		_panel.offset_right = panel_width * 0.5
+		_panel.offset_top = -panel_height * 0.5
+		_panel.offset_bottom = panel_height * 0.5
+	_ensure_focused_input_visible()
+
+func _ensure_focused_input_visible() -> void:
+	call_deferred("_scroll_to_focused_input")
+
+func _scroll_to_focused_input() -> void:
+	if not is_instance_valid(_scroll):
+		return
+	if is_instance_valid(_name_edit) and _name_edit.has_focus():
+		_scroll.ensure_control_visible(_name_edit)
+	elif is_instance_valid(_room_code) and _room_code.has_focus():
+		_scroll.ensure_control_visible(_room_code)
 
 func _panel_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
