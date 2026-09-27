@@ -19,6 +19,13 @@ func scale_track_height(scale: float) -> void:
 func set_motion_speed_multiplier(multiplier: float) -> void:
 	motion_speed_multiplier = maxf(multiplier, 1.0)
 
+func apply_replicated_motion(new_position: Vector2, new_roll_angle: float, new_rotation: float, should_be_visible: bool) -> void:
+	position = new_position
+	roll_angle = new_roll_angle
+	rotation = new_rotation
+	visible = should_be_visible
+	queue_redraw()
+
 func advance_motion(delta: float, movement: float, _player_position: Vector2, floor_y_at: Callable, surface_angle_at: Callable, surface_supported_at: Callable = Callable()) -> void:
 	if is_destroying:
 		return

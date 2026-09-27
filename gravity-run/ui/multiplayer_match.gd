@@ -447,10 +447,12 @@ func _sync_course_view() -> void:
 			var barrel := _course_nodes.get(barrel_id) as Node2D
 			if not is_instance_valid(barrel):
 				continue
-			barrel.visible = bool(barrel_state.get("spawned", false))
-			barrel.position = Vector2(float(barrel_state.get("x", barrel.position.x)), float(barrel_state.get("y", barrel.position.y)))
-			barrel.set("roll_angle", float(barrel_state.get("roll_angle", 0.0)))
-			barrel.rotation = float(barrel_state.get("rotation", 0.0))
+			barrel.call("apply_replicated_motion",
+				Vector2(float(barrel_state.get("x", barrel.position.x)), float(barrel_state.get("y", barrel.position.y))),
+				float(barrel_state.get("roll_angle", 0.0)),
+				float(barrel_state.get("rotation", 0.0)),
+				bool(barrel_state.get("spawned", false))
+			)
 			if bool(barrel_state.get("destroyed", false)) and not bool(barrel.call("is_destroying_now")):
 				barrel.call("destroy")
 		var destroyed: Variant = world_hazards.get("destroyed_event_ids", [])
