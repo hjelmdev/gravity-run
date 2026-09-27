@@ -30,6 +30,7 @@ const LEDGE_SCENE := preload("res://terrain/ledge.tscn")
 const COURSE_RULESET_SCRIPT := preload("res://systems/course_generation_ruleset.gd")
 const COURSE_RUN_DEFINITION_SCRIPT := preload("res://systems/course_run_definition.gd")
 const TRACK_GAP_SCRIPT := preload("res://terrain/track_gap.gd")
+const COURSE_SURFACE_RENDERER := preload("res://systems/course_surface_renderer.gd")
 
 @onready var player: Node2D = $Player
 @onready var run_state: Node = $RunState
@@ -780,90 +781,16 @@ func _draw_background() -> void:
 		draw_circle(Vector2(x, 58.0 + float((i * 47) % 390)), 1.5, Color("26364b"))
 
 func _draw_track() -> void:
-	_draw_track_surface(true)
-	_draw_track_surface(false)
-
-func _draw_track_surface(ceiling: bool) -> void:
-	var view_left := course_distance
-	var view_right := view_left + screen_width
 	var surface_gaps: Array[Dictionary] = []
 	for gap in gaps:
-		if is_instance_valid(gap) and bool(gap.get("from_ceiling")) == ceiling:
+		if is_instance_valid(gap):
 			var half_width := float(gap.get("width")) * 0.5
-			surface_gaps.append({"start": gap.position.x - half_width, "end": gap.position.x + half_width})
-	surface_gaps.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a["start"]) < float(b["start"]))
-	var cursor := view_left
-	for gap_interval in surface_gaps:
-		var gap_start := clampf(float(gap_interval["start"]), view_left, view_right)
-		var gap_end := clampf(float(gap_interval["end"]), view_left, view_right)
-		if gap_end <= cursor:
-			continue
-		if gap_start > cursor:
-			_draw_track_surface_segment(ceiling, cursor, gap_start)
-		cursor = maxf(cursor, gap_end)
-	if cursor < view_right:
-		_draw_track_surface_segment(ceiling, cursor, view_right)
-
-func _draw_track_surface_segment(ceiling: bool, start_x: float, end_x: float) -> void:
-	if end_x - start_x < 0.5:
-		return
-	var surface_points := _get_surface_points(ceiling, start_x, end_x)
-	var fill_points := PackedVector2Array()
-	if ceiling:
-		fill_points.append(Vector2(start_x, 0.0))
-		fill_points.append_array(surface_points)
-		fill_points.append(Vector2(end_x, 0.0))
-	else:
-		fill_points.append_array(surface_points)
-		fill_points.append(Vector2(end_x, screen_height))
-		fill_points.append(Vector2(start_x, screen_height))
-	draw_colored_polygon(fill_points, Color("202d40"))
-	draw_polyline(surface_points, Color("42d6c5"), 3.0, true)
-
-func _get_surface_points(ceiling: bool, start_x: float = 0.0, end_x: float = -1.0) -> PackedVector2Array:
-	if end_x < 0.0:
-		end_x = course_distance + screen_width
-	if is_zero_approx(start_x):
-		start_x = course_distance
-	var points := PackedVector2Array()
-	var x_positions: Array[float] = [start_x]
-	# Keep the sampling lattice fixed to the viewport instead of moving it with
-	# the segment start. Moving sample points made sloped joins subtly shimmer as
-	# they crossed the screen edge. Add every slope endpoint explicitly so the
-	# polyline always contains the exact corners, regardless of the sample grid.
-	var x := ceilf(start_x / 16.0) * 16.0
-	while x < end_x:
-		if x > start_x:
-			x_positions.append(x)
-		x += 16.0
+			surface_gaps.append({"start": gap.position.x - half_width, "end": gap.position.x + half_width, "ceiling": bool(gap.get("from_ceiling"))})
+	var terrain_boundaries: Array[float] = []
+	var step_positions: Array[float] = []
 	for terrain in slopes:
-		if bool(terrain.call("is_ceiling_slope")) != ceiling:
-			continue
-		for boundary_x in [float(terrain.call("get_start_x")), float(terrain.call("get_end_x"))]:
-			if boundary_x > start_x and boundary_x < end_x:
-				x_positions.append(boundary_x)
-	x_positions.append(end_x)
-	for terrain in slopes:
-		if bool(terrain.call("is_ceiling_slope")) != ceiling:
-			continue
+		terrain_boundaries.append(float(terrain.call("get_start_x")))
+		terrain_boundaries.append(float(terrain.call("get_end_x")))
 		if terrain.has_method("is_terrain_step") and bool(terrain.call("is_terrain_step")):
-			var step_x := float(terrain.call("get_start_x"))
-			if step_x > start_x and step_x < end_x:
-				x_positions.append(step_x)
-	x_positions.sort()
-	var last_x := -1000000.0
-	for point_x in x_positions:
-		if is_equal_approx(point_x, last_x):
-			continue
-		last_x = point_x
-		var is_step_point := false
-		for terrain in slopes:
-			if bool(terrain.call("is_ceiling_slope")) == ceiling and terrain.has_method("is_terrain_step") and bool(terrain.call("is_terrain_step")) and is_equal_approx(float(terrain.call("get_start_x")), point_x):
-				is_step_point = true
-				break
-		if is_step_point:
-			points.append(Vector2(point_x, _surface_y_at(point_x - 0.01, ceiling)))
-			points.append(Vector2(point_x, _surface_y_at(point_x + 0.01, ceiling)))
-		else:
-			points.append(Vector2(point_x, _surface_y_at(point_x, ceiling)))
-	return points
+			step_positions.append(float(terrain.call("get_start_x")))
+	COURSE_SURFACE_RENDERER.draw_track(self, course_distance, Vector2(screen_width, screen_height), surface_gaps, terrain_boundaries, step_positions, Callable(self, "_surface_y_at"), 0.0)

@@ -10,6 +10,7 @@ const LedgeScene := preload("res://terrain/ledge.tscn")
 const TrackGapScript := preload("res://terrain/track_gap.gd")
 const CourseGenerator := preload("res://systems/course_generator.gd")
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
+const CourseSurfaceRenderer := preload("res://systems/course_surface_renderer.gd")
 
 const WORLD_HEIGHT := 540.0
 const CAMERA_LEAD := 180.0
@@ -36,6 +37,8 @@ var _distance_label: Label
 var _result_label: Label
 var _course_root: Node2D
 var _course_nodes: Dictionary = {}
+var _terrain_events: Array[Dictionary] = []
+var _gap_events: Array[Dictionary] = []
 var _touch_index := -1
 var _touch_start := Vector2.ZERO
 var _run_banner_until := 0.0
@@ -286,6 +289,27 @@ func _compose_client_snapshot() -> void:
 		displayed.append(interpolated)
 	_snapshot = _authoritative_snapshot.duplicate(true)
 	_snapshot.players = displayed
+	var earlier_hazards: Variant = earlier_state.get("world_hazards", {})
+	var later_hazards: Variant = later_state.get("world_hazards", {})
+	if earlier_hazards is Dictionary and later_hazards is Dictionary:
+		var earlier_barrels: Dictionary = {}
+		for barrel in earlier_hazards.get("barrels", []):
+			if barrel is Dictionary:
+				earlier_barrels[str(barrel.get("entity_id", ""))] = barrel
+		var interpolated_barrels: Array[Dictionary] = []
+		for barrel in later_hazards.get("barrels", []):
+			if not barrel is Dictionary:
+				continue
+			var barrel_view: Dictionary = barrel.duplicate(true)
+			var from: Dictionary = earlier_barrels.get(str(barrel.get("entity_id", "")), barrel)
+			barrel_view.x = lerpf(float(from.get("x", barrel.get("x", 0.0))), float(barrel.get("x", 0.0)), weight)
+			barrel_view.y = lerpf(float(from.get("y", barrel.get("y", 0.0))), float(barrel.get("y", 0.0)), weight)
+			barrel_view.roll_angle = lerp_angle(float(from.get("roll_angle", barrel.get("roll_angle", 0.0))), float(barrel.get("roll_angle", 0.0)), weight)
+			barrel_view.rotation = lerp_angle(float(from.get("rotation", barrel.get("rotation", 0.0))), float(barrel.get("rotation", 0.0)), weight)
+			interpolated_barrels.append(barrel_view)
+		var displayed_hazards: Dictionary = later_hazards.duplicate(true)
+		displayed_hazards.barrels = interpolated_barrels
+		_snapshot.world_hazards = displayed_hazards
 
 func _local_runner_profile() -> Dictionary:
 	var snapshot: Resource = InventoryService.create_run_loadout_snapshot(PlayerProfile.get_character_stats())
@@ -330,9 +354,15 @@ func _player_state(user_id: String) -> Dictionary:
 
 func _build_course_view() -> void:
 	_course_nodes.clear()
+	_terrain_events.clear()
+	_gap_events.clear()
 	var floor_y := float(_manifest.get("initial_floor_y"))
 	var ceiling_y := float(_manifest.get("initial_ceiling_y"))
 	for event in _manifest.get("events"):
+		if str(event.get("kind", "")) in ["step", "slope"]:
+			_terrain_events.append(event)
+		elif str(event.get("kind", "")) == "gap":
+			_gap_events.append(event)
 		var event_id := str(event.get("event_id", ""))
 		var kind := str(event.get("kind", ""))
 		var x := float(event.get("x", 0.0))
@@ -569,6 +599,42 @@ func _draw() -> void:
 	for index in range(18):
 		var star_x := fposmod(float(index * 83) + camera_left * 0.12, view_size.x)
 		draw_circle(Vector2(star_x, 58.0 + float((index * 47) % 390)), 1.5, Color("26364b"))
+	_draw_course_surfaces(camera_left, view_size)
 	var finish_screen_x := float(_manifest.get("finish_x")) - camera_left if _manifest != null else -1.0
 	if finish_screen_x >= 0.0 and finish_screen_x <= view_size.x:
 		draw_line(Vector2(finish_screen_x, 0), Vector2(finish_screen_x, WORLD_HEIGHT), Color("f5d45e"), 4.0)
+
+func _draw_course_surfaces(camera_left: float, view_size: Vector2) -> void:
+	if _manifest == null:
+		return
+	var gaps: Array[Dictionary] = []
+	for event in _gap_events:
+		var half_width := float(event.get("width", 0.0)) * 0.5
+		gaps.append({"start": float(event.get("x", 0.0)) - half_width, "end": float(event.get("x", 0.0)) + half_width, "ceiling": bool(event.get("from_ceiling", false))})
+	var boundaries: Array[float] = []
+	var steps: Array[float] = []
+	for event in _terrain_events:
+		if str(event.get("kind", "")) == "slope":
+			boundaries.append(float(event.get("start_x", 0.0)))
+			boundaries.append(float(event.get("end_x", 0.0)))
+		else:
+			steps.append(float(event.get("x", 0.0)))
+	CourseSurfaceRenderer.draw_track(self, camera_left, view_size, gaps, boundaries, steps, Callable(self, "_manifest_surface_y_at"), camera_left)
+
+func _manifest_surface_y_at(x: float, ceiling: bool) -> float:
+	var y := float(_manifest.get("initial_ceiling_y")) if ceiling else float(_manifest.get("initial_floor_y"))
+	for event in _terrain_events:
+		if bool(event.get("from_ceiling", false)) != ceiling:
+			continue
+		match str(event.get("kind", "")):
+			"step":
+				if x >= float(event.get("x", 0.0)):
+					y = float(event.get("end_y", y))
+			"slope":
+				var start_x := float(event.get("start_x", 0.0))
+				var end_x := float(event.get("end_x", start_x))
+				if x >= start_x and x <= end_x and end_x > start_x:
+					y = lerpf(float(event.get("start_y", y)), float(event.get("end_y", y)), (x - start_x) / (end_x - start_x))
+				elif x > end_x:
+					y = float(event.get("end_y", y))
+	return y

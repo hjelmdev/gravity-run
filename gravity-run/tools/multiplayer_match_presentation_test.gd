@@ -15,12 +15,18 @@ func _ready() -> void:
 		{"event_id": "slope_a", "kind": "slope", "x": 900.0, "start_x": 680.0, "end_x": 1120.0, "start_y": 400.0, "end_y": 460.0, "from_ceiling": false},
 	]
 	manifest.set("events", events)
+	manifest.set("initial_floor_y", 460.0)
+	manifest.set("initial_ceiling_y", 80.0)
 	var match_view: Node2D = MatchScript.new()
 	match_view.set("_manifest", manifest)
 	var course_root := Node2D.new()
 	match_view.add_child(course_root)
 	match_view.set("_course_root", course_root)
 	match_view.call("_build_course_view")
+	assert(is_equal_approx(float(match_view.call("_manifest_surface_y_at", 640.0, false)), 460.0))
+	assert(is_equal_approx(float(match_view.call("_manifest_surface_y_at", 650.1, false)), 400.0))
+	assert(is_equal_approx(float(match_view.call("_manifest_surface_y_at", 900.0, false)), 430.0))
+	assert(match_view.get("_terrain_events").size() == 2, "multiplayer surface rendering should cache both steps and slopes")
 	var course_nodes: Dictionary = match_view.get("_course_nodes")
 	assert(course_nodes["block_a"].get_script().resource_path == "res://hazards/block.gd")
 	assert(course_nodes["barrels_a_0"].get_script().resource_path == "res://hazards/barrel.gd")
