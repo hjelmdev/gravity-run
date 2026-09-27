@@ -482,14 +482,15 @@ func _receive_manifest_chunk(peer_user_id: String, chunk: Dictionary) -> void:
 			return
 		encoded += str(parts[part_index])
 	_manifest_transfer_parts.clear()
-	var json_text := Marshalls.base64_to_raw(encoded).get_string_from_utf8()
-	if json_text.to_utf8_buffer().size() > 1048576:
+	var payload_bytes := Marshalls.base64_to_raw(encoded)
+	if payload_bytes.size() > 1048576:
 		return
+	var json_text := payload_bytes.get_string_from_utf8()
 	var parsed: Variant = JSON.parse_string(json_text)
 	if not parsed is Dictionary:
 		return
 	var manifest: Resource = ManifestScript.new()
-	if not manifest.load_canonical_dictionary(parsed) or str(manifest.get("manifest_hash")) != hash_value or str(manifest.get("manifest_hash")) != _prepared_hash:
+	if not manifest.load_canonical_dictionary(parsed, hash_value, payload_bytes) or str(manifest.get("manifest_hash")) != _prepared_hash:
 		_status.text = tr("The host's course manifest failed its integrity check; cannot ready up.")
 		return
 	var room := MultiplayerService.room_state

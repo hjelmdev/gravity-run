@@ -17,6 +17,9 @@ class_name MultiplayerCourseManifest
 @export var events: Array[Dictionary] = []
 @export var manifest_hash := ""
 
+var _verified_wire_hash := ""
+var _verified_contents: Dictionary = {}
+
 func to_canonical_dictionary() -> Dictionary:
 	return {
 		"protocol_version": protocol_version,
@@ -47,9 +50,17 @@ func calculate_hash() -> String:
 	context.update(to_canonical_json().to_utf8_buffer())
 	return context.finish().hex_encode()
 
-func load_canonical_dictionary(data: Dictionary) -> bool:
+func load_canonical_dictionary(data: Dictionary, expected_wire_hash := "", wire_payload := PackedByteArray()) -> bool:
 	if int(data.get("manifest_version", -1)) != 2 or not data.get("world", {}) is Dictionary:
 		return false
+	if not expected_wire_hash.is_empty():
+		if expected_wire_hash.length() != 64 or wire_payload.is_empty():
+			return false
+		var wire_context := HashingContext.new()
+		wire_context.start(HashingContext.HASH_SHA256)
+		wire_context.update(wire_payload)
+		if wire_context.finish().hex_encode() != expected_wire_hash:
+			return false
 	var world: Dictionary = data.world
 	protocol_version = int(data.get("protocol_version", 0))
 	match_rules_version = int(data.get("match_rules_version", 0))
@@ -72,7 +83,14 @@ func load_canonical_dictionary(data: Dictionary) -> bool:
 		if not event is Dictionary:
 			return false
 		events.append(event.duplicate(true))
-	manifest_hash = calculate_hash()
+	if expected_wire_hash.is_empty():
+		manifest_hash = calculate_hash()
+	else:
+		# Verify the exact bytes received. JSON float formatting may differ between
+		# Godot's native and browser builds even when the parsed course is identical.
+		manifest_hash = expected_wire_hash
+		_verified_wire_hash = expected_wire_hash
+		_verified_contents = to_canonical_dictionary().duplicate(true)
 	return validate().is_empty()
 
 func validate() -> String:
@@ -96,6 +114,9 @@ func validate() -> String:
 		if str(event.kind) not in ["spikes", "block", "barrels", "gap", "step", "slope"]:
 			return "The manifest contains an unsupported dynamic or unknown event type."
 		previous_x = event_x
-	if manifest_hash.length() != 64 or calculate_hash() != manifest_hash:
+	var hash_matches := calculate_hash() == manifest_hash if _verified_wire_hash.is_empty() else (
+		_verified_wire_hash == manifest_hash and _verified_contents == to_canonical_dictionary()
+	)
+	if manifest_hash.length() != 64 or not hash_matches:
 		return "The multiplayer manifest hash does not match its canonical contents."
 	return ""
