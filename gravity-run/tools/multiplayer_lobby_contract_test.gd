@@ -30,6 +30,7 @@ func _initialize() -> void:
 	_check(lobby_ui_source.contains("_manifest_verified_peers[peer_user_id] = true") and lobby_ui_source.contains("_manifest_transfer_last_sent_msec"), "manifest retries should stop after guest verification and be rate-limited")
 	_check(match_source.contains("if bool(_authoritative_snapshot.get(\"finished\", false)):\n\t\treturn") and match_source.contains("tied_for_lead"), "results should use terminal host state and avoid arbitrary winners on exact ties")
 	_check(match_source.contains("interpolated_player_state(str(from.get(\"state\", \"running\")), str(to.get(\"state\", \"running\")), weight)"), "remote player death/finish state should not be delayed by position interpolation")
+	_check(match_source.contains("host_simulation_finished") and match_source.contains("guest_received_finished_snapshot") and match_source.contains("match_peer_failed"), "terminal results should log the authoritative player states and any transport failure that preceded them")
 	_check(navigation_source.contains("request_multiplayer_lobby") and match_source.contains("request_multiplayer_lobby()"), "rematches should return through the persistent menu navigation owner")
 	if failures == 0:
 		print("Multiplayer lobby contract tests passed.")

@@ -58,6 +58,8 @@ var _last_snapshot_receive_msec := 0
 var _snapshot_interarrival_total_msec := 0
 var _snapshot_interarrival_count := 0
 var _snapshot_tick_gaps := 0
+var _return_request_notice: Label
+var _return_notice_override := ""
 
 func _ready() -> void:
 	set_process(true)
@@ -111,7 +113,8 @@ func _process(delta: float) -> void:
 		_return_requested = false
 		_return_lobby_button.disabled = false
 		_return_lobby_button.text = tr("Ask host to return")
-		_status_label.text = tr("The host has not returned the room yet. You can retry or leave the race.")
+		_return_notice_override = tr("The host has not returned the room yet. You can retry or leave the race.")
+		_update_return_request_notice()
 		_return_request_started_at = 0.0
 	if _go_start_at > 0.0 and _network_clock >= _go_start_at and not _simulation.started:
 		_simulation.start()
@@ -131,6 +134,7 @@ func _process(delta: float) -> void:
 			for event in events:
 				if str(event.get("kind", "")) == "match_finished":
 					_status_label.text = tr("Race finished")
+					_log_terminal_snapshot("host_simulation_finished", _simulation.get_snapshot())
 					MultiplayerService.advance_match_phase("FINISHED")
 			_snapshot = _simulation.get_snapshot()
 			_snapshot_elapsed += delta
@@ -201,7 +205,8 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 			"return_lobby_request":
 				if str(payload.get("room_id", "")) == MultiplayerService.get_room_id() and bool(_snapshot.get("finished", false)):
 					_return_requester_name = _member_display_name(peer_user_id)
-					_status_label.text = tr("%s asked to return to the lobby. The host can confirm with the button below.") % _return_requester_name
+					_return_notice_override = ""
+					_update_return_request_notice()
 			"race_go_ack":
 				print("[MP_DIAG] ", JSON.stringify({"event": "race_go_ack", "room_id": MultiplayerService.get_room_id(), "peer_id": peer_user_id, "at_ms": Time.get_ticks_msec()}))
 			"flip":
@@ -226,6 +231,8 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 			var new_snapshot: Variant = payload.get("state", {})
 			var previous_tick := _last_authoritative_tick
 			if _accept_authoritative_snapshot(new_snapshot):
+				if bool(_authoritative_snapshot.get("finished", false)):
+					_log_terminal_snapshot("guest_received_finished_snapshot", _authoritative_snapshot)
 				if _last_snapshot_receive_msec == 0:
 					print("[MP_DIAG] ", JSON.stringify({"event": "first_snapshot_received", "room_id": MultiplayerService.get_room_id(), "tick": int(new_snapshot.get("tick", -1)), "at_ms": Time.get_ticks_msec()}))
 				var now_msec := Time.get_ticks_msec()
@@ -247,6 +254,8 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 
 func _on_peer_connection_state_changed(peer_user_id: String, state: String, message: String) -> void:
 	if state == "failed":
+		var player_state: Dictionary = _simulation.get_player(peer_user_id) if _simulation != null else {}
+		print("[MP_DIAG] ", JSON.stringify({"event": "match_peer_failed", "room_id": MultiplayerService.get_room_id(), "peer_id": peer_user_id, "is_owner": MultiplayerService.is_room_owner(), "match_tick": int(_simulation.get("tick")) if _simulation != null else -1, "player_state": str(player_state.get("state", "missing")), "player_world_x": float(player_state.get("world_x", -1.0)), "message": message, "at_ms": Time.get_ticks_msec()}))
 		_status_label.text = message
 		if MultiplayerService.is_room_owner():
 			if _simulation != null and _simulation.mark_disconnected(peer_user_id):
@@ -297,6 +306,15 @@ func _accept_authoritative_snapshot(snapshot: Variant) -> bool:
 	while _snapshot_buffer.size() > 8:
 		_snapshot_buffer.pop_front()
 	return true
+
+func _log_terminal_snapshot(reason: String, snapshot: Dictionary) -> void:
+	var player_summary: Array[Dictionary] = []
+	var states: Variant = snapshot.get("players", [])
+	if states is Array:
+		for player in states:
+			if player is Dictionary:
+				player_summary.append({"user_id": str(player.get("user_id", "")), "display_name": str(player.get("display_name", "")), "state": str(player.get("state", "")), "world_x": float(player.get("world_x", 0.0))})
+	print("[MP_DIAG] ", JSON.stringify({"event": "match_terminal_snapshot", "reason": reason, "room_id": MultiplayerService.get_room_id(), "is_owner": MultiplayerService.is_room_owner(), "tick": int(snapshot.get("tick", -1)), "finished": bool(snapshot.get("finished", false)), "players": player_summary, "at_ms": Time.get_ticks_msec()}))
 
 func _compose_client_snapshot() -> void:
 	if _authoritative_snapshot.is_empty():
@@ -658,7 +676,7 @@ func _update_hud() -> void:
 			_status_label.text = ""
 	elif str(own.get("state", "")) == "dead":
 		if not _return_requester_name.is_empty():
-			_status_label.text = tr("%s asked to return to the lobby. The host can confirm with the button below.") % _return_requester_name
+			_update_return_request_notice()
 		elif _status_label.text != tr("You were eliminated"):
 			_status_label.text = tr("You were eliminated")
 	if bool(_snapshot.get("finished", false)):
@@ -763,6 +781,13 @@ func _build_hud() -> void:
 	_result_label.add_theme_color_override("font_color", Color("f5d45e"))
 	_result_label.get_parent().remove_child(_result_label)
 	results_layout.add_child(_result_label)
+	_return_request_notice = Label.new()
+	_return_request_notice.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_return_request_notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_return_request_notice.add_theme_font_size_override("font_size", 16)
+	_return_request_notice.add_theme_color_override("font_color", Color("b8c7dc"))
+	_return_request_notice.visible = false
+	results_layout.add_child(_return_request_notice)
 	_results_list = VBoxContainer.new()
 	_results_list.add_theme_constant_override("separation", 5)
 	results_layout.add_child(_results_list)
@@ -784,7 +809,9 @@ func _build_hud() -> void:
 func _show_results() -> void:
 	if _results_panel.visible:
 		return
+	_log_terminal_snapshot("results_panel_shown", _snapshot)
 	_results_panel.visible = true
+	_status_label.visible = false
 	_result_label.visible = true
 	var states: Array[Dictionary] = []
 	var players: Variant = _snapshot.get("players", [])
@@ -818,6 +845,7 @@ func _show_results() -> void:
 					break
 			winner_name = str(first_state.get("display_name", "")) if not tied_for_lead else ""
 	_result_label.text = tr("Winner: %s") % winner_name if not winner_name.is_empty() else tr("No winner")
+	_update_return_request_notice()
 	for child in _results_list.get_children():
 		child.queue_free()
 	var previous_place := 0
@@ -867,12 +895,23 @@ func _return_to_lobby() -> void:
 		if queued:
 			_return_request_started_at = _network_clock
 			_return_lobby_button.text = tr("Return request sent to host…")
-			_status_label.text = tr("Return request sent. The host must confirm before everyone returns to the lobby.")
+			_return_notice_override = tr("Return request sent. Waiting for the host to confirm.")
+			_update_return_request_notice()
 		else:
 			_return_requested = false
 			_return_lobby_button.disabled = false
 			_return_lobby_button.text = tr("Ask host to return")
-			_status_label.text = tr("Could not send a return request to the host.")
+			_return_notice_override = tr("Could not send a return request to the host.")
+			_update_return_request_notice()
+
+func _update_return_request_notice() -> void:
+	if not is_instance_valid(_return_request_notice):
+		return
+	var message := _return_notice_override
+	if message.is_empty() and not _return_requester_name.is_empty():
+		message = tr("%s asked to return to the lobby. The host can confirm with the button below.") % _return_requester_name
+	_return_request_notice.text = message
+	_return_request_notice.visible = not message.is_empty()
 
 func _on_request_finished(action: String, success: bool, message: String) -> void:
 	if action == "advance_match_phase":
@@ -887,7 +926,8 @@ func _on_request_finished(action: String, success: bool, message: String) -> voi
 	_return_request_started_at = 0.0
 	_return_lobby_button.disabled = false
 	_return_lobby_button.text = tr("Ask host to return")
-	_status_label.text = message
+	_return_notice_override = message
+	_update_return_request_notice()
 
 func status_label_color() -> void:
 	_status_label.add_theme_font_size_override("font_size", 28)
