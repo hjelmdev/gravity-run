@@ -103,6 +103,43 @@
 		html.phone-portrait #rotate-prompt {
 			display: flex;
 		}
+		#mobile-text-entry {
+			position: fixed;
+			z-index: 20;
+			box-sizing: border-box;
+			padding: 8px 12px 10px;
+			padding-left: max(12px, env(safe-area-inset-left));
+			padding-right: max(12px, env(safe-area-inset-right));
+			border: 2px solid #42d6c5;
+			border-radius: 12px;
+			background: #18243a;
+			color: #edf3ff;
+			font-family: Arial, sans-serif;
+			box-shadow: 0 4px 18px #0008;
+		}
+		#mobile-text-entry[hidden] { display: none; }
+		#mobile-text-label { display: block; margin-bottom: 5px; font-size: 15px; }
+		#mobile-text-form > div { display: flex; gap: 8px; }
+		#mobile-text-input {
+			min-width: 0;
+			flex: 1;
+			box-sizing: border-box;
+			padding: 8px;
+			border: 1px solid #8292aa;
+			border-radius: 6px;
+			background: #111b2c;
+			color: #edf3ff;
+			font-size: 18px;
+		}
+		#mobile-text-form button {
+			padding: 0 18px;
+			border: 0;
+			border-radius: 6px;
+			background: #42d6c5;
+			color: #101827;
+			font-size: 17px;
+			font-weight: 700;
+		}
 	</style>
 </head>
 <body>
@@ -127,44 +164,15 @@
 		<strong>VÄND SKÄRMEN</strong>
 		<span>Gravity Run spelas i liggande läge. Vänd mobilen för att fortsätta.</span>
 	</aside>
+	<div id="mobile-text-entry" hidden>
+		<form id="mobile-text-form">
+			<label id="mobile-text-label" for="mobile-text-input"></label>
+			<div><input id="mobile-text-input" type="text" autocomplete="off" spellcheck="false"><button type="submit">Klar</button></div>
+		</form>
+	</div>
+	<script src="./mobile_text_entry.js"></script>
 	<script>
 	(() => {
-		const touch = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
-		const deviceSide = Math.max(screen.width || 0, screen.height || 0);
-		const mobileOrTablet = touch && (deviceSide <= 1600 || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent));
-		const portraitQuery = window.matchMedia('(orientation: portrait)');
-		const isPortrait = () => {
-			if (screen.orientation?.type) return screen.orientation.type.startsWith('portrait');
-			if (typeof window.orientation === 'number') return Math.abs(window.orientation) < 45 || Math.abs(window.orientation) > 135;
-			return portraitQuery.matches;
-		};
-		const updateOrientation = () => {
-			document.documentElement.classList.toggle('phone-portrait', mobileOrTablet && isPortrait());
-			updateMobileShell();
-		};
-		const updateMobileShell = () => {
-			if (!mobileOrTablet) return;
-			const shell = document.getElementById('game-shell');
-			if (!shell) return;
-			if (document.documentElement.classList.contains('phone-portrait')) {
-				for (const property of ['position', 'left', 'top', 'width', 'height']) shell.style.removeProperty(property);
-				return;
-			}
-			const viewport = window.visualViewport;
-			shell.style.position = 'fixed';
-			shell.style.left = `${viewport?.offsetLeft ?? 0}px`;
-			shell.style.top = `${viewport?.offsetTop ?? 0}px`;
-			shell.style.width = `${viewport?.width ?? window.innerWidth}px`;
-			shell.style.height = `${viewport?.height ?? window.innerHeight}px`;
-		};
-		updateOrientation();
-		const refreshOrientationAndViewport = () => updateOrientation();
-		screen.orientation?.addEventListener?.('change', refreshOrientationAndViewport);
-		window.addEventListener('orientationchange', refreshOrientationAndViewport);
-		window.addEventListener('resize', updateMobileShell);
-		window.visualViewport?.addEventListener?.('resize', updateMobileShell);
-		window.visualViewport?.addEventListener?.('scroll', updateMobileShell);
-		portraitQuery.addEventListener?.('change', refreshOrientationAndViewport);
 		// Retire an older root-scoped Godot worker. The game export in ./game owns its own cache.
 		if ('serviceWorker' in navigator) {
 			const scope = new URL('./', location.href).href;

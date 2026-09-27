@@ -9,6 +9,10 @@ signal match_start_requested
 var _status: Label
 var _room_code: LineEdit
 var _name_edit: LineEdit
+var _name_button: Button
+var _room_code_button: Button
+var _mobile_text_entry := false
+var _mobile_text_poll := 0.0
 var _scroll: ScrollContainer
 var _panel: PanelContainer
 var _layout: VBoxContainer
@@ -30,6 +34,7 @@ var _busy := false
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_mobile_text_entry = OS.has_feature("web") and bool(JavaScriptBridge.eval("Boolean(window.parent.GravityRunMobileInput && window.parent.GravityRunMobileInput.isMobile)", true))
 	_build_ui()
 	MultiplayerService.room_changed.connect(_on_room_changed)
 	MultiplayerService.request_finished.connect(_on_request_finished)
@@ -41,6 +46,11 @@ func _ready() -> void:
 		_on_room_changed(MultiplayerService.room_state)
 
 func _process(_delta: float) -> void:
+	if _mobile_text_entry:
+		_mobile_text_poll += _delta
+		if _mobile_text_poll >= 0.1:
+			_mobile_text_poll = 0.0
+			_read_mobile_text_entry()
 	if _countdown_remaining > 0.0:
 		_countdown_remaining = maxf(_countdown_remaining - _delta, 0.0)
 		if _countdown_remaining <= 0.0:
@@ -86,6 +96,11 @@ func _build_ui() -> void:
 	_name_edit.focus_entered.connect(_ensure_focused_input_visible)
 	_name_edit.focus_exited.connect(_restore_scroll_if_unfocused)
 	_layout.add_child(_name_edit)
+	if _mobile_text_entry:
+		_name_edit.visible = false
+		_name_button = _button(tr("Display name"))
+		_name_button.pressed.connect(func() -> void: _open_mobile_text_entry("name", _name_edit.text))
+		_layout.add_child(_name_button)
 	var create_row := HBoxContainer.new()
 	create_row.add_theme_constant_override("separation", 8)
 	_layout.add_child(create_row)
@@ -101,6 +116,12 @@ func _build_ui() -> void:
 	_room_code.text_submitted.connect(func(_value: String) -> void: _join_room())
 	_room_code.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	create_row.add_child(_room_code)
+	if _mobile_text_entry:
+		_room_code.visible = false
+		_room_code_button = _button(tr("Room code"))
+		_room_code_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_room_code_button.pressed.connect(func() -> void: _open_mobile_text_entry("room_code", _room_code.text))
+		create_row.add_child(_room_code_button)
 	_join_button = _button(tr("Join"))
 	_join_button.pressed.connect(_join_room)
 	create_row.add_child(_join_button)
@@ -362,6 +383,8 @@ func _update_room(room: Dictionary) -> void:
 	_create_button.disabled = _busy or in_room
 	_join_button.disabled = _busy or in_room
 	_room_code.editable = not in_room and not _busy
+	if is_instance_valid(_room_code_button):
+		_room_code_button.disabled = in_room or _busy
 	_ready_button.disabled = not in_room
 	_start_button.disabled = true
 	_leave_button.visible = in_room
@@ -369,6 +392,7 @@ func _update_room(room: Dictionary) -> void:
 		_status.text = tr("Create a private room or join with a code.") if not _busy else _status.text
 		return
 	_room_code.text = str(room.get("room_code", ""))
+	_update_mobile_text_labels()
 	var members: Variant = room.get("members", [])
 	var own_ready := false
 	var everyone_ready := true
@@ -403,6 +427,36 @@ func _set_busy(value: bool) -> void:
 	if is_instance_valid(_create_button):
 		_create_button.disabled = value or MultiplayerService.has_room()
 		_join_button.disabled = value or MultiplayerService.has_room()
+		if is_instance_valid(_room_code_button):
+			_room_code_button.disabled = value or MultiplayerService.has_room()
+
+func _open_mobile_text_entry(field: String, value: String) -> void:
+	var request := JSON.stringify({"field": field, "value": value})
+	JavaScriptBridge.eval("window.parent.GravityRunMobileInput.open(%s)" % request, true)
+
+func _read_mobile_text_entry() -> void:
+	var response: Variant = JavaScriptBridge.eval("window.parent.GravityRunMobileInput.takeResult()", true)
+	if not response is String or response.is_empty():
+		return
+	var entry: Variant = JSON.parse_string(response)
+	if not entry is Dictionary:
+		return
+	match str(entry.get("field", "")):
+		"name":
+			_name_edit.text = str(entry.get("value", "")).substr(0, 16)
+		"room_code":
+			_room_code.text = str(entry.get("value", "")).substr(0, 8)
+	_update_mobile_text_labels()
+
+func _update_mobile_text_labels() -> void:
+	if is_instance_valid(_name_button):
+		_name_button.text = _name_edit.text if not _name_edit.text.is_empty() else tr("Display name")
+	if is_instance_valid(_room_code_button):
+		_room_code_button.text = _room_code.text if not _room_code.text.is_empty() else tr("Room code")
+
+func _exit_tree() -> void:
+	if _mobile_text_entry:
+		JavaScriptBridge.eval("window.parent.GravityRunMobileInput.cancel()", true)
 
 func _button(label_text: String) -> Button:
 	var button := Button.new()
