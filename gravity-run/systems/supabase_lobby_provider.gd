@@ -7,7 +7,9 @@ signal request_finished(action: String, success: bool, data: Variant, message: S
 var _request: HTTPRequest
 var _active_action := ""
 var _active_context := ""
-var _queued_leave: Dictionary = {}
+var _pending_calls: Array[Dictionary] = []
+var _active_started_msec := 0
+var _active_call: Dictionary = {}
 
 func _ready() -> void:
 	_request = HTTPRequest.new()
@@ -64,11 +66,9 @@ func start_countdown(room_id: String, token: String, context: String) -> void:
 	_call("start_countdown", "start_multiplayer_countdown", {"p_room_id": room_id}, token, context)
 
 func leave_room(room_id: String, token: String, context: String) -> void:
-	if _request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
-		# A periodic refresh or another lobby RPC must not silently discard the
-		# leave request; otherwise the client exits but the public room survives.
-		_queued_leave = {"room_id": room_id, "token": token, "context": context}
-		return
+	# A leave invalidates queued work for the old room; do not let stale ready or
+	# refresh mutations run after the member has left.
+	_pending_calls.clear()
 	_call("leave_room", "leave_multiplayer_room", {"p_room_id": room_id}, token, context)
 
 func list_public_rooms(token: String, context: String) -> void:
@@ -77,15 +77,57 @@ func list_public_rooms(token: String, context: String) -> void:
 func return_to_lobby(room_id: String, token: String, context: String) -> void:
 	_call("return_to_lobby", "return_multiplayer_room_to_lobby", {"p_room_id": room_id}, token, context)
 
+func advance_match_phase(room_id: String, phase: String, token: String, context: String) -> void:
+	_call("advance_match_phase", "advance_multiplayer_match_phase", {"p_room_id": room_id, "p_next_phase": phase}, token, context)
+
 func _call(action: String, rpc_name: String, payload: Dictionary, token: String, context: String) -> void:
-	if _request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
-		request_finished.emit(action, false, null, tr("Another lobby request is already in progress."), context)
-		return
 	if token.is_empty():
 		request_finished.emit(action, false, null, tr("A multiplayer identity is required."), context)
 		return
+	var call := {
+		"action": action,
+		"rpc_name": rpc_name,
+		"payload": payload.duplicate(true),
+		"token": token,
+		"context": context,
+		"queued_at_msec": Time.get_ticks_msec(),
+		"retry_count": 0,
+	}
+	# Refreshes are best-effort reads: retain at most one queued refresh and let
+	# user mutations (especially leave) run first instead of rejecting them.
+	if action == "refresh_room":
+		for queued in _pending_calls:
+			if str(queued.get("action", "")) == "refresh_room" and str(queued.get("context", "")) == context:
+				return
+	if _request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED or not _pending_calls.is_empty():
+		if _pending_calls.size() >= 64:
+			request_finished.emit(action, false, null, tr("The multiplayer request queue is full. Wait a moment and retry."), context)
+			return
+		if action == "leave_room":
+			_pending_calls.push_front(call)
+		elif action in ["refresh_room", "list_public_rooms"]:
+			_pending_calls.append(call)
+		else:
+			var first_background := _pending_calls.size()
+			for index in range(_pending_calls.size()):
+				if str(_pending_calls[index].get("action", "")) in ["refresh_room", "list_public_rooms"]:
+					first_background = index
+					break
+			_pending_calls.insert(first_background, call)
+		return
+	_start_call(call)
+
+func _start_call(call: Dictionary) -> void:
+	var action := str(call.get("action", ""))
+	var rpc_name := str(call.get("rpc_name", ""))
+	var payload: Dictionary = call.get("payload", {})
+	var token := str(call.get("token", ""))
+	var context := str(call.get("context", ""))
 	_active_action = action
 	_active_context = context
+	_active_call = call.duplicate(true)
+	_active_started_msec = Time.get_ticks_msec()
+	print("[MP_DIAG] ", JSON.stringify({"event": "lobby_rpc_start", "action": action, "context": context, "queue_wait_ms": _active_started_msec - int(call.get("queued_at_msec", _active_started_msec)), "at_ms": _active_started_msec}))
 	var headers := PackedStringArray([
 		"apikey: " + Config.PUBLISHABLE_KEY,
 		"Authorization: Bearer " + token,
@@ -99,7 +141,9 @@ func _call(action: String, rpc_name: String, payload: Dictionary, token: String,
 		var failed_context := _active_context
 		_active_action = ""
 		_active_context = ""
+		_log_rpc_result(failed_action, failed_context, "request_start_failed", error)
 		request_finished.emit(failed_action, false, null, tr("Could not start the lobby request (code %d).") % error, failed_context)
+		call_deferred("_dispatch_pending_call")
 
 func _on_request_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	var action := _active_action
@@ -109,22 +153,61 @@ func _on_request_completed(result: int, response_code: int, _headers: PackedStri
 	var response_text := body.get_string_from_utf8()
 	var parsed: Variant = JSON.parse_string(response_text) if not response_text.is_empty() else null
 	if result != HTTPRequest.RESULT_SUCCESS:
+		_log_rpc_result(action, context, "network_error_%d" % result, response_code)
+		_schedule_safe_retry()
 		request_finished.emit(action, false, null, tr("Network error while contacting the lobby service (code %d).") % result, context)
-		call_deferred("_dispatch_queued_leave")
+		call_deferred("_dispatch_pending_call")
 		return
 	if response_code < 200 or response_code >= 300:
+		_log_rpc_result(action, context, "http_error", response_code)
+		if response_code >= 500:
+			_schedule_safe_retry()
 		request_finished.emit(action, false, null, _friendly_error(parsed, response_code), context)
-		call_deferred("_dispatch_queued_leave")
+		call_deferred("_dispatch_pending_call")
 		return
+	_log_rpc_result(action, context, "ok", response_code)
 	request_finished.emit(action, true, parsed, "", context)
-	call_deferred("_dispatch_queued_leave")
+	call_deferred("_dispatch_pending_call")
 
-func _dispatch_queued_leave() -> void:
-	if _queued_leave.is_empty():
+func _dispatch_pending_call() -> void:
+	if _pending_calls.is_empty() or _request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
 		return
-	var request := _queued_leave
-	_queued_leave = {}
-	leave_room(str(request.get("room_id", "")), str(request.get("token", "")), str(request.get("context", "")))
+	_start_call(_pending_calls.pop_front())
+
+func _log_rpc_result(action: String, context: String, outcome: String, response_code: int) -> void:
+	var elapsed_msec := maxi(0, Time.get_ticks_msec() - _active_started_msec)
+	print("[MP_DIAG] ", JSON.stringify({"event": "lobby_rpc_done", "action": action, "context": context, "outcome": outcome, "http": response_code, "elapsed_ms": elapsed_msec}))
+
+
+func _schedule_safe_retry() -> void:
+	var action := str(_active_call.get("action", ""))
+	if action not in ["refresh_room", "set_ready", "set_skin", "ack_manifest", "leave_room", "advance_match_phase", "return_to_lobby"]:
+		return
+	var retry_count := int(_active_call.get("retry_count", 0))
+	if retry_count >= 2:
+		return
+	var retry_call := _active_call.duplicate(true)
+	retry_call.retry_count = retry_count + 1
+	retry_call.queued_at_msec = Time.get_ticks_msec()
+	var delay_seconds := 1.0 if retry_count == 0 else 2.0
+	var timer := get_tree().create_timer(delay_seconds, true, false, true)
+	timer.timeout.connect(_queue_safe_retry.bind(retry_call), CONNECT_ONE_SHOT)
+
+func _queue_safe_retry(call: Dictionary) -> void:
+	if str(call.get("action", "")) not in ["refresh_room", "set_ready", "set_skin", "ack_manifest", "leave_room", "advance_match_phase", "return_to_lobby"]:
+		return
+	for queued in _pending_calls:
+		if str(queued.get("action", "")) == str(call.get("action", "")) and str(queued.get("context", "")) == str(call.get("context", "")):
+			return
+	if _pending_calls.size() >= 64:
+		return
+	var first_background := _pending_calls.size()
+	for index in range(_pending_calls.size()):
+		if str(_pending_calls[index].get("action", "")) in ["refresh_room", "list_public_rooms"]:
+			first_background = index
+			break
+	_pending_calls.insert(first_background, call)
+	_dispatch_pending_call()
 
 func _friendly_error(response: Variant, response_code: int) -> String:
 	var detail := ""

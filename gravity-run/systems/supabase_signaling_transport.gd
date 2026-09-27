@@ -18,6 +18,7 @@ var _reconnect_delay := 1.0
 var _joining := false
 var _connected := false
 var _outgoing_signal_queue: Array[Dictionary] = []
+var _socket_started_at_msec := 0
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -82,6 +83,7 @@ func _open_socket() -> void:
 	if _topic.is_empty() or _socket.get_ready_state() in [WebSocketPeer.STATE_CONNECTING, WebSocketPeer.STATE_OPEN]:
 		return
 	_socket = WebSocketPeer.new()
+	_socket_started_at_msec = Time.get_ticks_msec()
 	_socket.outbound_buffer_size = 256 * 1024
 	var base_url := Config.PROJECT_URL.replace("https://", "wss://").replace("http://", "ws://")
 	var url := "%s/realtime/v1/websocket?apikey=%s&vsn=1.0.0" % [base_url, _uri_encode(Config.PUBLISHABLE_KEY)]
@@ -164,6 +166,7 @@ func _set_connected(value: bool, message: String) -> void:
 	if _connected == value and message.is_empty():
 		return
 	_connected = value
+	print("[MP_DIAG] ", JSON.stringify({"event": "signaling_state", "connected": value, "elapsed_ms": Time.get_ticks_msec() - _socket_started_at_msec if _socket_started_at_msec > 0 else 0, "message": message}))
 	connection_state_changed.emit(value, message)
 
 func _uri_encode(value: String) -> String:

@@ -134,6 +134,16 @@ func connected_peer_ids() -> PackedStringArray:
 			result.append(str(peer_user_id))
 	return result
 
+func peer_link_state(peer_user_id: String) -> String:
+	if not _entries.has(peer_user_id):
+		return "disconnected"
+	var entry: Dictionary = _entries[peer_user_id]
+	var control: WebRTCDataChannel = entry.get("control")
+	var snapshot: WebRTCDataChannel = entry.get("snapshot")
+	if control != null and snapshot != null and control.get_ready_state() == WebRTCDataChannel.STATE_OPEN and snapshot.get_ready_state() == WebRTCDataChannel.STATE_OPEN:
+		return "connected"
+	return "connecting"
+
 func close_all() -> void:
 	for peer_user_id in _entries.keys():
 		_close_entry(_entries[peer_user_id])
@@ -162,6 +172,9 @@ func _process(_delta: float) -> void:
 			_fail_peer(str(peer_user_id), "Direct connection timed out. Try another network or host.")
 			continue
 		var state := connection.get_connection_state()
+		if state != int(entry.get("last_pc_state", -1)):
+			entry.last_pc_state = state
+			print("[MP_DIAG] ", JSON.stringify({"event": "webrtc_connection_state", "room_id": _room_id, "peer_id": peer_user_id, "state_code": state, "elapsed_ms": Time.get_ticks_msec() - int(entry.get("created_at_msec", Time.get_ticks_msec()))}))
 		if state == WebRTCPeerConnection.STATE_FAILED or state == WebRTCPeerConnection.STATE_CLOSED:
 			_fail_peer(str(peer_user_id), "Direct peer connection failed. Try another network or host.")
 			continue
@@ -170,19 +183,18 @@ func _process(_delta: float) -> void:
 			if channel == null:
 				continue
 			channel.poll()
-			if channel_name == "control" and channel.get_ready_state() == WebRTCDataChannel.STATE_OPEN and not bool(entry.get("control_open_notified", false)):
-				entry.control_open_notified = true
-				peer_state_changed.emit(str(peer_user_id), "connected", "Reliable direct peer channel opened.")
-				if channels_open:
-					_retry_count_by_peer.erase(str(peer_user_id))
 			_drain_reliable_queue(entry, channel_name)
 			while channel.get_available_packet_count() > 0:
-				var packet := channel.get_packet()
+				var packet: PackedByteArray = channel.get_packet()
 				if packet.size() > MAX_PACKET_BYTES:
 					continue
 				var parsed: Variant = JSON.parse_string(packet.get_string_from_utf8())
 				if parsed is Dictionary:
 					peer_data_received.emit(str(peer_user_id), channel_name, parsed)
+		if channels_open and not bool(entry.get("channels_open_notified", false)):
+			entry.channels_open_notified = true
+			peer_state_changed.emit(str(peer_user_id), "connected", "Both direct peer channels opened.")
+			_retry_count_by_peer.erase(str(peer_user_id))
 
 func _create_peer_entry(peer_user_id: String, attempt_id: String, make_offer: bool) -> Dictionary:
 	var connection := WebRTCPeerConnection.new()
@@ -202,7 +214,8 @@ func _create_peer_entry(peer_user_id: String, attempt_id: String, make_offer: bo
 		"control": null,
 		"snapshot": null,
 		"reliable_queue": [],
-		"control_open_notified": false,
+		"channels_open_notified": false,
+		"last_pc_state": -1,
 	}
 	if make_offer:
 		entry.control = connection.create_data_channel("control", {"ordered": true, "protocol": "gravity-run-v1"})
@@ -285,6 +298,7 @@ func _drain_reliable_queue(entry: Dictionary, channel_name: String) -> void:
 	entry.reliable_queue = queue
 
 func _fail_peer(peer_user_id: String, message: String) -> void:
+	print("[MP_DIAG] ", JSON.stringify({"event": "webrtc_failed", "room_id": _room_id, "peer_id": peer_user_id, "message": message, "at_ms": Time.get_ticks_msec()}))
 	if _entries.has(peer_user_id):
 		_close_entry(_entries[peer_user_id])
 		_entries.erase(peer_user_id)

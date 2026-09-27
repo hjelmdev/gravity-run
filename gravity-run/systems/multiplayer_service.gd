@@ -35,6 +35,8 @@ var _pending_member_signals: Array[Dictionary] = []
 var _lobby_poll_elapsed := 0.0
 var course_manifest: Resource
 var race_start_at_unix := 0.0
+var _room_generation := 0
+var _identity_started_msec := 0
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -69,7 +71,7 @@ func _process(delta: float) -> void:
 		_lobby_poll_elapsed += delta
 		# Roster/readiness/countdown changes should not wait several seconds.
 		# Keep match polling less frequent, where snapshots already carry motion.
-		var poll_interval := 1.0 if str(room_state.get("phase", "OPEN")) in ["OPEN", "COUNTDOWN"] else 3.0
+		var poll_interval := 1.0 if str(room_state.get("phase", "OPEN")) == "COUNTDOWN" else 15.0
 		if _lobby_poll_elapsed >= poll_interval:
 			_lobby_poll_elapsed = 0.0
 			refresh_room()
@@ -103,6 +105,9 @@ func send_peer_message_to_all(channel_name: String, payload: Dictionary) -> void
 
 func get_connected_peer_ids() -> PackedStringArray:
 	return _webrtc_transport.connected_peer_ids() if _webrtc_transport != null else PackedStringArray()
+
+func get_peer_link_state(peer_user_id: String) -> String:
+	return _webrtc_transport.peer_link_state(peer_user_id) if _webrtc_transport != null else "unavailable"
 
 func can_start_race() -> bool:
 	if not has_room() or not is_room_owner() or str(room_state.get("phase", "")) != "OPEN":
@@ -163,27 +168,27 @@ func load_public_rooms() -> void:
 func refresh_room() -> void:
 	if not has_room():
 		return
-	_lobby_provider.refresh_room(get_room_id(), _current_token(), identity_user_id)
+	_lobby_provider.refresh_room(get_room_id(), _current_token(), _lobby_context())
 
 func set_ready(ready: bool) -> void:
 	if has_room():
-		_lobby_provider.set_ready(get_room_id(), ready, _current_token(), identity_user_id)
+		_lobby_provider.set_ready(get_room_id(), ready, _current_token(), _lobby_context())
 
 func set_skin_id(skin_id: int) -> void:
 	if has_room():
-		_lobby_provider.set_skin(get_room_id(), posmod(skin_id, 4), _current_token(), identity_user_id)
+		_lobby_provider.set_skin(get_room_id(), posmod(skin_id, 4), _current_token(), _lobby_context())
 
 func publish_manifest(manifest_hash: String, seed_value: int, length_px: int) -> void:
 	if has_room() and is_room_owner():
-		_lobby_provider.set_manifest(get_room_id(), seed_value, length_px, manifest_hash, _current_token(), identity_user_id)
+		_lobby_provider.set_manifest(get_room_id(), seed_value, length_px, manifest_hash, _current_token(), _lobby_context())
 
 func acknowledge_manifest(manifest_hash: String) -> void:
 	if has_room():
-		_lobby_provider.acknowledge_manifest(get_room_id(), manifest_hash, _current_token(), identity_user_id)
+		_lobby_provider.acknowledge_manifest(get_room_id(), manifest_hash, _current_token(), _lobby_context())
 
 func request_start() -> void:
 	if can_start_race():
-		_lobby_provider.start_countdown(get_room_id(), _current_token(), identity_user_id)
+		_lobby_provider.start_countdown(get_room_id(), _current_token(), _lobby_context())
 	else:
 		request_finished.emit("start_countdown", false, tr("All players must be ready, have the same course, and have a direct connection to the host."))
 
@@ -194,13 +199,17 @@ func leave_room() -> void:
 	# serversidan. Spara request-parametrarna innan vi nollställer rummet.
 	var room_id := get_room_id()
 	var token := _current_token()
-	var user_id := identity_user_id
+	var context := _lobby_context()
 	_clear_local_room()
-	_lobby_provider.leave_room(room_id, token, user_id)
+	_lobby_provider.leave_room(room_id, token, context)
 
 func return_to_lobby() -> void:
 	if has_room():
-		_lobby_provider.return_to_lobby(get_room_id(), _current_token(), identity_user_id)
+		_lobby_provider.return_to_lobby(get_room_id(), _current_token(), _lobby_context())
+
+func advance_match_phase(phase: String) -> void:
+	if has_room() and is_room_owner():
+		_lobby_provider.advance_match_phase(get_room_id(), phase, _current_token(), _lobby_context())
 
 func set_signaling_connected(connected: bool, message: String = "") -> void:
 	if signaling_connected == connected and message.is_empty():
@@ -212,6 +221,8 @@ func set_signaling_connected(connected: bool, message: String = "") -> void:
 	# manifest until ready, while ready itself is gated on loading it.
 	if connected and has_room():
 		_webrtc_transport.begin_connection()
+		refresh_room()
+		_broadcast_room_state_hint()
 
 func publish_signal(message: Dictionary) -> void:
 	if not has_room():
@@ -247,12 +258,18 @@ func receive_signal(message: Dictionary) -> void:
 			_pending_member_signals.append(message.duplicate(true))
 			refresh_room()
 		return
+	if str(message.get("type", "")) == "room_state_changed":
+		refresh_room()
+		return
 	signaling_message_received.emit(message)
 
 func _begin_action(action: String, arguments: Dictionary) -> void:
 	if has_room():
 		request_finished.emit(action, false, tr("Leave the current room before joining another."))
 		return
+	if action in ["create_room", "join_room"]:
+		_room_generation += 1
+	print("[MP_DIAG] ", JSON.stringify({"event": "lobby_action_requested", "action": action, "generation": _room_generation, "auth_cached": not _current_token().is_empty(), "at_ms": Time.get_ticks_msec()}))
 	_pending_identity_action = action
 	_pending_identity_arguments = arguments
 	if _sync_account_identity():
@@ -272,6 +289,7 @@ func _begin_action(action: String, arguments: Dictionary) -> void:
 		"Accept: application/json",
 	])
 	var payload := {"data": {"display_name": str(arguments.get("display_name", "Runner"))}}
+	_identity_started_msec = Time.get_ticks_msec()
 	var error := _identity_request.request("%s/auth/v1/signup" % Config.PROJECT_URL, headers, HTTPClient.METHOD_POST, JSON.stringify(payload))
 	if error != OK:
 		request_finished.emit(action, false, tr("Could not start guest multiplayer sign-in (code %d).") % error)
@@ -289,18 +307,19 @@ func _dispatch_pending_action() -> void:
 		"create_room":
 			_lobby_provider.create_room(
 				str(arguments.display_name), bool(arguments.is_public), str(arguments.game_version), int(arguments.generator_version),
-				int(arguments.seed), int(arguments.course_length_px), _current_token(), identity_user_id
+				int(arguments.seed), int(arguments.course_length_px), _current_token(), _lobby_context()
 			)
 		"join_room":
 			_lobby_provider.join_room(
 				str(arguments.room_code), str(arguments.display_name), str(arguments.game_version),
-				int(arguments.generator_version), int(arguments.protocol_version), _current_token(), identity_user_id
+				int(arguments.generator_version), int(arguments.protocol_version), _current_token(), _lobby_context()
 			)
 		"list_public_rooms":
-			_lobby_provider.list_public_rooms(_current_token(), identity_user_id)
+			_lobby_provider.list_public_rooms(_current_token(), _lobby_context())
 
 func _on_identity_request_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	var action := _pending_identity_action
+	print("[MP_DIAG] ", JSON.stringify({"event": "anonymous_auth_done", "action": action, "http": response_code, "result": result, "elapsed_ms": maxi(0, Time.get_ticks_msec() - _identity_started_msec), "at_ms": Time.get_ticks_msec()}))
 	var response_text := body.get_string_from_utf8()
 	var parsed: Variant = JSON.parse_string(response_text) if not response_text.is_empty() else null
 	if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300 or not parsed is Dictionary:
@@ -324,7 +343,7 @@ func _on_identity_request_completed(result: int, response_code: int, _headers: P
 	_dispatch_pending_action()
 
 func _on_lobby_request_finished(action: String, success: bool, data: Variant, message: String, context: String) -> void:
-	if context != identity_user_id:
+	if context != _lobby_context():
 		return
 	if action == "list_public_rooms":
 		public_rooms_loaded.emit(data if success and data is Array else [], message if not success else "")
@@ -352,6 +371,7 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 		var resolved_room: Variant = data.get("room", data) if action == "start_countdown" else data
 		if resolved_room is Dictionary:
 			room_state = resolved_room.duplicate(true)
+			print("[MP_DIAG] ", JSON.stringify({"event": "room_state_received", "action": action, "room_id": get_room_id(), "phase": str(room_state.get("phase", "")), "members": get_members().size(), "generation": _room_generation, "at_ms": Time.get_ticks_msec()}))
 			room_changed.emit(room_state.duplicate(true))
 			if action == "start_countdown":
 				var start_at := float(data.get("start_at_unix", 0.0))
@@ -364,12 +384,15 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 				_pending_member_signals.clear()
 				for pending_signal in pending_signals:
 					receive_signal(pending_signal)
+	if success and action in ["create_room", "join_room", "set_ready", "set_skin", "set_manifest", "ack_manifest", "start_countdown", "advance_match_phase", "return_to_lobby"]:
+		_broadcast_room_state_hint()
 	if action == "start_countdown":
 		var start_at := race_start_at_unix if race_start_at_unix > 0.0 else Time.get_unix_time_from_system() + 5.0
 		send_peer_message_to_all("control", {"kind": "race_start", "room_id": get_room_id(), "start_at_unix": start_at})
 	request_finished.emit(action, true, "")
 
 func _clear_local_room() -> void:
+	_room_generation += 1
 	room_state.clear()
 	course_manifest = null
 	race_start_at_unix = 0.0
@@ -390,6 +413,7 @@ func _on_room_changed_for_signaling(room: Dictionary) -> void:
 			_webrtc_transport.begin_connection()
 
 func _on_peer_connection_state_changed(peer_user_id: String, state: String, message: String) -> void:
+	print("[MP_DIAG] ", JSON.stringify({"event": "peer_state", "room_id": get_room_id(), "generation": _room_generation, "peer_id": peer_user_id, "state": state, "message": message, "at_ms": Time.get_ticks_msec()}))
 	peer_connection_state_changed.emit(peer_user_id, state, message)
 
 func _on_auth_state_changed(_is_authenticated: bool, _email: String) -> void:
@@ -446,3 +470,19 @@ func _is_room_member_id(user_id: String) -> bool:
 		if member is Dictionary and str(member.get("user_id", "")) == user_id:
 			return true
 	return false
+
+func _broadcast_room_state_hint() -> void:
+	if not has_room() or not signaling_connected:
+		return
+	for member in get_members():
+		if not member is Dictionary:
+			continue
+		var peer_id := str(member.get("user_id", ""))
+		if peer_id.is_empty() or peer_id == identity_user_id:
+			continue
+		var envelope := create_signal_envelope(peer_id, "room_state_changed", {"room_id": get_room_id()})
+		if not envelope.is_empty():
+			publish_signal(envelope)
+
+func _lobby_context() -> String:
+	return "%s:%d" % [identity_user_id, _room_generation]

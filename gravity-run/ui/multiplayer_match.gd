@@ -32,6 +32,10 @@ var _owner_user_id := ""
 var _go_start_at := 0.0
 var _waiting_since := 0.0
 var _received_match_ready: Dictionary = {}
+var _received_runner_profile: Dictionary = {}
+var _match_setup_retry_elapsed := 0.0
+var _match_setup_retry_count := 0
+var _match_setup_acknowledged := false
 var _snapshot_elapsed := 0.0
 var _status_label: Label
 var _distance_label: Label
@@ -47,6 +51,12 @@ var _touch_index := -1
 var _touch_start := Vector2.ZERO
 var _run_banner_until := 0.0
 var _return_requested := false
+var _return_request_started_at := 0.0
+var _leaving_match := false
+var _last_snapshot_receive_msec := 0
+var _snapshot_interarrival_total_msec := 0
+var _snapshot_interarrival_count := 0
+var _snapshot_tick_gaps := 0
 
 func _ready() -> void:
 	set_process(true)
@@ -87,36 +97,40 @@ func _ready() -> void:
 	_sync_player_views()
 	if MultiplayerService.is_room_owner():
 		_received_match_ready[_local_user_id] = true
+		_received_runner_profile[_local_user_id] = true
 	else:
-		MultiplayerService.send_peer_message(_owner_user_id, "control", {
-			"kind": "runner_profile",
-			"run_speed_percent": _local_runner_profile().run_speed_percent,
-			"flip_cooldown_percent": _local_runner_profile().flip_cooldown_percent,
-		})
-		MultiplayerService.send_peer_message(_owner_user_id, "control", {"kind": "match_ready"})
-		_status_label.text = tr("Waiting for the host to synchronize the start…")
+		_status_label.text = tr("Waiting for the host to synchronize the start…") if _queue_match_setup() else tr("Could not queue match setup for the host. Reconnect or leave the race.")
 	_waiting_since = _network_clock
 
 func _process(delta: float) -> void:
 	if _simulation == null:
 		return
 	_network_clock += delta
+	if _return_requested and not MultiplayerService.is_room_owner() and _return_request_started_at > 0.0 and _network_clock - _return_request_started_at >= 10.0:
+		_return_requested = false
+		_return_lobby_button.disabled = false
+		_return_lobby_button.text = tr("Return to lobby")
+		_status_label.text = tr("The host has not returned the room yet. You can retry or leave the race.")
+		_return_request_started_at = 0.0
 	if _go_start_at > 0.0 and _network_clock >= _go_start_at and not _simulation.started:
 		_simulation.start()
+		print("[MP_DIAG] ", JSON.stringify({"event": "simulation_started", "room_id": MultiplayerService.get_room_id(), "owner": MultiplayerService.is_room_owner(), "players": _simulation.get_snapshot().get("players", []).size(), "at_ms": Time.get_ticks_msec()}))
+		if MultiplayerService.is_room_owner():
+			MultiplayerService.advance_match_phase("RUNNING")
 		_status_label.text = tr("RUN!")
 		_run_banner_until = _network_clock + 1.3
 	elif _go_start_at > 0.0 and not _simulation.started:
 		_status_label.text = tr("RUN in %d…") % ceili(maxf(_go_start_at - _network_clock, 0.0))
 	if MultiplayerService.is_room_owner() and not _simulation.started and _go_start_at <= 0.0:
 		_try_schedule_start()
-		if _network_clock - _waiting_since > 15.0 and _go_start_at <= 0.0:
-			_status_label.text = tr("A player did not finish loading the match. Waiting for reconnection…")
+		_retry_missing_match_setup(delta)
 	if _simulation.started:
 		var events: Array[Dictionary] = _simulation.advance_frame(delta)
 		if MultiplayerService.is_room_owner():
 			for event in events:
 				if str(event.get("kind", "")) == "match_finished":
 					_status_label.text = tr("Race finished")
+					MultiplayerService.advance_match_phase("FINISHED")
 			_snapshot = _simulation.get_snapshot()
 			_snapshot_elapsed += delta
 			if _snapshot_elapsed >= 1.0 / 15.0:
@@ -177,20 +191,55 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 		match str(payload.get("kind", "")):
 			"runner_profile":
 				_simulation.set_player_profile(peer_user_id, int(payload.get("run_speed_percent", 10000)), int(payload.get("flip_cooldown_percent", 10000)))
+				_received_runner_profile[peer_user_id] = true
 			"match_ready":
 				_received_match_ready[peer_user_id] = true
+				print("[MP_DIAG] ", JSON.stringify({"event": "peer_match_ready", "room_id": MultiplayerService.get_room_id(), "peer_id": peer_user_id, "at_ms": Time.get_ticks_msec()}))
+				if bool(_received_runner_profile.get(peer_user_id, false)):
+					MultiplayerService.queue_reliable_peer_message(peer_user_id, {"kind": "match_setup_ack", "room_id": MultiplayerService.get_room_id()})
+			"return_lobby_request":
+				if str(payload.get("room_id", "")) == MultiplayerService.get_room_id():
+					MultiplayerService.return_to_lobby()
+			"race_go_ack":
+				print("[MP_DIAG] ", JSON.stringify({"event": "race_go_ack", "room_id": MultiplayerService.get_room_id(), "peer_id": peer_user_id, "at_ms": Time.get_ticks_msec()}))
 			"flip":
 				var sequence := int(payload.get("input_sequence", 0))
 				if sequence > int(_last_input_sequence.get(peer_user_id, 0)):
 					_last_input_sequence[peer_user_id] = sequence
 					_simulation.submit_flip(peer_user_id, int(payload.get("gravity_direction", 0)))
 	elif not MultiplayerService.is_room_owner():
-		if channel_name == "control" and str(payload.get("kind", "")) == "race_go":
+		if channel_name == "control" and str(payload.get("kind", "")) == "match_setup_request":
+			if str(payload.get("room_id", "")) == MultiplayerService.get_room_id():
+				_queue_match_setup()
+		elif channel_name == "control" and str(payload.get("kind", "")) == "match_setup_ack":
+			if str(payload.get("room_id", "")) == MultiplayerService.get_room_id():
+				_match_setup_acknowledged = true
+				print("[MP_DIAG] ", JSON.stringify({"event": "match_setup_ack", "room_id": MultiplayerService.get_room_id(), "at_ms": Time.get_ticks_msec()}))
+		elif channel_name == "control" and str(payload.get("kind", "")) == "race_go":
 			_go_start_at = _network_clock + clampf(float(payload.get("start_delay_seconds", 5.0)), 0.5, 5.0)
+			print("[MP_DIAG] ", JSON.stringify({"event": "race_go_received", "room_id": MultiplayerService.get_room_id(), "delay_seconds": float(payload.get("start_delay_seconds", 5.0)), "at_ms": Time.get_ticks_msec()}))
+			MultiplayerService.queue_reliable_peer_message(_owner_user_id, {"kind": "race_go_ack", "room_id": MultiplayerService.get_room_id()})
 			_status_label.text = tr("RUN in %d…") % ceili(_go_start_at - _network_clock)
 		elif channel_name == "snapshot" and str(payload.get("kind", "")) == "snapshot":
 			var new_snapshot: Variant = payload.get("state", {})
+			var previous_tick := _last_authoritative_tick
 			if _accept_authoritative_snapshot(new_snapshot):
+				if _last_snapshot_receive_msec == 0:
+					print("[MP_DIAG] ", JSON.stringify({"event": "first_snapshot_received", "room_id": MultiplayerService.get_room_id(), "tick": int(new_snapshot.get("tick", -1)), "at_ms": Time.get_ticks_msec()}))
+				var now_msec := Time.get_ticks_msec()
+				var interarrival_msec := now_msec - _last_snapshot_receive_msec if _last_snapshot_receive_msec > 0 else 0
+				if interarrival_msec > 0:
+					_snapshot_interarrival_total_msec += interarrival_msec
+					_snapshot_interarrival_count += 1
+				var tick_gap := int(new_snapshot.get("tick", -1)) - previous_tick
+				if previous_tick >= 0 and tick_gap > 5:
+					_snapshot_tick_gaps += tick_gap - 4
+				if _snapshot_interarrival_count >= 150:
+					print("[MP_DIAG] ", JSON.stringify({"event": "snapshot_quality", "room_id": MultiplayerService.get_room_id(), "samples": _snapshot_interarrival_count, "mean_interarrival_ms": _snapshot_interarrival_total_msec / _snapshot_interarrival_count, "estimated_missing_ticks": _snapshot_tick_gaps}))
+					_snapshot_interarrival_total_msec = 0
+					_snapshot_interarrival_count = 0
+					_snapshot_tick_gaps = 0
+				_last_snapshot_receive_msec = now_msec
 				if bool(_authoritative_snapshot.get("finished", false)):
 					_status_label.text = tr("Race finished")
 
@@ -341,12 +390,53 @@ func _try_schedule_start() -> void:
 		return
 	for member in present_members:
 		var user_id := str(member.get("user_id", ""))
-		if not bool(_received_match_ready.get(user_id, false)):
+		if not bool(_received_match_ready.get(user_id, false)) or not bool(_received_runner_profile.get(user_id, false)):
 			return
 	const START_DELAY_SECONDS := 5.0
 	_go_start_at = _network_clock + START_DELAY_SECONDS
-	MultiplayerService.send_peer_message_to_all("control", {"kind": "race_go", "start_delay_seconds": START_DELAY_SECONDS})
+	print("[MP_DIAG] ", JSON.stringify({"event": "race_go_queued", "room_id": MultiplayerService.get_room_id(), "peers": present_members.size() - 1, "delay_seconds": START_DELAY_SECONDS, "at_ms": Time.get_ticks_msec()}))
+	for member in present_members:
+		var peer_id := str(member.get("user_id", ""))
+		if peer_id != _local_user_id and not MultiplayerService.queue_reliable_peer_message(peer_id, {"kind": "race_go", "start_delay_seconds": START_DELAY_SECONDS}):
+			_go_start_at = 0.0
+			_status_label.text = tr("Could not queue the match start for every player. Check connections and retry.")
+			return
 	_status_label.text = tr("RUN in %d…") % ceili(START_DELAY_SECONDS)
+
+func _queue_match_setup() -> bool:
+	var profile := _local_runner_profile()
+	var profile_queued := MultiplayerService.queue_reliable_peer_message(_owner_user_id, {
+		"kind": "runner_profile",
+		"run_speed_percent": int(profile.get("run_speed_percent", 10000)),
+		"flip_cooldown_percent": int(profile.get("flip_cooldown_percent", 10000)),
+	})
+	var ready_queued := MultiplayerService.queue_reliable_peer_message(_owner_user_id, {"kind": "match_ready"})
+	if profile_queued and ready_queued:
+		print("[MP_DIAG] ", JSON.stringify({"event": "match_setup_queued", "room_id": MultiplayerService.get_room_id(), "retry": _match_setup_retry_count, "at_ms": Time.get_ticks_msec()}))
+	return profile_queued and ready_queued
+
+func _retry_missing_match_setup(delta: float) -> void:
+	var missing_peers: Array[String] = []
+	for member in MultiplayerService.get_members():
+		if not member is Dictionary or not bool(member.get("is_connected", true)):
+			continue
+		var peer_id := str(member.get("user_id", ""))
+		if peer_id != _local_user_id and (not bool(_received_match_ready.get(peer_id, false)) or not bool(_received_runner_profile.get(peer_id, false))):
+			missing_peers.append(peer_id)
+	if missing_peers.is_empty():
+		return
+	_match_setup_retry_elapsed += delta
+	if _match_setup_retry_elapsed < 5.0:
+		return
+	_match_setup_retry_elapsed = 0.0
+	if _match_setup_retry_count < 3:
+		_match_setup_retry_count += 1
+		print("[MP_DIAG] ", JSON.stringify({"event": "match_setup_retry", "room_id": MultiplayerService.get_room_id(), "peers": missing_peers, "retry": _match_setup_retry_count, "at_ms": Time.get_ticks_msec()}))
+		for peer_id in missing_peers:
+			if not MultiplayerService.queue_reliable_peer_message(peer_id, {"kind": "match_setup_request", "room_id": MultiplayerService.get_room_id()}):
+				_status_label.text = tr("Could not retry match setup for every player. Check the direct connection or leave the race.")
+	else:
+		_status_label.text = tr("A player did not finish loading the match. Ask them to reconnect or leave the race.")
 
 func _is_active_room_member(user_id: String) -> bool:
 	for member in MultiplayerService.get_members():
@@ -552,8 +642,15 @@ func _camera_left() -> float:
 	return maxf(followed_x - CAMERA_LEAD, 0.0)
 
 func _on_room_changed(room: Dictionary) -> void:
+	if room.is_empty():
+		if _leaving_match:
+			return
+		AppNavigation.request_game_hub()
+		get_tree().change_scene_to_file("res://ui/main_menu.tscn")
+		return
 	if not room.is_empty() and str(room.get("phase", "")) == "OPEN":
-		get_tree().change_scene_to_file("res://ui/multiplayer_lobby.tscn")
+		AppNavigation.request_multiplayer_lobby()
+		get_tree().change_scene_to_file("res://ui/main_menu.tscn")
 
 static func distance_m(world_x: float, start_x: float) -> int:
 	return maxi(0, int((world_x - start_x) / 10.0))
@@ -708,14 +805,30 @@ func _return_to_lobby() -> void:
 	_return_requested = true
 	_return_lobby_button.disabled = true
 	_return_lobby_button.text = tr("Returning to lobby…")
-	MultiplayerService.return_to_lobby()
+	if MultiplayerService.is_room_owner():
+		MultiplayerService.return_to_lobby()
+	else:
+		var queued := MultiplayerService.queue_reliable_peer_message(_owner_user_id, {"kind": "return_lobby_request", "room_id": MultiplayerService.get_room_id()})
+		if queued:
+			_return_request_started_at = _network_clock
+			_return_lobby_button.text = tr("Return request sent to host…")
+		else:
+			_return_requested = false
+			_return_lobby_button.disabled = false
+			_return_lobby_button.text = tr("Return to lobby")
+			_status_label.text = tr("Could not send a return request to the host.")
 
 func _on_request_finished(action: String, success: bool, message: String) -> void:
+	if action == "advance_match_phase":
+		if not success:
+			_status_label.text = message
+		return
 	if action != "return_to_lobby":
 		return
 	if success:
 		return
 	_return_requested = false
+	_return_request_started_at = 0.0
 	_return_lobby_button.disabled = false
 	_return_lobby_button.text = tr("Return to lobby")
 	_status_label.text = message
@@ -729,7 +842,9 @@ func _show_failure(message: String) -> void:
 		_status_label.text = message
 
 func _leave_match() -> void:
+	_leaving_match = true
 	MultiplayerService.leave_room()
+	AppNavigation.request_game_hub()
 	get_tree().change_scene_to_file("res://ui/main_menu.tscn")
 
 func _draw() -> void:

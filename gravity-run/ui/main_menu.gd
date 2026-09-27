@@ -69,6 +69,10 @@ func _ready() -> void:
 	demo_background.set("demo_mode", true)
 	get_parent().get_parent().get_node("WorldBackground").add_child(demo_background)
 	_build_menu()
+	if AppNavigation.consume_multiplayer_lobby_request():
+		_show_game_hub()
+		_show_multiplayer_lobby()
+		return
 	if AppNavigation.consume_game_hub_request():
 		_show_game_hub()
 		return
@@ -170,6 +174,8 @@ func _show_game_hub() -> void:
 	_return_to_hub_after_screen = true
 	_menu_view = "game_hub"
 	_clear_menu_panel()
+	if is_instance_valid(_game_hub):
+		_game_hub.queue_free()
 	_game_hub = GAME_HUB_SCENE.instantiate()
 	_game_hub.start_run_requested.connect(_start_run_from_hub)
 	_game_hub.challenges_requested.connect(_show_challenge_options)
