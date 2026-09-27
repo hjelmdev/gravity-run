@@ -15,6 +15,7 @@ const ResultMedalScript := preload("res://ui/result_medal.gd")
 
 const WORLD_HEIGHT := 540.0
 const CAMERA_LEAD := 180.0
+const START_DELAY_SECONDS := 5.0
 
 var _manifest: Resource
 var _simulation: RefCounted
@@ -30,6 +31,8 @@ var _player_views: Dictionary = {}
 var _local_user_id := ""
 var _owner_user_id := ""
 var _go_start_at := 0.0
+var _race_go_sent_at_msec := 0
+var _race_go_ack_rtt_msec: Dictionary = {}
 var _waiting_since := 0.0
 var _received_match_ready: Dictionary = {}
 var _received_runner_profile: Dictionary = {}
@@ -225,7 +228,11 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 					_return_notice_override = ""
 					_update_return_request_notice()
 			"race_go_ack":
-				print("[MP_DIAG] ", JSON.stringify({"event": "race_go_ack", "room_id": MultiplayerService.get_room_id(), "peer_id": peer_user_id, "at_ms": Time.get_ticks_msec()}))
+				if str(payload.get("room_id", "")) == MultiplayerService.get_room_id() and _race_go_sent_at_msec > 0:
+					var ack_rtt_msec := maxi(0, Time.get_ticks_msec() - _race_go_sent_at_msec)
+					_race_go_ack_rtt_msec[peer_user_id] = ack_rtt_msec
+					_align_host_start_to_guest_arrival()
+					_record_match_diag("race_go_ack", {"peer_id": peer_user_id, "rtt_ms": ack_rtt_msec, "scheduled_start_in_ms": int(maxf(_go_start_at - _network_clock, 0.0) * 1000.0)})
 			"match_finished_ack":
 				if str(payload.get("room_id", "")) == MultiplayerService.get_room_id() and int(payload.get("tick", -1)) == int(_finish_payload.get("tick", -2)):
 					_finish_acknowledged_peers[peer_user_id] = true
@@ -470,9 +477,14 @@ func _accept_authoritative_snapshot(snapshot: Variant) -> bool:
 	if local_state.is_empty():
 		_last_snapshot_rejection = "local_player_missing"
 		return false
-	if not _simulation.apply_authoritative_world_hazards(snapshot.get("world_hazards", {})):
-		_last_snapshot_rejection = "hazard_state_invalid"
-		return false
+	var hazard_state: Variant = snapshot.get("world_hazards", {})
+	var hazard_error: String = _simulation.authoritative_world_hazard_error(hazard_state)
+	if hazard_error.is_empty():
+		_simulation.apply_authoritative_world_hazards(hazard_state)
+	else:
+		# Hazard data is useful but must not gate authoritative runner updates. A
+		# stale/mismatched barrel roster used to freeze every guest-side host pose.
+		_record_match_diag("snapshot_hazards_rejected", {"reason": hazard_error, "tick": incoming_tick})
 	var predicted: Dictionary = _simulation.get_player(_local_user_id)
 	_visual_correction = Vector2(
 		float(predicted.get("world_x", 0.0)) + _visual_correction.x - float(local_state.get("world_x", 0.0)),
@@ -611,16 +623,33 @@ func _try_schedule_start() -> void:
 		var user_id := str(member.get("user_id", ""))
 		if not bool(_received_match_ready.get(user_id, false)) or not bool(_received_runner_profile.get(user_id, false)):
 			return
-	const START_DELAY_SECONDS := 5.0
 	_go_start_at = _network_clock + START_DELAY_SECONDS
+	_race_go_ack_rtt_msec.clear()
+	_race_go_sent_at_msec = Time.get_ticks_msec()
 	print("[MP_DIAG] ", JSON.stringify({"event": "race_go_queued", "room_id": MultiplayerService.get_room_id(), "peers": present_members.size() - 1, "delay_seconds": START_DELAY_SECONDS, "at_ms": Time.get_ticks_msec()}))
 	for member in present_members:
 		var peer_id := str(member.get("user_id", ""))
 		if peer_id != _local_user_id and not MultiplayerService.queue_reliable_peer_message(peer_id, {"kind": "race_go", "start_delay_seconds": START_DELAY_SECONDS}):
 			_go_start_at = 0.0
+			_race_go_sent_at_msec = 0
 			_status_label.text = tr("Could not queue the match start for every player. Check connections and retry.")
 			return
 	_status_label.text = tr("RUN in %d…") % ceili(START_DELAY_SECONDS)
+
+func _align_host_start_to_guest_arrival() -> void:
+	if _simulation.started or _race_go_sent_at_msec <= 0 or _race_go_ack_rtt_msec.is_empty():
+		return
+	var rtt_samples: Array = _race_go_ack_rtt_msec.values()
+	var target_start_msec := estimate_shared_start_msec(_race_go_sent_at_msec, START_DELAY_SECONDS, rtt_samples)
+	var remaining_seconds := maxf((target_start_msec - float(Time.get_ticks_msec())) / 1000.0, 0.0)
+	_go_start_at = _network_clock + remaining_seconds
+
+static func estimate_shared_start_msec(sent_at_msec: int, delay_seconds: float, rtt_samples: Array) -> float:
+	var total_rtt_msec := 0.0
+	for rtt_sample in rtt_samples:
+		total_rtt_msec += maxf(float(rtt_sample), 0.0)
+	var estimated_one_way_msec := total_rtt_msec / float(rtt_samples.size()) * 0.5 if not rtt_samples.is_empty() else 0.0
+	return float(sent_at_msec) + delay_seconds * 1000.0 + estimated_one_way_msec
 
 func _queue_match_setup() -> bool:
 	var profile := _local_runner_profile()

@@ -174,22 +174,34 @@ func get_snapshot() -> Dictionary:
 	return {"tick": tick, "course_identity": str(manifest.get("course_identity")) if manifest != null else "", "players": snapshot_players, "placements": _placements.duplicate(true), "finished": match_finished, "world_hazards": {"barrels": _barrels.duplicate(true), "destroyed_event_ids": _destroyed_event_ids.keys()}}
 
 func apply_authoritative_world_hazards(world_hazards: Variant) -> bool:
-	if not world_hazards is Dictionary or not world_hazards.get("barrels", null) is Array or not world_hazards.get("destroyed_event_ids", null) is Array:
+	if not authoritative_world_hazard_error(world_hazards).is_empty():
 		return false
 	var authoritative_barrels: Array = world_hazards.barrels
-	if authoritative_barrels.size() != _barrels.size():
-		return false
-	var expected_ids := {}
-	for barrel in _barrels:
-		expected_ids[str(barrel.get("entity_id", ""))] = true
-	for barrel in authoritative_barrels:
-		if not barrel is Dictionary or not expected_ids.has(str(barrel.get("entity_id", ""))):
-			return false
 	_barrels = authoritative_barrels.duplicate(true)
 	_destroyed_event_ids.clear()
 	for event_id in world_hazards.destroyed_event_ids:
 		_destroyed_event_ids[str(event_id)] = true
 	return true
+
+func authoritative_world_hazard_error(world_hazards: Variant) -> String:
+	if not world_hazards is Dictionary:
+		return "hazards_not_dictionary"
+	var raw_barrels: Variant = world_hazards.get("barrels", null)
+	var destroyed_ids: Variant = world_hazards.get("destroyed_event_ids", null)
+	if not raw_barrels is Array or not destroyed_ids is Array:
+		return "hazard_arrays_missing"
+	if raw_barrels.size() != _barrels.size():
+		return "barrel_count_mismatch:%d/%d" % [raw_barrels.size(), _barrels.size()]
+	var expected_ids := {}
+	for barrel in _barrels:
+		expected_ids[str(barrel.get("entity_id", ""))] = true
+	for barrel in raw_barrels:
+		if not barrel is Dictionary:
+			return "barrel_not_dictionary"
+		var entity_id := str(barrel.get("entity_id", ""))
+		if not expected_ids.has(entity_id):
+			return "unknown_barrel_id:%s" % entity_id
+	return ""
 
 func get_player(user_id: String) -> Dictionary:
 	return (_players[user_id] as Dictionary).duplicate(true) if _players.has(user_id) else {}

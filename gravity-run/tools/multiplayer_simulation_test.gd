@@ -157,6 +157,10 @@ func _initialize() -> void:
 	], 10000)
 	var barrel_block_simulation := SimulationScript.new()
 	assert(barrel_block_simulation.configure(barrel_block_manifest, [{"user_id": "barrel_runner"}]).is_empty())
+	var local_hazards: Dictionary = barrel_block_simulation.get_snapshot().get("world_hazards", {})
+	assert(barrel_block_simulation.authoritative_world_hazard_error({"barrels": [], "destroyed_event_ids": []}) == "barrel_count_mismatch:0/1", "hazard roster mismatch should be diagnosed without obscuring player snapshot processing")
+	assert(not barrel_block_simulation.apply_authoritative_world_hazards({"barrels": [], "destroyed_event_ids": []}), "invalid hazard data must not overwrite the valid local hazard simulation")
+	assert(barrel_block_simulation.get_snapshot().get("world_hazards", {}) == local_hazards, "rejecting hazard data must preserve the local hazard roster")
 	barrel_block_simulation.start()
 	for _frame in range(200):
 		barrel_block_simulation.advance_frame(1.0 / 60.0)
