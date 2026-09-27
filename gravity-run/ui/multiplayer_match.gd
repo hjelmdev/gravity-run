@@ -138,11 +138,17 @@ func _process(delta: float) -> void:
 		var events: Array[Dictionary] = _simulation.advance_frame(delta, MultiplayerService.is_room_owner())
 		if MultiplayerService.is_room_owner():
 			for event in events:
-				if str(event.get("kind", "")) == "match_finished":
+				var event_kind := str(event.get("kind", ""))
+				if event_kind in ["player_died", "player_finished"]:
+					_send_reliable_player_terminal(str(event.get("user_id", "")))
+				elif event_kind == "match_finished":
 					_status_label.text = tr("Race finished")
-					_log_terminal_snapshot("host_simulation_finished", _simulation.get_snapshot())
+					_snapshot = _simulation.get_snapshot()
+					_log_terminal_snapshot("host_simulation_finished", _snapshot)
+					_send_reliable_match_finished(_snapshot)
 					MultiplayerService.advance_match_phase("FINISHED")
-			_snapshot = _simulation.get_snapshot()
+			if not bool(_snapshot.get("finished", false)):
+				_snapshot = _simulation.get_snapshot()
 			_snapshot_elapsed += delta
 			if _snapshot_elapsed >= 1.0 / 15.0:
 				_snapshot_elapsed = 0.0
@@ -215,13 +221,19 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 					_update_return_request_notice()
 			"race_go_ack":
 				print("[MP_DIAG] ", JSON.stringify({"event": "race_go_ack", "room_id": MultiplayerService.get_room_id(), "peer_id": peer_user_id, "at_ms": Time.get_ticks_msec()}))
+			"match_finished_ack":
+				_record_match_diag("reliable_finish_ack", {"peer_id": peer_user_id, "tick": int(payload.get("tick", -1))})
 			"flip":
 				var sequence := int(payload.get("input_sequence", 0))
 				if sequence > int(_last_input_sequence.get(peer_user_id, 0)):
 					_last_input_sequence[peer_user_id] = sequence
 					_simulation.submit_flip(peer_user_id, int(payload.get("gravity_direction", 0)))
 	elif not MultiplayerService.is_room_owner():
-		if channel_name == "control" and str(payload.get("kind", "")) == "match_setup_request":
+		if channel_name == "control" and str(payload.get("kind", "")) == "match_finished":
+			_accept_reliable_match_finished(payload)
+		elif channel_name == "control" and str(payload.get("kind", "")) == "player_terminal":
+			_accept_reliable_player_terminal(payload)
+		elif channel_name == "control" and str(payload.get("kind", "")) == "match_setup_request":
 			if str(payload.get("room_id", "")) == MultiplayerService.get_room_id():
 				_queue_match_setup()
 		elif channel_name == "control" and str(payload.get("kind", "")) == "match_setup_ack":
@@ -233,6 +245,9 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 			print("[MP_DIAG] ", JSON.stringify({"event": "race_go_received", "room_id": MultiplayerService.get_room_id(), "delay_seconds": float(payload.get("start_delay_seconds", 5.0)), "at_ms": Time.get_ticks_msec()}))
 			MultiplayerService.queue_reliable_peer_message(_owner_user_id, {"kind": "race_go_ack", "room_id": MultiplayerService.get_room_id()})
 			_status_label.text = tr("RUN in %d…") % ceili(_go_start_at - _network_clock)
+		elif channel_name == "control" and str(payload.get("kind", "")) == "match_finished_ack":
+			if str(payload.get("room_id", "")) == MultiplayerService.get_room_id():
+				_record_match_diag("reliable_finish_ack", {"peer_id": peer_user_id, "tick": int(payload.get("tick", -1))})
 		elif channel_name == "snapshot" and str(payload.get("kind", "")) == "snapshot":
 			var new_snapshot: Variant = payload.get("state", {})
 			var previous_tick := _last_authoritative_tick
@@ -274,6 +289,130 @@ func _on_peer_connection_state_changed(peer_user_id: String, state: String, mess
 		elif peer_user_id == _owner_user_id:
 			_result_label.text = tr("Connection to the race host was lost.")
 			_result_label.visible = true
+
+func _send_reliable_player_terminal(user_id: String) -> void:
+	var player_state: Dictionary = _simulation.get_player(user_id) if _simulation != null else {}
+	if player_state.is_empty():
+		return
+	var payload := {
+		"kind": "player_terminal",
+		"room_id": MultiplayerService.get_room_id(),
+		"course_identity": str(_manifest.get("course_identity")),
+		"tick": int(_simulation.get("tick")),
+		"player": player_state,
+	}
+	for member in MultiplayerService.get_members():
+		if not member is Dictionary:
+			continue
+		var peer_user_id := str(member.get("user_id", ""))
+		if peer_user_id.is_empty() or peer_user_id == _local_user_id:
+			continue
+		var queued := MultiplayerService.queue_reliable_peer_message(peer_user_id, payload)
+		_record_match_diag("player_terminal_queued", {"peer_id": peer_user_id, "player_id": user_id, "state": str(player_state.get("state", "")), "queued": queued})
+
+func _send_reliable_match_finished(snapshot: Dictionary) -> void:
+	var payload := {
+		"kind": "match_finished",
+		"room_id": MultiplayerService.get_room_id(),
+		"course_identity": str(snapshot.get("course_identity", "")),
+		"tick": int(snapshot.get("tick", -1)),
+		"finished": true,
+		"players": snapshot.get("players", []),
+	}
+	for member in MultiplayerService.get_members():
+		if not member is Dictionary:
+			continue
+		var peer_user_id := str(member.get("user_id", ""))
+		if peer_user_id.is_empty() or peer_user_id == _local_user_id:
+			continue
+		var queued := MultiplayerService.queue_reliable_peer_message(peer_user_id, payload)
+		_record_match_diag("match_finished_queued", {"peer_id": peer_user_id, "tick": int(snapshot.get("tick", -1)), "queued": queued})
+
+func _accept_reliable_player_terminal(payload: Dictionary) -> void:
+	if str(payload.get("room_id", "")) != MultiplayerService.get_room_id() or str(payload.get("course_identity", "")) != str(_manifest.get("course_identity")):
+		_record_match_diag("player_terminal_rejected", {"reason": "room_or_course_mismatch"})
+		return
+	var player: Variant = payload.get("player", {})
+	if not player is Dictionary or str(player.get("state", "")) not in ["dead", "finished", "disconnected"]:
+		_record_match_diag("player_terminal_rejected", {"reason": "invalid_terminal_player"})
+		return
+	var user_id := str(player.get("user_id", ""))
+	var known_member := false
+	for member in MultiplayerService.get_members():
+		if member is Dictionary and str(member.get("user_id", "")) == user_id:
+			known_member = true
+			break
+	if not known_member:
+		_record_match_diag("player_terminal_rejected", {"reason": "unknown_player", "player_id": user_id})
+		return
+	var base: Dictionary = _authoritative_snapshot.duplicate(true) if not _authoritative_snapshot.is_empty() else _simulation.get_snapshot()
+	var states: Variant = base.get("players", [])
+	if not states is Array:
+		return
+	var updated_states: Array[Dictionary] = []
+	var found := false
+	for existing in states:
+		if not existing is Dictionary:
+			continue
+		var next_state: Dictionary = existing.duplicate(true)
+		if str(next_state.get("user_id", "")) == user_id:
+			if str(next_state.get("state", "")) not in ["dead", "finished", "disconnected"]:
+				next_state = player.duplicate(true)
+			found = true
+		updated_states.append(next_state)
+	if not found:
+		return
+	base["players"] = updated_states
+	base["tick"] = maxi(int(base.get("tick", -1)), int(payload.get("tick", -1)))
+	_authoritative_snapshot = base.duplicate(true)
+	_snapshot = base.duplicate(true)
+	_last_authoritative_tick = maxi(_last_authoritative_tick, int(base.get("tick", -1)))
+	_snapshot_buffer.append({"received_at": _network_clock, "state": _authoritative_snapshot})
+	while _snapshot_buffer.size() > 8:
+		_snapshot_buffer.pop_front()
+	if user_id == _local_user_id:
+		_simulation.apply_authoritative_player_state(user_id, player)
+	_record_match_diag("player_terminal_received", {"player_id": user_id, "state": str(player.get("state", "")), "tick": int(payload.get("tick", -1))})
+
+func _accept_reliable_match_finished(payload: Dictionary) -> void:
+	if str(payload.get("room_id", "")) != MultiplayerService.get_room_id() or str(payload.get("course_identity", "")) != str(_manifest.get("course_identity")):
+		_record_match_diag("reliable_finish_rejected", {"reason": "room_or_course_mismatch"})
+		return
+	var incoming_tick := int(payload.get("tick", -1))
+	var states: Variant = payload.get("players", null)
+	if not bool(payload.get("finished", false)) or incoming_tick < 0 or not states is Array:
+		_record_match_diag("reliable_finish_rejected", {"reason": "invalid_finish_payload", "tick": incoming_tick})
+		return
+	var expected_ids := {}
+	for member in MultiplayerService.get_members():
+		if member is Dictionary:
+			expected_ids[str(member.get("user_id", ""))] = true
+	if states.size() != expected_ids.size():
+		_record_match_diag("reliable_finish_rejected", {"reason": "member_count_mismatch", "states": states.size(), "members": expected_ids.size()})
+		return
+	var seen := {}
+	for player in states:
+		if not player is Dictionary:
+			return
+		var user_id := str(player.get("user_id", ""))
+		if not expected_ids.has(user_id) or seen.has(user_id) or str(player.get("state", "")) not in ["dead", "finished", "disconnected"]:
+			_record_match_diag("reliable_finish_rejected", {"reason": "invalid_or_running_player", "player_id": user_id, "state": str(player.get("state", ""))})
+			return
+		seen[user_id] = true
+	var terminal := {
+		"tick": incoming_tick,
+		"course_identity": str(payload.get("course_identity", "")),
+		"finished": true,
+		"players": states.duplicate(true),
+		"placements": [],
+		"world_hazards": _authoritative_snapshot.get("world_hazards", _simulation.get_snapshot().get("world_hazards", {})),
+	}
+	_authoritative_snapshot = terminal.duplicate(true)
+	_snapshot = terminal.duplicate(true)
+	_last_authoritative_tick = maxi(_last_authoritative_tick, incoming_tick)
+	_snapshot_buffer.clear()
+	_log_terminal_snapshot("guest_received_reliable_finish", terminal)
+	MultiplayerService.queue_reliable_peer_message(_owner_user_id, {"kind": "match_finished_ack", "room_id": MultiplayerService.get_room_id(), "tick": incoming_tick})
 
 func _accept_authoritative_snapshot(snapshot: Variant) -> bool:
 	if not snapshot is Dictionary:
@@ -656,7 +795,7 @@ func _sync_player_views() -> void:
 		var view: Node2D = _player_views[user_id]
 		view.call("set_skin_id", int(state.get("skin_id", 0)))
 		var correction := _visual_correction if user_id == _local_user_id and not MultiplayerService.is_room_owner() else Vector2.ZERO
-		view.position = Vector2(float(state.get("world_x", 0.0)), float(state.get("y", 0.0))) + correction
+		view.position = _visual_player_position(state, states) + correction
 		var screen_x := float(view.position.x) - camera_left
 		view.visible = screen_x > -80.0 and screen_x < get_viewport_rect().size.x + 80.0
 		var sprite := view.get_node_or_null("AnimatedSprite2D") as AnimatedSprite2D
@@ -672,6 +811,22 @@ func _sync_player_views() -> void:
 			_player_views.erase(user_id)
 	_bring_local_runner_to_front()
 
+func _visual_player_position(state: Dictionary, states: Array) -> Vector2:
+	var world_position := Vector2(float(state.get("world_x", 0.0)), float(state.get("y", 0.0)))
+	var overlapping_ids: Array[String] = []
+	for other in states:
+		if not other is Dictionary:
+			continue
+		var other_position := Vector2(float(other.get("world_x", 0.0)), float(other.get("y", 0.0)))
+		if absf(other_position.x - world_position.x) <= 22.0 and absf(other_position.y - world_position.y) <= 30.0:
+			overlapping_ids.append(str(other.get("user_id", "")))
+	overlapping_ids.sort()
+	if overlapping_ids.size() < 2:
+		return world_position
+	var player_index := overlapping_ids.find(str(state.get("user_id", "")))
+	var visual_offset := (float(player_index) - (float(overlapping_ids.size() - 1) * 0.5)) * 20.0
+	return world_position + Vector2(visual_offset, 0.0)
+
 func _bring_local_runner_to_front() -> void:
 	# Player order in a snapshot is shared by every peer. Keep the local runner
 	# above the other runners in this client's draw order, regardless of who is
@@ -685,12 +840,9 @@ func _update_hud() -> void:
 	if own.is_empty():
 		return
 	var distance := distance_m(float(own.get("world_x", 0.0)), float(_manifest.get("start_x")))
-	var players: Variant = _snapshot.get("players", [])
-	var place := 1
-	if players is Array:
-		for other in players:
-			if other is Dictionary and str(other.get("state", "")) == "running" and float(other.get("world_x", 0.0)) > float(own.get("world_x", 0.0)):
-				place += 1
+	var ranking_snapshot := _authoritative_snapshot if not _authoritative_snapshot.is_empty() else _snapshot
+	var players: Variant = ranking_snapshot.get("players", [])
+	var place := calculate_player_place(players, _local_user_id)
 	var distance_text := tr("DISTANCE %dm  ·  PLACE %d/%d") % [distance, place, players.size() if players is Array else 0]
 	if _distance_label.text != distance_text:
 		_distance_label.text = distance_text
@@ -707,6 +859,38 @@ func _update_hud() -> void:
 	if bool(_snapshot.get("finished", false)):
 		_show_results()
 		_return_lobby_button.disabled = _return_requested
+
+static func calculate_player_place(players: Variant, user_id: String) -> int:
+	if not players is Array:
+		return 1
+	var own: Dictionary = {}
+	for player in players:
+		if player is Dictionary and str(player.get("user_id", "")) == user_id:
+			own = player
+			break
+	if own.is_empty():
+		return 1
+	var place := 1
+	for other in players:
+		if not other is Dictionary or str(other.get("user_id", "")) == user_id:
+			continue
+		if _player_precedes(other, own):
+			place += 1
+	return place
+
+static func _player_precedes(left: Dictionary, right: Dictionary) -> bool:
+	var left_state := str(left.get("state", "running"))
+	var right_state := str(right.get("state", "running"))
+	var state_order := {"finished": 0, "running": 1, "dead": 2, "disconnected": 3}
+	var left_order := int(state_order.get(left_state, 3))
+	var right_order := int(state_order.get(right_state, 3))
+	if left_order != right_order:
+		return left_order < right_order
+	var left_x := float(left.get("world_x", 0.0))
+	var right_x := float(right.get("world_x", 0.0))
+	if not is_equal_approx(left_x, right_x):
+		return left_x > right_x
+	return str(left.get("user_id", "")) < str(right.get("user_id", ""))
 
 func _camera_left() -> float:
 	var followed_x := float(_player_state(_local_user_id).get("world_x", 180.0))

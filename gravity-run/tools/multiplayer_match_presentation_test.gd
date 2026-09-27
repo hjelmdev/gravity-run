@@ -35,6 +35,14 @@ func _ready() -> void:
 	assert(not MatchScript.may_show_results(false, {"finished": false}), "a guest must not show local predicted results before the host finishes")
 	assert(MatchScript.may_show_results(false, {"finished": true}), "a guest should show results once the host's authoritative snapshot is finished")
 	assert(MatchScript.may_show_results(true, {"finished": false}), "the host remains authoritative for its own results")
+	var ranking := [
+		{"user_id": "alpha", "state": "running", "world_x": 780.0},
+		{"user_id": "beta", "state": "running", "world_x": 780.0},
+	]
+	assert(MatchScript.calculate_player_place(ranking, "alpha") == 1 and MatchScript.calculate_player_place(ranking, "beta") == 2, "exact running ties should use the same deterministic user ID tiebreak on every peer")
+	ranking[0]["state"] = "dead"
+	assert(MatchScript.calculate_player_place(ranking, "alpha") == 2, "an eliminated player should rank behind a still-running opponent")
+	assert(MatchScript.calculate_player_place(ranking, "beta") == 1, "the remaining runner should lead while another player is eliminated")
 	var match_view: Node2D = MatchScript.new()
 	match_view.set("_manifest", manifest)
 	var draw_order_view: Node2D = MatchScript.new()
@@ -50,6 +58,13 @@ func _ready() -> void:
 	draw_order_view.set("_player_views", {"local": local_runner, "remote": remote_runner})
 	draw_order_view.call("_bring_local_runner_to_front")
 	assert(draw_order_root.get_child(draw_order_root.get_child_count() - 1) == local_runner, "each client should draw its own runner in front regardless of shared player order")
+	var overlap_states: Array = [
+		{"user_id": "local", "world_x": 400.0, "y": 200.0},
+		{"user_id": "remote", "world_x": 400.0, "y": 200.0},
+	]
+	var local_visual: Vector2 = draw_order_view.call("_visual_player_position", overlap_states[0], overlap_states)
+	var remote_visual: Vector2 = draw_order_view.call("_visual_player_position", overlap_states[1], overlap_states)
+	assert(absf(local_visual.x - remote_visual.x) >= 19.0, "overlapping runners should be visually separated without changing their simulated world coordinates")
 	draw_order_view.free()
 	match_view.add_child(course_root)
 	match_view.set("_course_root", course_root)
