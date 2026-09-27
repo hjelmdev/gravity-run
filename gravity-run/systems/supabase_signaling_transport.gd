@@ -17,6 +17,7 @@ var _reconnect_elapsed := 0.0
 var _reconnect_delay := 1.0
 var _joining := false
 var _connected := false
+var _outgoing_signal_queue: Array[Dictionary] = []
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -31,6 +32,8 @@ func _process(delta: float) -> void:
 			_reconnect_elapsed = 0.0
 			while _socket.get_available_packet_count() > 0:
 				_handle_packet(_socket.get_packet().get_string_from_utf8())
+			if _connected:
+				_flush_signal_queue()
 			if _connected:
 				_heartbeat_elapsed += delta
 				if _heartbeat_elapsed >= HEARTBEAT_SECONDS:
@@ -63,6 +66,7 @@ func disconnect_room() -> void:
 	_topic = ""
 	_token = ""
 	_joining = false
+	_outgoing_signal_queue.clear()
 	_heartbeat_elapsed = 0.0
 	_reconnect_elapsed = 0.0
 	if _socket.get_ready_state() != WebSocketPeer.STATE_CLOSED:
@@ -70,15 +74,9 @@ func disconnect_room() -> void:
 	_set_connected(false, "")
 
 func send_signal(message: Dictionary) -> void:
-	if not _connected or _socket.get_ready_state() != WebSocketPeer.STATE_OPEN:
+	if _topic.is_empty() or _outgoing_signal_queue.size() >= 512:
 		return
-	var broadcast := {
-		"event": "signal",
-		"type": "broadcast",
-		"payload": message,
-	}
-	_send_frame(_topic_name(), "broadcast", broadcast, str(_next_ref))
-	_next_ref += 1
+	_outgoing_signal_queue.append(message.duplicate(true))
 
 func _open_socket() -> void:
 	if _topic.is_empty() or _socket.get_ready_state() in [WebSocketPeer.STATE_CONNECTING, WebSocketPeer.STATE_OPEN]:
@@ -139,6 +137,24 @@ func _send_frame(topic_name: String, event_name: String, payload: Dictionary, re
 		frame["join_ref"] = join_reference
 	var result := _socket.send_text(JSON.stringify(frame))
 	if result != OK:
+		_set_connected(false, tr("Could not send lobby signaling (code %d).") % result)
+
+func _flush_signal_queue() -> void:
+	if _outgoing_signal_queue.is_empty() or not _connected or _socket.get_ready_state() != WebSocketPeer.STATE_OPEN:
+		return
+	var broadcast := {"event": "signal", "type": "broadcast", "payload": _outgoing_signal_queue[0]}
+	var frame := {
+		"topic": _topic_name(),
+		"event": "broadcast",
+		"payload": broadcast,
+		"ref": str(_next_ref),
+		"join_ref": _join_ref,
+	}
+	_next_ref += 1
+	var result := _socket.send_text(JSON.stringify(frame))
+	if result == OK:
+		_outgoing_signal_queue.pop_front()
+	else:
 		_set_connected(false, tr("Could not send lobby signaling (code %d).") % result)
 
 func _topic_name() -> String:

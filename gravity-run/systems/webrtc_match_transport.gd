@@ -79,12 +79,17 @@ func handle_signal(envelope: Dictionary) -> void:
 			if sdp.is_empty() or sdp.length() > 32768:
 				_fail_peer(sender, "The WebRTC session description was invalid or too large.")
 				return
-			var error: int = connection.set_remote_description(str(body.get("sdp_type", kind)), sdp)
+			var sdp_type := str(body.get("sdp_type", kind))
+			var error: int = connection.set_remote_description(sdp_type, sdp)
 			if error != OK:
 				_fail_peer(sender, "Could not apply the remote WebRTC description (code %d)." % error)
 			else:
 				entry.remote_description_set = true
 				_apply_buffered_candidates(sender)
+				if sdp_type == "offer":
+					var answer_error: int = connection.create_answer()
+					if answer_error != OK:
+						_fail_peer(sender, "Could not create a WebRTC answer (code %d)." % answer_error)
 		"ice":
 			var candidate := {"media": str(body.get("media", "")), "index": int(body.get("index", -1)), "candidate": str(body.get("candidate", ""))}
 			if candidate.media.is_empty() or candidate.index < 0 or candidate.candidate.is_empty() or candidate.candidate.length() > 4096:
