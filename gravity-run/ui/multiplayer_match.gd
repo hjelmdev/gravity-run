@@ -60,6 +60,12 @@ var _snapshot_interarrival_count := 0
 var _snapshot_tick_gaps := 0
 var _return_request_notice: Label
 var _return_notice_override := ""
+var _diagnostic_lines: Array[String] = []
+var _diagnostic_panel: PanelContainer
+var _diagnostic_text: TextEdit
+var _diagnostic_event_times: Dictionary = {}
+var _last_snapshot_rejection := ""
+var _local_finish_ignored_logged := false
 
 func _ready() -> void:
 	set_process(true)
@@ -118,7 +124,7 @@ func _process(delta: float) -> void:
 		_return_request_started_at = 0.0
 	if _go_start_at > 0.0 and _network_clock >= _go_start_at and not _simulation.started:
 		_simulation.start()
-		print("[MP_DIAG] ", JSON.stringify({"event": "simulation_started", "room_id": MultiplayerService.get_room_id(), "owner": MultiplayerService.is_room_owner(), "players": _simulation.get_snapshot().get("players", []).size(), "at_ms": Time.get_ticks_msec()}))
+		_record_match_diag("simulation_started", {"players": _simulation.get_snapshot().get("players", []).size()})
 		if MultiplayerService.is_room_owner():
 			MultiplayerService.advance_match_phase("RUNNING")
 		_status_label.text = tr("RUN!")
@@ -129,7 +135,7 @@ func _process(delta: float) -> void:
 		_try_schedule_start()
 		_retry_missing_match_setup(delta)
 	if _simulation.started:
-		var events: Array[Dictionary] = _simulation.advance_frame(delta)
+		var events: Array[Dictionary] = _simulation.advance_frame(delta, MultiplayerService.is_room_owner())
 		if MultiplayerService.is_room_owner():
 			for event in events:
 				if str(event.get("kind", "")) == "match_finished":
@@ -231,6 +237,8 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 			var new_snapshot: Variant = payload.get("state", {})
 			var previous_tick := _last_authoritative_tick
 			if _accept_authoritative_snapshot(new_snapshot):
+				if previous_tick < 0:
+					_record_match_diag("snapshot_stream_started", {"tick": int(new_snapshot.get("tick", -1))})
 				if bool(_authoritative_snapshot.get("finished", false)):
 					_log_terminal_snapshot("guest_received_finished_snapshot", _authoritative_snapshot)
 				if _last_snapshot_receive_msec == 0:
@@ -251,11 +259,13 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 				_last_snapshot_receive_msec = now_msec
 				if bool(_authoritative_snapshot.get("finished", false)):
 					_status_label.text = tr("Race finished")
+			else:
+				_record_match_diag("snapshot_rejected", {"reason": _last_snapshot_rejection, "last_tick": _last_authoritative_tick, "incoming_tick": int(new_snapshot.get("tick", -1)) if new_snapshot is Dictionary else -1, "incoming_finished": bool(new_snapshot.get("finished", false)) if new_snapshot is Dictionary else false})
 
 func _on_peer_connection_state_changed(peer_user_id: String, state: String, message: String) -> void:
 	if state == "failed":
 		var player_state: Dictionary = _simulation.get_player(peer_user_id) if _simulation != null else {}
-		print("[MP_DIAG] ", JSON.stringify({"event": "match_peer_failed", "room_id": MultiplayerService.get_room_id(), "peer_id": peer_user_id, "is_owner": MultiplayerService.is_room_owner(), "match_tick": int(_simulation.get("tick")) if _simulation != null else -1, "player_state": str(player_state.get("state", "missing")), "player_world_x": float(player_state.get("world_x", -1.0)), "message": message, "at_ms": Time.get_ticks_msec()}))
+		_record_match_diag("match_peer_failed", {"peer_id": peer_user_id, "match_tick": int(_simulation.get("tick")) if _simulation != null else -1, "player_state": str(player_state.get("state", "missing")), "player_world_x": float(player_state.get("world_x", -1.0)), "message": message})
 		_status_label.text = message
 		if MultiplayerService.is_room_owner():
 			if _simulation != null and _simulation.mark_disconnected(peer_user_id):
@@ -266,32 +276,42 @@ func _on_peer_connection_state_changed(peer_user_id: String, state: String, mess
 			_result_label.visible = true
 
 func _accept_authoritative_snapshot(snapshot: Variant) -> bool:
-	if not snapshot is Dictionary or str(snapshot.get("course_identity", "")) != str(_manifest.get("course_identity")):
+	if not snapshot is Dictionary:
+		_last_snapshot_rejection = "snapshot_not_dictionary"
+		return false
+	if str(snapshot.get("course_identity", "")) != str(_manifest.get("course_identity")):
+		_last_snapshot_rejection = "course_identity_mismatch"
 		return false
 	var incoming_tick := int(snapshot.get("tick", -1))
 	var states: Variant = snapshot.get("players", null)
 	if incoming_tick <= _last_authoritative_tick or not states is Array:
+		_last_snapshot_rejection = "stale_tick_or_invalid_players"
 		return false
 	var member_ids := {}
 	for member in MultiplayerService.get_members():
 		if member is Dictionary:
 			member_ids[str(member.get("user_id", ""))] = true
 	if states.size() != member_ids.size():
+		_last_snapshot_rejection = "member_count_mismatch:%d/%d" % [states.size(), member_ids.size()]
 		return false
 	var seen := {}
 	var local_state: Dictionary = {}
 	for state in states:
 		if not state is Dictionary:
+			_last_snapshot_rejection = "player_not_dictionary"
 			return false
 		var user_id := str(state.get("user_id", ""))
 		if not member_ids.has(user_id) or seen.has(user_id):
+			_last_snapshot_rejection = "unknown_or_duplicate_player:%s" % user_id
 			return false
 		seen[user_id] = true
 		if user_id == _local_user_id:
 			local_state = state
 	if local_state.is_empty():
+		_last_snapshot_rejection = "local_player_missing"
 		return false
 	if not _simulation.apply_authoritative_world_hazards(snapshot.get("world_hazards", {})):
+		_last_snapshot_rejection = "hazard_state_invalid"
 		return false
 	var predicted: Dictionary = _simulation.get_player(_local_user_id)
 	_visual_correction = Vector2(
@@ -299,8 +319,10 @@ func _accept_authoritative_snapshot(snapshot: Variant) -> bool:
 		float(predicted.get("y", 0.0)) + _visual_correction.y - float(local_state.get("y", 0.0))
 	).clamp(Vector2(-160.0, -160.0), Vector2(160.0, 160.0))
 	if not _simulation.apply_authoritative_player_state(_local_user_id, local_state):
+		_last_snapshot_rejection = "local_player_state_invalid"
 		return false
 	_last_authoritative_tick = incoming_tick
+	_last_snapshot_rejection = ""
 	_authoritative_snapshot = snapshot.duplicate(true)
 	_snapshot_buffer.append({"received_at": _network_clock, "state": _authoritative_snapshot})
 	while _snapshot_buffer.size() > 8:
@@ -314,7 +336,7 @@ func _log_terminal_snapshot(reason: String, snapshot: Dictionary) -> void:
 		for player in states:
 			if player is Dictionary:
 				player_summary.append({"user_id": str(player.get("user_id", "")), "display_name": str(player.get("display_name", "")), "state": str(player.get("state", "")), "world_x": float(player.get("world_x", 0.0))})
-	print("[MP_DIAG] ", JSON.stringify({"event": "match_terminal_snapshot", "reason": reason, "room_id": MultiplayerService.get_room_id(), "is_owner": MultiplayerService.is_room_owner(), "tick": int(snapshot.get("tick", -1)), "finished": bool(snapshot.get("finished", false)), "players": player_summary, "at_ms": Time.get_ticks_msec()}))
+	_record_match_diag("match_terminal_snapshot", {"reason": reason, "tick": int(snapshot.get("tick", -1)), "finished": bool(snapshot.get("finished", false)), "players": player_summary})
 
 func _compose_client_snapshot() -> void:
 	if _authoritative_snapshot.is_empty():
@@ -403,6 +425,9 @@ static func interpolated_player_state(from_state: String, to_state: String, weig
 	if from_state in TERMINAL_STATES:
 		return from_state
 	return from_state if weight < 1.0 else to_state
+
+static func may_show_results(is_owner: bool, authoritative_snapshot: Dictionary) -> bool:
+	return is_owner or bool(authoritative_snapshot.get("finished", false))
 
 func _local_runner_profile() -> Dictionary:
 	var snapshot: Resource = InventoryService.create_run_loadout_snapshot(PlayerProfile.get_character_stats())
@@ -707,6 +732,37 @@ func _on_room_changed(room: Dictionary) -> void:
 static func distance_m(world_x: float, start_x: float) -> int:
 	return maxi(0, int((world_x - start_x) / 10.0))
 
+func _record_match_diag(event_name: String, details: Dictionary) -> void:
+	var now := Time.get_ticks_msec()
+	var signature := event_name + ":" + str(details.get("reason", ""))
+	if _diagnostic_event_times.has(signature) and now - int(_diagnostic_event_times[signature]) < 1000:
+		return
+	_diagnostic_event_times[signature] = now
+	var entry := details.duplicate(true)
+	entry["event"] = event_name
+	entry["room_id"] = MultiplayerService.get_room_id()
+	entry["owner"] = MultiplayerService.is_room_owner()
+	entry["at_ms"] = now
+	var line := "[MP_DIAG] " + JSON.stringify(entry)
+	_diagnostic_lines.append(line)
+	while _diagnostic_lines.size() > 160:
+		_diagnostic_lines.pop_front()
+	print(line)
+	if is_instance_valid(_diagnostic_text):
+		_diagnostic_text.text = "\n".join(_diagnostic_lines)
+		_diagnostic_text.scroll_vertical = _diagnostic_text.get_line_count()
+
+func _toggle_diagnostics() -> void:
+	if is_instance_valid(_diagnostic_panel):
+		_diagnostic_panel.visible = not _diagnostic_panel.visible
+
+func _copy_diagnostics() -> void:
+	if _diagnostic_lines.is_empty():
+		_record_match_diag("diagnostics_opened", {"note": "No match diagnostics captured yet."})
+	DisplayServer.clipboard_set("\n".join(_diagnostic_lines))
+	if is_instance_valid(_diagnostic_text):
+		_diagnostic_text.text = "\n".join(_diagnostic_lines) + "\n\n" + tr("Copied. Paste these logs here.")
+
 func _build_hud() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
@@ -806,8 +862,64 @@ func _build_hud() -> void:
 	leave.offset_bottom = 54
 	leave.pressed.connect(_leave_match)
 	hud.add_child(leave)
+	var diagnostics_button := Button.new()
+	diagnostics_button.text = tr("Diagnostics")
+	diagnostics_button.anchor_left = 1.0
+	diagnostics_button.anchor_right = 1.0
+	diagnostics_button.offset_left = -150
+	diagnostics_button.offset_right = -16
+	diagnostics_button.offset_top = 62
+	diagnostics_button.offset_bottom = 102
+	diagnostics_button.pressed.connect(_toggle_diagnostics)
+	hud.add_child(diagnostics_button)
+	_diagnostic_panel = PanelContainer.new()
+	_diagnostic_panel.anchor_left = 0.5
+	_diagnostic_panel.anchor_top = 0.5
+	_diagnostic_panel.anchor_right = 0.5
+	_diagnostic_panel.anchor_bottom = 0.5
+	_diagnostic_panel.offset_left = -360
+	_diagnostic_panel.offset_right = 360
+	_diagnostic_panel.offset_top = -245
+	_diagnostic_panel.offset_bottom = 245
+	_diagnostic_panel.visible = false
+	_diagnostic_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_diagnostic_panel.add_theme_stylebox_override("panel", panel_style)
+	hud.add_child(_diagnostic_panel)
+	var diagnostic_layout := VBoxContainer.new()
+	diagnostic_layout.add_theme_constant_override("separation", 8)
+	_diagnostic_panel.add_child(diagnostic_layout)
+	var diagnostic_title := Label.new()
+	diagnostic_title.text = tr("MULTIPLAYER DIAGNOSTICS")
+	diagnostic_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	diagnostic_title.add_theme_color_override("font_color", Color("42d6c5"))
+	diagnostic_layout.add_child(diagnostic_title)
+	_diagnostic_text = TextEdit.new()
+	_diagnostic_text.editable = false
+	_diagnostic_text.selecting_enabled = true
+	_diagnostic_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_diagnostic_text.add_theme_font_size_override("font_size", 12)
+	diagnostic_layout.add_child(_diagnostic_text)
+	var diagnostic_actions := HBoxContainer.new()
+	diagnostic_layout.add_child(diagnostic_actions)
+	var copy_button := Button.new()
+	copy_button.text = tr("Copy diagnostics")
+	copy_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	copy_button.pressed.connect(_copy_diagnostics)
+	diagnostic_actions.add_child(copy_button)
+	var close_button := Button.new()
+	close_button.text = tr("Close")
+	close_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	close_button.pressed.connect(_toggle_diagnostics)
+	diagnostic_actions.add_child(close_button)
 func _show_results() -> void:
 	if _results_panel.visible:
+		return
+	# Local prediction must never decide the outcome on a guest. Only the
+	# host-authored terminal snapshot may open the multiplayer results screen.
+	if not may_show_results(MultiplayerService.is_room_owner(), _authoritative_snapshot):
+		if not _local_finish_ignored_logged:
+			_local_finish_ignored_logged = true
+			_record_match_diag("local_finish_ignored", {"local_tick": int(_simulation.get("tick")) if _simulation != null else -1, "local_players": _snapshot.get("players", [])})
 		return
 	_log_terminal_snapshot("results_panel_shown", _snapshot)
 	_results_panel.visible = true

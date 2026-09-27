@@ -32,6 +32,12 @@ func _initialize() -> void:
 		if solo_simulation.match_finished:
 			break
 	assert(solo_simulation.match_finished, "a solo host race should run to completion")
+	var client_prediction := SimulationScript.new()
+	assert(client_prediction.configure(manifest, [{"user_id": "client_prediction", "display_name": "Client"}]).is_empty())
+	client_prediction.start()
+	assert(client_prediction.mark_disconnected("client_prediction"))
+	client_prediction.advance_frame(1.0 / 60.0, false)
+	assert(not client_prediction.match_finished, "a guest-side prediction must not authoritatively finish a multiplayer match")
 	var configuration_error := simulation.configure(manifest, [
 		{"user_id": "slow", "display_name": "Slow", "run_speed_percent": 10000},
 		{"user_id": "fast", "display_name": "Fast", "run_speed_percent": 10100, "skin_id": 3},

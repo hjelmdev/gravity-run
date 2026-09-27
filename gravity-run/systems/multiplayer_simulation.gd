@@ -152,7 +152,7 @@ func submit_flip(user_id: String, desired_gravity: int) -> bool:
 	_last_flip_tick[user_id] = tick
 	return true
 
-func advance_frame(delta: float) -> Array[Dictionary]:
+func advance_frame(delta: float, finish_when_all_inactive: bool = true) -> Array[Dictionary]:
 	if not started or match_finished:
 		return []
 	_accumulator = minf(_accumulator + maxf(delta, 0.0), FIXED_DELTA * MAX_CATCHUP_TICKS)
@@ -162,7 +162,7 @@ func advance_frame(delta: float) -> Array[Dictionary]:
 		_accumulator -= FIXED_DELTA
 		tick += 1
 		_step_world_hazards()
-		_step_player_states(events)
+		_step_player_states(events, finish_when_all_inactive)
 		steps += 1
 	return events
 
@@ -260,14 +260,14 @@ func _surface_angle_at(x: float, ceiling: bool) -> float:
 			return atan2(float(event.get("end_y", 0.0)) - float(event.get("start_y", 0.0)), end_x - start_x)
 	return 0.0
 
-func _step_player_states(events: Array[Dictionary]) -> void:
+func _step_player_states(events: Array[Dictionary], finish_when_all_inactive: bool) -> void:
 	for user_id in _players.keys():
 		var player: Dictionary = _players[user_id]
 		if str(player.state) != "running":
 			continue
 		_step_player(str(user_id), player, events)
 		_players[user_id] = player
-	if _players.size() > 0:
+	if finish_when_all_inactive and _players.size() > 0:
 		var active := false
 		for player in _players.values():
 			if str(player.state) == "running":

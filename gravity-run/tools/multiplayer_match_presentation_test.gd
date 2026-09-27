@@ -32,6 +32,9 @@ func _ready() -> void:
 	assert(MatchScript.interpolated_player_state("running", "dead", 0.0) == "dead", "an authoritative death should display immediately even while position is interpolated")
 	assert(MatchScript.interpolated_player_state("dead", "running", 1.0) == "dead", "an older/out-of-order running state must not resurrect a dead remote runner")
 	assert(MatchScript.interpolated_player_state("running", "running", 0.25) == "running", "running state should remain unchanged during position interpolation")
+	assert(not MatchScript.may_show_results(false, {"finished": false}), "a guest must not show local predicted results before the host finishes")
+	assert(MatchScript.may_show_results(false, {"finished": true}), "a guest should show results once the host's authoritative snapshot is finished")
+	assert(MatchScript.may_show_results(true, {"finished": false}), "the host remains authoritative for its own results")
 	var match_view: Node2D = MatchScript.new()
 	match_view.set("_manifest", manifest)
 	var draw_order_view: Node2D = MatchScript.new()
@@ -75,6 +78,7 @@ func _ready() -> void:
 		{"user_id": "winner", "display_name": "Winner", "state": "finished", "finish_tick": 20, "world_x": 1200.0},
 		{"user_id": "second", "display_name": "Second", "state": "dead", "finish_tick": -1, "world_x": 900.0},
 	]})
+	match_view.set("_authoritative_snapshot", {"finished": true})
 	match_view.call("_show_results")
 	assert((match_view.get("_results_list") as VBoxContainer).get_child_count() == 2, "the results board should include finishers and eliminated players")
 	assert((match_view.get("_results_panel") as PanelContainer).visible, "the standings should have a visible results panel")
@@ -86,6 +90,7 @@ func _ready() -> void:
 		{"user_id": "alpha", "display_name": "Alpha", "state": "dead", "world_x": 900.0},
 		{"user_id": "beta", "display_name": "Beta", "state": "dead", "world_x": 900.0},
 	]})
+	tie_view.set("_authoritative_snapshot", {"finished": true})
 	tie_view.call("_show_results")
 	assert((tie_view.get("_result_label") as Label).text == tr("No winner"), "an exact distance tie after elimination must not arbitrarily name a winner")
 	var tie_rows: VBoxContainer = tie_view.get("_results_list")
