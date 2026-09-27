@@ -444,9 +444,13 @@ func _sync_course_view() -> void:
 			if not barrel_state is Dictionary:
 				continue
 			var barrel_id := str(barrel_state.get("entity_id", ""))
-			var barrel := _course_nodes.get(barrel_id) as Node2D
-			if not is_instance_valid(barrel):
+			var barrel_value: Variant = _course_nodes.get(barrel_id)
+			# A barrel node can have completed its destruction animation and been
+			# queue_freed while its ID remains in _course_nodes. Validate the raw
+			# reference before casting it to Node2D.
+			if not is_instance_valid(barrel_value) or not barrel_value is Node2D:
 				continue
+			var barrel: Node2D = barrel_value
 			barrel.call("apply_replicated_motion",
 				Vector2(float(barrel_state.get("x", barrel.position.x)), float(barrel_state.get("y", barrel.position.y))),
 				float(barrel_state.get("roll_angle", 0.0)),
@@ -458,8 +462,11 @@ func _sync_course_view() -> void:
 		var destroyed: Variant = world_hazards.get("destroyed_event_ids", [])
 		if destroyed is Array:
 			for event_id in destroyed:
-				var node := _course_nodes.get(str(event_id)) as Node2D
-				if is_instance_valid(node) and not bool(node.call("is_destroying_now")):
+				var node_value: Variant = _course_nodes.get(str(event_id))
+				if not is_instance_valid(node_value) or not node_value is Node2D:
+					continue
+				var node: Node2D = node_value
+				if not bool(node.call("is_destroying_now")):
 					node.call("destroy")
 
 func _sync_player_views() -> void:
