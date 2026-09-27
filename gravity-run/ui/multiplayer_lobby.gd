@@ -47,6 +47,8 @@ var _busy := false
 var _skin_request_pending := false
 var _manifest_build_started_msec := 0
 var _manifest_transfer_started_msec: Dictionary = {}
+var _manifest_transfer_last_sent_msec: Dictionary = {}
+var _manifest_verified_peers: Dictionary = {}
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -331,6 +333,8 @@ func _on_room_changed(room: Dictionary) -> void:
 		_course_loaded = false
 		_manifest_publish_in_progress = false
 		_manifest_transfer_parts.clear()
+		_manifest_transfer_last_sent_msec.clear()
+		_manifest_verified_peers.clear()
 		return
 	if str(room.get("phase", "OPEN")) == "COUNTDOWN":
 		# Room state is the durable fallback if the one-shot WebRTC start packet
@@ -344,7 +348,15 @@ func _on_room_changed(room: Dictionary) -> void:
 		_on_race_countdown_received(start_at)
 		return
 	var remote_hash := str(room.get("manifest_hash", ""))
+	if not remote_hash.is_empty() and remote_hash != _prepared_hash:
+		_manifest_transfer_last_sent_msec.clear()
+		_manifest_verified_peers.clear()
 	if MultiplayerService.is_room_owner():
+		# A rematch returns to a newly-instanced lobby while the autoload and its
+		# WebRTC channels survive. Reuse the exact host manifest and explicitly
+		# resend it: no new "connected" event is guaranteed in that case.
+		if _prepared_manifest == null and not remote_hash.is_empty():
+			_adopt_cached_host_manifest(room, remote_hash)
 		if remote_hash.is_empty():
 			if _prepared_manifest == null and not _manifest_publish_in_progress:
 				_build_and_publish_manifest(room)
@@ -357,9 +369,30 @@ func _on_room_changed(room: Dictionary) -> void:
 					_build_and_publish_manifest(room)
 				else:
 					_publish_prepared_manifest(room)
+		if not remote_hash.is_empty() and _prepared_manifest != null and remote_hash == _prepared_hash:
+			_send_manifest_to_connected_peers()
 		return
 	if not remote_hash.is_empty() and remote_hash != _prepared_hash:
 		_expect_host_manifest(room, remote_hash)
+
+func _adopt_cached_host_manifest(room: Dictionary, expected_hash: String) -> void:
+	var cached: Resource = MultiplayerService.course_manifest
+	if cached == null or not cached.has_method("validate") or str(cached.get("manifest_hash")) != expected_hash:
+		return
+	if not str(cached.call("validate")).is_empty():
+		return
+	if int(cached.get("seed_value")) != int(room.get("seed", -1)) \
+		or int(cached.get("course_length_px")) != int(room.get("course_length_px", -1)) \
+		or int(cached.get("generator_version")) != int(room.get("generator_version", -1)):
+		return
+	_prepared_manifest = cached
+	_prepared_hash = expected_hash
+	_course_loaded = true
+	MultiplayerService.acknowledge_manifest(expected_hash)
+
+func _send_manifest_to_connected_peers() -> void:
+	for peer_id in MultiplayerService.get_connected_peer_ids():
+		_send_manifest_to_peer(peer_id)
 
 func _build_and_publish_manifest(room: Dictionary) -> void:
 	_manifest_build_started_msec = Time.get_ticks_msec()
@@ -445,10 +478,17 @@ func _on_peer_connection_state_changed(_peer_user_id: String, _state: String, me
 		_status.text = message
 	_update_room(MultiplayerService.room_state)
 	if _state == "connected" and MultiplayerService.is_room_owner():
+		_manifest_verified_peers.erase(_peer_user_id)
+		_manifest_transfer_last_sent_msec.erase(_peer_user_id)
 		_send_manifest_to_peer(_peer_user_id)
 
 func _send_manifest_to_peer(peer_user_id: String) -> void:
 	if _prepared_manifest == null or str(_prepared_manifest.get("manifest_hash")) != str(MultiplayerService.room_state.get("manifest_hash", "")):
+		return
+	if bool(_manifest_verified_peers.get(peer_user_id, false)):
+		return
+	var now_msec := Time.get_ticks_msec()
+	if int(_manifest_transfer_last_sent_msec.get(peer_user_id, 0)) > 0 and now_msec - int(_manifest_transfer_last_sent_msec[peer_user_id]) < 1500:
 		return
 	var bytes: PackedByteArray = _prepared_manifest.to_canonical_json().to_utf8_buffer()
 	if bytes.size() > 1048576:
@@ -461,7 +501,8 @@ func _send_manifest_to_peer(peer_user_id: String) -> void:
 		_status.text = tr("The shared course manifest exceeded the transfer limit.")
 		return
 	var transfer_id := str(_prepared_manifest.get("manifest_hash"))
-	_manifest_transfer_started_msec[peer_user_id] = Time.get_ticks_msec()
+	_manifest_transfer_started_msec[peer_user_id] = now_msec
+	_manifest_transfer_last_sent_msec[peer_user_id] = now_msec
 	print("[MP_DIAG] ", JSON.stringify({"event": "manifest_send_start", "room_id": MultiplayerService.get_room_id(), "peer_id": peer_user_id, "chunks": total, "bytes": bytes.size(), "at_ms": _manifest_transfer_started_msec[peer_user_id]}))
 	for index in range(total):
 		var piece := encoded.substr(index * CHUNK_CHARS, CHUNK_CHARS)
@@ -486,6 +527,7 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 	elif str(payload.get("kind", "")) == "manifest_verified" and MultiplayerService.is_room_owner():
 		var expected_hash := str(MultiplayerService.room_state.get("manifest_hash", ""))
 		if str(payload.get("manifest_hash", "")) == expected_hash:
+			_manifest_verified_peers[peer_user_id] = true
 			var sent_at := int(_manifest_transfer_started_msec.get(peer_user_id, 0))
 			print("[MP_DIAG] ", JSON.stringify({"event": "manifest_peer_verified", "room_id": MultiplayerService.get_room_id(), "peer_id": peer_user_id, "elapsed_ms": maxi(0, Time.get_ticks_msec() - sent_at), "bytes": _prepared_manifest.to_canonical_json().to_utf8_buffer().size() if _prepared_manifest != null else 0}))
 	elif str(payload.get("kind", "")) == "race_start" and not MultiplayerService.is_room_owner():

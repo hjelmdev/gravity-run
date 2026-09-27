@@ -345,8 +345,7 @@ func _compose_client_snapshot() -> void:
 		interpolated.world_x = lerpf(float(from.get("world_x", to.get("world_x", 0.0))), float(to.get("world_x", 0.0)), weight)
 		interpolated.y = lerpf(float(from.get("y", to.get("y", 0.0))), float(to.get("y", 0.0)), weight)
 		interpolated.vertical_speed = lerpf(float(from.get("vertical_speed", to.get("vertical_speed", 0.0))), float(to.get("vertical_speed", 0.0)), weight)
-		if weight < 1.0:
-			interpolated.state = from.get("state", to.get("state", "running"))
+		interpolated.state = interpolated_player_state(str(from.get("state", "running")), str(to.get("state", "running")), weight)
 		displayed.append(interpolated)
 	_snapshot = _authoritative_snapshot.duplicate(true)
 	# Results must use the exact same terminal state on every client. Never
@@ -375,6 +374,17 @@ func _compose_client_snapshot() -> void:
 		var displayed_hazards: Dictionary = later_hazards.duplicate(true)
 		displayed_hazards.barrels = interpolated_barrels
 		_snapshot.world_hazards = displayed_hazards
+
+static func interpolated_player_state(from_state: String, to_state: String, weight: float) -> String:
+	# Position is smoothed, but elimination/finish is an authoritative event,
+	# not a visual value to delay. Keep terminal state monotonic if snapshots
+	# briefly arrive out of order or the interpolation buffer spans the event.
+	const TERMINAL_STATES := ["dead", "finished", "disconnected"]
+	if to_state in TERMINAL_STATES:
+		return to_state
+	if from_state in TERMINAL_STATES:
+		return from_state
+	return from_state if weight < 1.0 else to_state
 
 func _local_runner_profile() -> Dictionary:
 	var snapshot: Resource = InventoryService.create_run_loadout_snapshot(PlayerProfile.get_character_stats())

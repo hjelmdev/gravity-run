@@ -26,7 +26,10 @@ func _initialize() -> void:
 	_check(match_source.contains("The host can confirm with the button below") and not match_source.contains("if str(payload.get(\"room_id\", \"\")) == MultiplayerService.get_room_id():\n\t\t\t\t\tMultiplayerService.return_to_lobby()"), "a guest return action must ask the host rather than changing the whole room directly")
 	_check(transport_source.contains("if new_room_id != _room_id or local_user_id != _local_user_id:") and not transport_source.contains("returning_to_lobby"), "same-room rematches should reuse established WebRTC channels")
 	_check(service_source.contains("PlayerAccountProfile.nickname") and lobby_ui_source.contains("_on_player_account_profile_changed"), "multiplayer should prefill a saved account nickname")
+	_check(lobby_ui_source.contains("_adopt_cached_host_manifest(room, remote_hash)") and lobby_ui_source.contains("_send_manifest_to_connected_peers()"), "a rematch should reuse and resend the cached manifest over already-connected P2P channels")
+	_check(lobby_ui_source.contains("_manifest_verified_peers[peer_user_id] = true") and lobby_ui_source.contains("_manifest_transfer_last_sent_msec"), "manifest retries should stop after guest verification and be rate-limited")
 	_check(match_source.contains("if bool(_authoritative_snapshot.get(\"finished\", false)):\n\t\treturn") and match_source.contains("tied_for_lead"), "results should use terminal host state and avoid arbitrary winners on exact ties")
+	_check(match_source.contains("interpolated_player_state(str(from.get(\"state\", \"running\")), str(to.get(\"state\", \"running\")), weight)"), "remote player death/finish state should not be delayed by position interpolation")
 	_check(navigation_source.contains("request_multiplayer_lobby") and match_source.contains("request_multiplayer_lobby()"), "rematches should return through the persistent menu navigation owner")
 	if failures == 0:
 		print("Multiplayer lobby contract tests passed.")
