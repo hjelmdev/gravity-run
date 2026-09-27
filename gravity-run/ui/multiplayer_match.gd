@@ -4,7 +4,7 @@ const PlayerScene := preload("res://player/player.tscn")
 const SimulationScript := preload("res://systems/multiplayer_simulation.gd")
 
 const WORLD_HEIGHT := 540.0
-const CAMERA_LEAD := 300.0
+const CAMERA_LEAD := 180.0
 
 var _manifest: Resource
 var _simulation: RefCounted
@@ -23,13 +23,12 @@ var _go_start_at := 0.0
 var _waiting_since := 0.0
 var _received_match_ready: Dictionary = {}
 var _snapshot_elapsed := 0.0
-var _hud_elapsed := 0.0
 var _status_label: Label
 var _distance_label: Label
 var _result_label: Label
-var _flip_touch_active := false
 var _touch_index := -1
 var _touch_start := Vector2.ZERO
+var _run_banner_until := 0.0
 
 func _ready() -> void:
 	set_process(true)
@@ -78,6 +77,7 @@ func _process(delta: float) -> void:
 	if _go_start_at > 0.0 and _network_clock >= _go_start_at and not _simulation.started:
 		_simulation.start()
 		_status_label.text = tr("RUN!")
+		_run_banner_until = _network_clock + 1.3
 	if MultiplayerService.is_room_owner() and not _simulation.started and _go_start_at <= 0.0:
 		_try_schedule_start()
 		if _network_clock - _waiting_since > 15.0 and _go_start_at <= 0.0:
@@ -96,10 +96,7 @@ func _process(delta: float) -> void:
 		else:
 			_visual_correction = _visual_correction.move_toward(Vector2.ZERO, delta * 420.0)
 			_compose_client_snapshot()
-	_hud_elapsed += delta
-	if _hud_elapsed >= 0.1:
-		_hud_elapsed = 0.0
-		_update_hud()
+	_update_hud()
 	_sync_player_views()
 	queue_redraw()
 
@@ -107,18 +104,21 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _simulation == null or not _simulation.started or _player_state(_local_user_id).get("state", "") != "running":
 		return
 	if event is InputEventScreenTouch:
+		if PlayerProfile.flip_control not in ["swipe", "tap"]:
+			return
 		if event.pressed:
-			_touch_index = event.index
-			_touch_start = event.position
-			if PlayerProfile.flip_control == "tap":
-				_request_flip(-int(_player_state(_local_user_id).get("gravity_direction", 1)))
+			if _touch_index == -1:
+				if PlayerProfile.flip_control == "tap":
+					_request_flip(-int(_player_state(_local_user_id).get("gravity_direction", 1)))
+				else:
+					_touch_index = event.index
+					_touch_start = event.position
 		elif event.index == _touch_index:
 			if PlayerProfile.flip_control != "tap":
 				var swipe_delta: Vector2 = event.position - _touch_start
 				if absf(swipe_delta.y) >= 48.0 and absf(swipe_delta.y) > absf(swipe_delta.x) * 1.2:
 					_request_flip(-1 if swipe_delta.y < 0.0 else 1)
 			_touch_index = -1
-			_flip_touch_active = false
 		return
 	if event is InputEventKey and event.pressed and not event.echo and PlayerProfile.flip_control == "keyboard":
 		if event.keycode in [KEY_UP, KEY_W]:
@@ -341,22 +341,39 @@ func _sync_player_views() -> void:
 			_player_views.erase(user_id)
 
 func _update_hud() -> void:
-	var own := _player_state(_local_user_id)
+	var own: Dictionary = _simulation.get_player(_local_user_id) if _simulation != null else {}
 	if own.is_empty():
 		return
-	var distance := maxi(0, int(float(own.get("world_x", 0.0)) - float(_manifest.get("start_x"))))
+	var distance := distance_m(float(own.get("world_x", 0.0)), float(_manifest.get("start_x")))
 	var players: Variant = _snapshot.get("players", [])
 	var place := 1
 	if players is Array:
 		for other in players:
 			if other is Dictionary and str(other.get("state", "")) == "running" and float(other.get("world_x", 0.0)) > float(own.get("world_x", 0.0)):
 				place += 1
-	_distance_label.text = tr("DISTANCE %dm  ·  PLACE %d/%d") % [distance, place, players.size() if players is Array else 0]
+	var distance_text := tr("DISTANCE %dm  ·  PLACE %d/%d") % [distance, place, players.size() if players is Array else 0]
+	if _distance_label.text != distance_text:
+		_distance_label.text = distance_text
+	if _simulation.started and str(own.get("state", "")) == "running":
+		if bool(own.get("blocked", false)):
+			_status_label.text = tr("BLOCKED — FLIP GRAVITY")
+		elif _network_clock >= _run_banner_until and _status_label.text != "":
+			_status_label.text = ""
+	elif str(own.get("state", "")) == "dead" and _status_label.text != tr("You were eliminated"):
+		_status_label.text = tr("You were eliminated")
 	if bool(_snapshot.get("finished", false)):
 		var placements: Variant = _snapshot.get("placements", [])
-		var winner := str(placements[0].get("display_name", "")) if placements is Array and not placements.is_empty() else tr("No winner")
-		_result_label.text = tr("Winner: %s") % winner
+		var result_text := ""
+		if placements is Array and not placements.is_empty():
+			result_text = tr("Winner: %s") % str(placements[0].get("display_name", ""))
+		else:
+			result_text = tr("No one reached the finish")
+		if _result_label.text != result_text:
+			_result_label.text = result_text
 		_result_label.visible = true
+
+static func distance_m(world_x: float, start_x: float) -> int:
+	return maxi(0, int((world_x - start_x) / 10.0))
 
 func _build_hud() -> void:
 	var layer := CanvasLayer.new()
@@ -367,8 +384,14 @@ func _build_hud() -> void:
 	hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(hud)
 	_distance_label = Label.new()
-	_distance_label.position = Vector2(16, 12)
-	_distance_label.add_theme_font_size_override("font_size", 22)
+	_distance_label.anchor_left = 1.0
+	_distance_label.anchor_right = 1.0
+	_distance_label.offset_left = -535
+	_distance_label.offset_right = -166
+	_distance_label.offset_top = 15
+	_distance_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_distance_label.add_theme_font_size_override("font_size", 17)
+	_distance_label.add_theme_color_override("font_color", Color("b8c7dc"))
 	hud.add_child(_distance_label)
 	_status_label = Label.new()
 	_status_label.anchor_left = 0.5
@@ -400,41 +423,6 @@ func _build_hud() -> void:
 	leave.offset_bottom = 54
 	leave.pressed.connect(_leave_match)
 	hud.add_child(leave)
-	var flip_button := Button.new()
-	flip_button.text = tr("Flip gravity")
-	flip_button.custom_minimum_size = Vector2(150, 54)
-	flip_button.anchor_left = 1.0
-	flip_button.anchor_right = 1.0
-	flip_button.anchor_top = 1.0
-	flip_button.anchor_bottom = 1.0
-	flip_button.offset_left = -174
-	flip_button.offset_right = -16
-	flip_button.offset_top = -76
-	flip_button.offset_bottom = -18
-	flip_button.add_theme_font_size_override("font_size", 20)
-	flip_button.pressed.connect(_flip_gravity)
-	hud.add_child(flip_button)
-	var touch_hint := Label.new()
-	touch_hint.text = tr("Swipe up or down to flip gravity")
-	touch_hint.anchor_left = 0.5
-	touch_hint.anchor_right = 0.5
-	touch_hint.anchor_top = 1.0
-	touch_hint.anchor_bottom = 1.0
-	touch_hint.offset_left = -210
-	touch_hint.offset_right = 0
-	touch_hint.offset_top = -62
-	touch_hint.offset_bottom = -22
-	touch_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	touch_hint.add_theme_font_size_override("font_size", 15)
-	touch_hint.add_theme_color_override("font_color", Color("b9c8dc"))
-	hud.add_child(touch_hint)
-
-func _flip_gravity() -> void:
-	if _simulation == null:
-		return
-	var state := _player_state(_local_user_id)
-	if str(state.get("state", "")) == "running":
-		_request_flip(-int(state.get("gravity_direction", 1)))
 
 func status_label_color() -> void:
 	_status_label.add_theme_font_size_override("font_size", 28)
@@ -450,33 +438,101 @@ func _leave_match() -> void:
 
 func _draw() -> void:
 	var view_size := get_viewport_rect().size
-	draw_rect(Rect2(Vector2.ZERO, view_size), Color("101a2a"))
+	draw_rect(Rect2(Vector2.ZERO, view_size), Color("101827"))
 	var camera_left := maxf(float(_player_state(_local_user_id).get("world_x", 180.0)) - CAMERA_LEAD, 0.0)
-	var x := 0.0
-	while x < view_size.x:
-		var world_a := camera_left + x
-		var world_b := camera_left + minf(x + 20.0, view_size.x)
-		var floor_a := _surface_at(world_a, false)
-		var floor_b := _surface_at(world_b, false)
-		var ceil_a := _surface_at(world_a, true)
-		var ceil_b := _surface_at(world_b, true)
-		if bool(floor_a.supported) and bool(floor_b.supported):
-			draw_colored_polygon(PackedVector2Array([
-				Vector2(x, float(floor_a.y)), Vector2(minf(x + 20.0, view_size.x), float(floor_b.y)),
-				Vector2(minf(x + 20.0, view_size.x), WORLD_HEIGHT), Vector2(x, WORLD_HEIGHT),
-			]), Color("202e43"))
-		if bool(ceil_a.supported) and bool(ceil_b.supported):
-			draw_colored_polygon(PackedVector2Array([
-				Vector2(x, 0.0), Vector2(minf(x + 20.0, view_size.x), 0.0),
-				Vector2(minf(x + 20.0, view_size.x), float(ceil_b.y)), Vector2(x, float(ceil_a.y)),
-			]), Color("202e43"))
-		draw_line(Vector2(x, float(floor_a.y)), Vector2(minf(x + 20.0, view_size.x), float(floor_b.y)), Color("42d6c5"), 3.0)
-		draw_line(Vector2(x, float(ceil_a.y)), Vector2(minf(x + 20.0, view_size.x), float(ceil_b.y)), Color("42d6c5"), 3.0)
-		x += 20.0
+	for index in range(18):
+		var star_x := fposmod(float(index * 83) + camera_left * 0.12, view_size.x)
+		draw_circle(Vector2(star_x, 58.0 + float((index * 47) % 390)), 1.5, Color("26364b"))
+	_draw_track_surface(true, camera_left, view_size)
+	_draw_track_surface(false, camera_left, view_size)
 	_draw_events(camera_left, view_size)
 	var finish_screen_x := float(_manifest.get("finish_x")) - camera_left if _manifest != null else -1.0
 	if finish_screen_x >= 0.0 and finish_screen_x <= view_size.x:
 		draw_line(Vector2(finish_screen_x, 0), Vector2(finish_screen_x, WORLD_HEIGHT), Color("f5d45e"), 4.0)
+
+func _draw_track_surface(ceiling: bool, camera_left: float, view_size: Vector2) -> void:
+	for interval in _solid_surface_intervals(ceiling, camera_left, camera_left + view_size.x):
+		_draw_track_surface_segment(ceiling, interval.x, interval.y, camera_left, view_size.y)
+
+func _solid_surface_intervals(ceiling: bool, view_left: float, view_right: float) -> Array[Vector2]:
+	var gap_intervals: Array[Dictionary] = []
+	if _manifest != null:
+		for event in _manifest.get("events"):
+			if str(event.get("kind", "")) == "gap" and bool(event.get("from_ceiling", false)) == ceiling:
+				var half_width := float(event.get("width", 0.0)) * 0.5
+				gap_intervals.append({"start": float(event.get("x", 0.0)) - half_width, "end": float(event.get("x", 0.0)) + half_width})
+	gap_intervals.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.start) < float(b.start))
+	var solid: Array[Vector2] = []
+	var cursor := view_left
+	for gap in gap_intervals:
+		var gap_start := clampf(float(gap.start), view_left, view_right)
+		var gap_end := clampf(float(gap.end), view_left, view_right)
+		if gap_end <= cursor:
+			continue
+		if gap_start > cursor:
+			solid.append(Vector2(cursor, gap_start))
+		cursor = maxf(cursor, gap_end)
+	if cursor < view_right:
+		solid.append(Vector2(cursor, view_right))
+	return solid
+
+func _draw_track_surface_segment(ceiling: bool, start_x: float, end_x: float, camera_left: float, view_height: float) -> void:
+	if end_x - start_x < 0.5:
+		return
+	var points := _surface_points(ceiling, start_x, end_x, camera_left)
+	if points.size() < 2:
+		return
+	var fill := PackedVector2Array()
+	if ceiling:
+		fill.append(Vector2(start_x - camera_left, 0.0))
+		fill.append_array(points)
+		fill.append(Vector2(end_x - camera_left, 0.0))
+	else:
+		fill.append_array(points)
+		fill.append(Vector2(end_x - camera_left, view_height))
+		fill.append(Vector2(start_x - camera_left, view_height))
+	draw_colored_polygon(fill, Color("202d40"))
+	draw_polyline(points, Color("42d6c5"), 3.0, true)
+
+func _surface_points(ceiling: bool, start_x: float, end_x: float, camera_left: float) -> PackedVector2Array:
+	var x_positions: Array[float] = [start_x, end_x]
+	var sample_x := ceilf(start_x / 16.0) * 16.0
+	while sample_x < end_x:
+		if sample_x > start_x:
+			x_positions.append(sample_x)
+		sample_x += 16.0
+	if _manifest != null:
+		for event in _manifest.get("events"):
+			if bool(event.get("from_ceiling", false)) != ceiling:
+				continue
+			match str(event.get("kind", "")):
+				"slope":
+					for boundary in [float(event.get("start_x", 0.0)), float(event.get("end_x", 0.0))]:
+						if boundary > start_x and boundary < end_x:
+							x_positions.append(boundary)
+				"step":
+					var boundary := float(event.get("x", 0.0))
+					if boundary > start_x and boundary < end_x:
+						x_positions.append(boundary)
+	x_positions.sort()
+	var points := PackedVector2Array()
+	var previous_x := -INF
+	for world_x in x_positions:
+		if is_equal_approx(world_x, previous_x):
+			continue
+		previous_x = world_x
+		var step_at_x := false
+		if _manifest != null:
+			for event in _manifest.get("events"):
+				if str(event.get("kind", "")) == "step" and bool(event.get("from_ceiling", false)) == ceiling and is_equal_approx(float(event.get("x", 0.0)), world_x):
+					step_at_x = true
+					break
+		if step_at_x:
+			points.append(Vector2(world_x - camera_left, float(_surface_at(world_x - 0.01, ceiling).y)))
+			points.append(Vector2(world_x - camera_left, float(_surface_at(world_x + 0.01, ceiling).y)))
+		else:
+			points.append(Vector2(world_x - camera_left, float(_surface_at(world_x, ceiling).y)))
+	return points
 
 func _draw_events(camera_left: float, view_size: Vector2) -> void:
 	if _manifest == null:
@@ -490,8 +546,8 @@ func _draw_events(camera_left: float, view_size: Vector2) -> void:
 			var y := edge_y - height if not bool(event.get("from_ceiling", false)) else edge_y
 			var rect := Rect2(float(event.get("x", 0.0)) - camera_left - width * 0.5, y, width, height)
 			if rect.end.x >= 0.0 and rect.position.x <= view_size.x:
-				draw_rect(rect, Color("d17b42"))
-				draw_rect(rect, Color("ffb05e"), false, 4.0)
+				draw_rect(rect, Color("ffad5c"))
+				draw_rect(Rect2(rect.position + Vector2(7.0, 8.0), rect.size - Vector2(14.0, 16.0)), Color("cf753b"))
 		elif kind == "spikes":
 			var start_x := float(event.get("start_x", event.get("x", 0.0))) - camera_left
 			var y := float(event.get("y", 0.0))
@@ -502,7 +558,8 @@ func _draw_events(camera_left: float, view_size: Vector2) -> void:
 				if sx < -32.0 or sx > view_size.x + 32.0:
 					continue
 				var points := PackedVector2Array([Vector2(sx, y), Vector2(sx + 28.0, y), Vector2(sx + 14.0, y + (28.0 if bool(event.get("from_ceiling", false)) else -28.0))])
-				draw_colored_polygon(points, Color("d95168"))
+				draw_colored_polygon(points, Color("ff647c"))
+				draw_line(points[0], points[2], Color("ffd0d8"), 3.0)
 
 func _surface_at(world_x: float, ceiling: bool) -> Dictionary:
 	if _manifest == null:

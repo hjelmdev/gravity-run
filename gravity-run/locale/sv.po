@@ -1042,3 +1042,24 @@ msgstr "Vänd gravitationen"
 
 msgid "Swipe up or down to flip gravity"
 msgstr "Svep uppåt eller nedåt för att vända gravitationen"
+
+msgid "DISTANCE %dm  ·  PLACE %d/%d"
+msgstr "DISTANS %dm  ·  PLATS %d/%d"
+
+msgid "Race finished"
+msgstr "Rundan är slut"
+
+msgid "No one reached the finish"
+msgstr "Ingen nådde mål"
+
+msgid "Winner: %s"
+msgstr "Vinnare: %s"
+
+msgid "Leave race"
+msgstr "Lämna loppet"
+
+msgid "RUN!"
+msgstr "SPRING!"
+
+msgid "You were eliminated"
+msgstr "Du åkte ut"
