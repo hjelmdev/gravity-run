@@ -627,6 +627,15 @@ func _sync_player_views() -> void:
 		if not present.has(user_id):
 			(_player_views[user_id] as Node2D).queue_free()
 			_player_views.erase(user_id)
+	_bring_local_runner_to_front()
+
+func _bring_local_runner_to_front() -> void:
+	# Player order in a snapshot is shared by every peer. Keep the local runner
+	# above the other runners in this client's draw order, regardless of who is
+	# host or which user ID sorts last.
+	var local_view: Variant = _player_views.get(_local_user_id)
+	if _course_root != null and is_instance_valid(local_view) and local_view.get_parent() == _course_root:
+		_course_root.move_child(local_view, _course_root.get_child_count() - 1)
 
 func _update_hud() -> void:
 	var own: Dictionary = _simulation.get_player(_local_user_id) if _simulation != null else {}
