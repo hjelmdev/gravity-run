@@ -127,6 +127,19 @@ Rekommenderad enkel regel: alla startar samtidigt vid samma startlinje; första 
 3. **Beslutat:** första versionen konfigurerar ingen TURN-tjänst. Mät vilka hem- och mobilnät som inte kan etablera en direkt WebRTC-anslutning trots STUN. Dessa användare får ett tydligt anslutningsfel och kan prova att byta nät eller värd.
 4. **Reservdrift:** om en dedikerad server senare behövs, välj leverantör först då. En process kan driva många `MatchRoom`-instanser; kapacitet och geografisk latens avgör när fler instanser krävs.
 
+## Implementationsstatus (2026-09-27)
+
+Det här är en arbetsstatus, inte ett godkännande av multiplayer för release. Grundkod för rum, manifest och värdstyrd match finns, men planen är **inte färdigimplementerad eller verifierad över internet**.
+
+- **På plats:** Supabase migrationer för privata, kortlivade rum, medlemskap, RPC-behörighet och medlemsbegränsad Realtime-signalering; anonym gästinloggning är aktiverad. Lobbygränssnitt, deterministiskt manifest/hash, direkt WebRTC-transport med STUN, fast värdsimulering, gemensam start och grundläggande matchrendering är implementerade.
+- **På plats:** singleplayer använder nu spelarens `world_x` och en följande kamera i stället för att flytta hela banan som framåtrörelse. Matchen använder däremot en separat, förenklad värdsimulering.
+- **Delvis:** en frånkopplad klient markeras som utslagen; klienten gör ett begränsat återförsök vid WebRTC-timeout. Värdförlust/timeout under match, synkronisering under verklig nätverkslatens och robust avslut/omspel behöver färdigställas.
+- **Delvis:** klienten predikterar sin egen rörelse och korrigerar mot auktoritativa snapshots; motståndare interpoleras från en kort snapshotbuffert. Detta är ännu inte speltestat över nät. Extrapolering, utvecklaroverlay för RTT/jitter/korrigeringar och fullständig lag-/resultatvisning återstår.
+- **Export:** en lokal Godot 4.7.2 Web release-export av aktuell källkod har nu lyckats via kommandot i `DEPLOYMENT.md`. Den exporterades till en temporär katalog; den är inte publicerad till GitHub Pages. WebRTC-match över riktiga enheter/nät är fortfarande inte verifierad.
+- **Återstår och kräver separata enheter/nät:** tvåspelar-WebRTC i webbläsare, mobil/Wi-Fi-kombinationer, 3–4 spelare, RTT/jitter, flik i bakgrunden/värdtelefon låst, tappad anslutning, versionsskillnad och flera samtidiga rum.
+
+Godkännandekriterierna ovan är därmed ännu inte uppfyllda. Kör de fokuserade Godot-testerna innan nästa checkpoint och uppdatera den här statusen i takt med verifierade framsteg.
+
 ## Källor
 
 - Godot 4.7, [high-level multiplayer och säkerhetsmodell](https://docs.godotengine.org/en/4.7/tutorials/networking/high_level_multiplayer.html).

@@ -1,0 +1,116 @@
+extends SceneTree
+
+const BuilderScript := preload("res://systems/course_manifest_builder.gd")
+const SimulationScript := preload("res://systems/multiplayer_simulation.gd")
+const ManifestScript := preload("res://systems/multiplayer_course_manifest.gd")
+
+func _initialize() -> void:
+	var manifest: Resource = ManifestScript.new()
+	manifest.set("generator_version", 4)
+	manifest.set("course_identity", "sim-test")
+	manifest.set("seed_value", 24680)
+	manifest.set("course_length_px", 10000)
+	manifest.set("start_x", 180.0)
+	manifest.set("finish_x", 10180.0)
+	manifest.set("initial_floor_y", 460.0)
+	manifest.set("initial_ceiling_y", 80.0)
+	manifest.set("manifest_hash", manifest.call("calculate_hash"))
+	var simulation := SimulationScript.new()
+	var configuration_error := simulation.configure(manifest, [
+		{"user_id": "slow", "display_name": "Slow", "run_speed_percent": 10000},
+		{"user_id": "fast", "display_name": "Fast", "run_speed_percent": 10100},
+	])
+	assert(configuration_error.is_empty(), configuration_error)
+	simulation.start()
+	assert(simulation.submit_flip("slow", -1))
+	assert(not simulation.submit_flip("slow", 1))
+	var last_events: Array[Dictionary] = []
+	for frame in range(1300):
+		last_events = simulation.advance_frame(1.0 / 60.0)
+		if simulation.match_finished:
+			break
+	assert(simulation.match_finished, "race should finish when the leading runner reaches the finish line")
+	var result: Variant = last_events.back().get("result", {}) if not last_events.is_empty() else {}
+	assert(result is Dictionary and str(result.get("winner_user_id", "")) == "fast", "the faster runner should win under host simulation")
+	assert(int(simulation.get_player("slow").get("finish_tick", 0)) > int(simulation.get_player("fast").get("finish_tick", 0)))
+
+	var step_manifest: Resource = _make_manifest([{
+		"event_id": "floor_drop",
+		"kind": "step",
+		"x": 600.0,
+		"start_y": 460.0,
+		"end_y": 520.0,
+		"from_ceiling": false,
+		"spiked": false,
+	}], 10000)
+	var step_simulation := SimulationScript.new()
+	assert(step_simulation.configure(step_manifest, [
+		{"user_id": "runner_a"},
+		{"user_id": "runner_b"},
+	]).is_empty())
+	step_simulation.start()
+	for _frame in range(52):
+		step_simulation.advance_frame(1.0 / 60.0)
+	var falling_runner := step_simulation.get_player("runner_a")
+	assert(float(falling_runner.get("world_x", 0.0)) >= 600.0)
+	assert(float(falling_runner.get("y", 0.0)) < 498.0, "a descending floor step must begin a fall, not teleport the runner down")
+	assert(not bool(falling_runner.get("grounded", true)))
+
+	var spike_manifest: Resource = _make_manifest([{
+		"event_id": "floor_spikes",
+		"kind": "spikes",
+		"x": 650.0,
+		"start_x": 650.0,
+		"y": 460.0,
+		"count": 1,
+		"spacing": 32.0,
+		"width": 28.0,
+		"from_ceiling": false,
+	}], 10000)
+	var spike_simulation := SimulationScript.new()
+	assert(spike_simulation.configure(spike_manifest, [
+		{"user_id": "runner_a"},
+		{"user_id": "runner_b"},
+	]).is_empty())
+	spike_simulation.start()
+	for _frame in range(90):
+		spike_simulation.advance_frame(1.0 / 60.0)
+	assert(spike_simulation.get_player("runner_a").get("state", "") == "dead", "floor spikes must be authoritative and lethal")
+	var disconnect_simulation := SimulationScript.new()
+	assert(disconnect_simulation.configure(_make_manifest([], 10000), [
+		{"user_id": "host"},
+		{"user_id": "departed"},
+	]).is_empty())
+	disconnect_simulation.start()
+	assert(disconnect_simulation.mark_disconnected("departed"), "the host should be able to mark a disconnected runner")
+	assert(disconnect_simulation.get_player("departed").get("state", "") == "disconnected")
+	assert(not disconnect_simulation.mark_disconnected("unknown"), "unknown peers must not create match state")
+	var prediction_simulation := SimulationScript.new()
+	assert(prediction_simulation.configure(_make_manifest([], 10000), [
+		{"user_id": "local"},
+		{"user_id": "host"},
+	]).is_empty())
+	var authority_state := prediction_simulation.get_player("local")
+	authority_state["world_x"] = 420.0
+	authority_state["y"] = 300.0
+	authority_state["state"] = "running"
+	assert(prediction_simulation.apply_authoritative_player_state("local", authority_state))
+	assert(is_equal_approx(float(prediction_simulation.get_player("local").get("world_x", 0.0)), 420.0), "prediction state should reconcile to host authority")
+	authority_state["world_x"] = NAN
+	assert(not prediction_simulation.apply_authoritative_player_state("local", authority_state), "invalid network positions must be rejected")
+	print("Multiplayer simulation tests passed.")
+	quit()
+
+func _make_manifest(events: Array[Dictionary], length_px: int) -> Resource:
+	var manifest: Resource = ManifestScript.new()
+	manifest.set("generator_version", 4)
+	manifest.set("course_identity", "sim-test")
+	manifest.set("seed_value", 24680)
+	manifest.set("course_length_px", length_px)
+	manifest.set("start_x", 180.0)
+	manifest.set("finish_x", 180.0 + float(length_px))
+	manifest.set("initial_floor_y", 460.0)
+	manifest.set("initial_ceiling_y", 80.0)
+	manifest.set("events", events)
+	manifest.set("manifest_hash", manifest.call("calculate_hash"))
+	return manifest

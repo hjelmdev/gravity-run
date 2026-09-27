@@ -2,6 +2,8 @@
 
 The Godot source project is in `gravity-run/` and is pushed to the Azure DevOps repository. The public GitHub Pages repository is a separate, export-only repo: `https://github.com/hjelmdev/gravity-run.git`.
 
+Keep the persistent local clone of the Pages repo at `E:\Utveckling\gravity-run-pages` (branch `main`), outside the user's profile and separate from the Azure source repo. Do not use a Temp/AppData clone as the working copy. Older clean deployment clones, if retained, belong under `E:\Utveckling\gravity-run-pages-archive`.
+
 ## Publish a web build
 
 1. Export the `Web` preset from `gravity-run/project.godot` to a temporary folder **outside the Azure source repo**. With this machine's Godot install, the command is:

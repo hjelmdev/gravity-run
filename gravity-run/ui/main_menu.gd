@@ -3,6 +3,8 @@ extends Control
 const GAME_SCENE := preload("res://main.tscn")
 const GAME_HUB_SCENE := preload("res://ui/game_hub.tscn")
 const INVENTORY_SCREEN_SCENE := preload("res://ui/inventory_screen.tscn")
+const MULTIPLAYER_LOBBY_SCENE := preload("res://ui/multiplayer_lobby.tscn")
+const MULTIPLAYER_MATCH_SCENE := preload("res://ui/multiplayer_match.tscn")
 const COURSE_GENERATOR_SCRIPT := preload("res://systems/course_generator.gd")
 const COURSE_RULESET_SCRIPT := preload("res://systems/course_generation_ruleset.gd")
 
@@ -44,6 +46,7 @@ var _create_challenge_status: Label
 var _create_challenge_button: Button
 var _game_hub: Control
 var _inventory_screen: Control
+var _multiplayer_lobby: Control
 var _return_to_hub_after_screen := false
 
 func _ready() -> void:
@@ -173,8 +176,20 @@ func _show_game_hub() -> void:
 	_game_hub.achievements_requested.connect(_open_hub_achievements)
 	_game_hub.character_requested.connect(_show_character_screen)
 	_game_hub.shop_requested.connect(_show_shop_screen)
+	_game_hub.multiplayer_requested.connect(_show_multiplayer_lobby)
 	_game_hub.main_menu_requested.connect(_return_to_main_menu)
 	add_child(_game_hub)
+
+func _show_multiplayer_lobby() -> void:
+	if is_instance_valid(_multiplayer_lobby):
+		_multiplayer_lobby.queue_free()
+	_multiplayer_lobby = MULTIPLAYER_LOBBY_SCENE.instantiate()
+	_multiplayer_lobby.back_requested.connect(_show_game_hub)
+	_multiplayer_lobby.match_start_requested.connect(_start_multiplayer_match)
+	add_child(_multiplayer_lobby)
+
+func _start_multiplayer_match() -> void:
+	get_tree().change_scene_to_packed(MULTIPLAYER_MATCH_SCENE)
 
 func _show_character_screen() -> void:
 	_show_inventory_screen("character")
@@ -1484,6 +1499,9 @@ func _clear_menu_panel() -> void:
 	if is_instance_valid(_game_hub):
 		_game_hub.queue_free()
 		_game_hub = null
+	if is_instance_valid(_multiplayer_lobby):
+		_multiplayer_lobby.queue_free()
+		_multiplayer_lobby = null
 	if is_instance_valid(_inventory_screen):
 		_inventory_screen.queue_free()
 		_inventory_screen = null

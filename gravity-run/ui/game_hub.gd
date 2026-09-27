@@ -6,6 +6,7 @@ signal leaderboard_requested
 signal achievements_requested
 signal character_requested
 signal shop_requested
+signal multiplayer_requested
 signal main_menu_requested
 
 var _status_label: Label
@@ -72,6 +73,9 @@ func _build() -> void:
 	achievements_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	achievements_button.pressed.connect(achievements_requested.emit)
 	progression_row.add_child(achievements_button)
+	var multiplayer_button := _make_button(tr("Multiplayer"), 38.0)
+	multiplayer_button.pressed.connect(multiplayer_requested.emit)
+	layout.add_child(multiplayer_button)
 	var spacer := Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	layout.add_child(spacer)
