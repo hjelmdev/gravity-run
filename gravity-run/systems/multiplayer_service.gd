@@ -103,11 +103,14 @@ func get_connected_peer_ids() -> PackedStringArray:
 func can_start_race() -> bool:
 	if not has_room() or not is_room_owner() or str(room_state.get("phase", "")) != "OPEN":
 		return false
-	var members := get_members()
-	if members.size() < 2 or members.size() > 4 or str(room_state.get("manifest_hash", "")).is_empty():
+	var present_members: Array[Dictionary] = []
+	for member in get_members():
+		if member is Dictionary and bool(member.get("is_connected", true)):
+			present_members.append(member)
+	if present_members.is_empty() or present_members.size() > int(room_state.get("max_players", 4)) or str(room_state.get("manifest_hash", "")).is_empty():
 		return false
 	var expected_peers := {}
-	for member in members:
+	for member in present_members:
 		if not member is Dictionary or not bool(member.get("is_ready", false)) or str(member.get("loaded_manifest_hash", "")) != str(room_state.get("manifest_hash", "")):
 			return false
 		var member_id := str(member.get("user_id", ""))
@@ -116,8 +119,6 @@ func can_start_race() -> bool:
 	var connected := {}
 	for peer_id in get_connected_peer_ids():
 		connected[peer_id] = true
-	if connected.size() != expected_peers.size():
-		return false
 	for peer_id in expected_peers:
 		if not connected.has(peer_id):
 			return false

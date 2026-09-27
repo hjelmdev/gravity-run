@@ -2,11 +2,11 @@ extends RefCounted
 class_name MultiplayerRaceRules
 
 const MAX_PLAYERS := 4
-const MIN_PLAYERS := 2
+const MIN_PLAYERS := 1
 
 static func validate_players(players: Array) -> String:
 	if players.size() < MIN_PLAYERS:
-		return "A race requires at least two players."
+		return "A race requires at least one player."
 	if players.size() > MAX_PLAYERS:
 		return "A race supports at most four players."
 	var seen := {}

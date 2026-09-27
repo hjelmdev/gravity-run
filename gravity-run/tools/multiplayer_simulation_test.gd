@@ -1,6 +1,7 @@
 extends SceneTree
 
 const BuilderScript := preload("res://systems/course_manifest_builder.gd")
+const RaceRulesScript := preload("res://systems/multiplayer_race_rules.gd")
 const SimulationScript := preload("res://systems/multiplayer_simulation.gd")
 const ManifestScript := preload("res://systems/multiplayer_course_manifest.gd")
 
@@ -16,6 +17,16 @@ func _initialize() -> void:
 	manifest.set("initial_ceiling_y", 80.0)
 	manifest.set("manifest_hash", manifest.call("calculate_hash"))
 	var simulation := SimulationScript.new()
+	assert(RaceRulesScript.validate_players([{"user_id": "solo"}]).is_empty(), "a one-player host run should be valid")
+	assert(not RaceRulesScript.validate_players([]).is_empty(), "an empty room must not start")
+	var solo_simulation := SimulationScript.new()
+	assert(solo_simulation.configure(manifest, [{"user_id": "solo", "display_name": "Solo"}]).is_empty())
+	solo_simulation.start()
+	for _frame in range(1300):
+		solo_simulation.advance_frame(1.0 / 60.0)
+		if solo_simulation.match_finished:
+			break
+	assert(solo_simulation.match_finished, "a solo host race should run to completion")
 	var configuration_error := simulation.configure(manifest, [
 		{"user_id": "slow", "display_name": "Slow", "run_speed_percent": 10000},
 		{"user_id": "fast", "display_name": "Fast", "run_speed_percent": 10100},

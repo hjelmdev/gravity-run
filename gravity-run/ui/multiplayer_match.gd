@@ -46,7 +46,7 @@ func _ready() -> void:
 	var members := MultiplayerService.get_members()
 	var simulation_players: Array = []
 	for member in members:
-		if member is Dictionary:
+		if member is Dictionary and bool(member.get("is_connected", true)):
 			var speed_percent: int = _local_speed_percent() if str(member.get("user_id", "")) == _local_user_id else 10000
 			simulation_players.append({
 				"user_id": str(member.get("user_id", "")),
@@ -280,12 +280,13 @@ func _local_speed_percent() -> int:
 	return 10000
 
 func _try_schedule_start() -> void:
-	var members := MultiplayerService.get_members()
-	if members.size() < 2:
+	var present_members: Array[Dictionary] = []
+	for member in MultiplayerService.get_members():
+		if member is Dictionary and bool(member.get("is_connected", true)):
+			present_members.append(member)
+	if present_members.is_empty():
 		return
-	for member in members:
-		if not member is Dictionary:
-			return
+	for member in present_members:
 		var user_id := str(member.get("user_id", ""))
 		if not bool(_received_match_ready.get(user_id, false)):
 			return
@@ -296,7 +297,7 @@ func _try_schedule_start() -> void:
 
 func _is_active_room_member(user_id: String) -> bool:
 	for member in MultiplayerService.get_members():
-		if member is Dictionary and str(member.get("user_id", "")) == user_id:
+		if member is Dictionary and bool(member.get("is_connected", true)) and str(member.get("user_id", "")) == user_id:
 			return true
 	return false
 

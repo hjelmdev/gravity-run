@@ -11,12 +11,15 @@ var _room_code: LineEdit
 var _name_edit: LineEdit
 var _scroll: ScrollContainer
 var _panel: PanelContainer
+var _layout: VBoxContainer
+var _title: Label
 var _players: VBoxContainer
 var _ready_button: Button
 var _start_button: Button
 var _leave_button: Button
 var _create_button: Button
 var _join_button: Button
+var _lobby_buttons: Array[Button] = []
 var _prepared_hash := ""
 var _prepared_manifest: Resource
 var _course_loaded := false
@@ -63,28 +66,29 @@ func _build_ui() -> void:
 	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_panel.add_child(_scroll)
-	var layout := VBoxContainer.new()
-	layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	layout.add_theme_constant_override("separation", 10)
-	_scroll.add_child(layout)
-	var title := Label.new()
-	title.text = tr("MULTIPLAYER LOBBY")
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 24)
-	layout.add_child(title)
+	_layout = VBoxContainer.new()
+	_layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_layout.add_theme_constant_override("separation", 10)
+	_scroll.add_child(_layout)
+	_title = Label.new()
+	_title.text = tr("MULTIPLAYER LOBBY")
+	_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_title.add_theme_font_size_override("font_size", 24)
+	_layout.add_child(_title)
 	_status = Label.new()
 	_status.text = tr("Create a private room or join with a code.")
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	layout.add_child(_status)
+	_layout.add_child(_status)
 	_name_edit = LineEdit.new()
 	_name_edit.placeholder_text = tr("Display name")
 	_name_edit.max_length = 16
 	_name_edit.focus_entered.connect(_ensure_focused_input_visible)
-	layout.add_child(_name_edit)
+	_name_edit.focus_exited.connect(_restore_scroll_if_unfocused)
+	_layout.add_child(_name_edit)
 	var create_row := HBoxContainer.new()
 	create_row.add_theme_constant_override("separation", 8)
-	layout.add_child(create_row)
+	_layout.add_child(create_row)
 	_create_button = _button(tr("Create room"))
 	_create_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_create_button.pressed.connect(_create_room)
@@ -93,6 +97,7 @@ func _build_ui() -> void:
 	_room_code.placeholder_text = tr("Room code")
 	_room_code.max_length = 8
 	_room_code.focus_entered.connect(_ensure_focused_input_visible)
+	_room_code.focus_exited.connect(_restore_scroll_if_unfocused)
 	_room_code.text_submitted.connect(func(_value: String) -> void: _join_room())
 	_room_code.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	create_row.add_child(_room_code)
@@ -100,41 +105,42 @@ func _build_ui() -> void:
 	_join_button.pressed.connect(_join_room)
 	create_row.add_child(_join_button)
 	var separator := HSeparator.new()
-	layout.add_child(separator)
+	_layout.add_child(separator)
 	var code_label := Label.new()
 	code_label.text = tr("Room code")
-	layout.add_child(code_label)
+	_layout.add_child(code_label)
 	var members_box := PanelContainer.new()
 	members_box.add_theme_stylebox_override("panel", _inner_style())
-	layout.add_child(members_box)
+	_layout.add_child(members_box)
 	_players = VBoxContainer.new()
 	_players.add_theme_constant_override("separation", 6)
 	members_box.add_child(_players)
 	_ready_button = _button(tr("Ready"))
 	_ready_button.pressed.connect(_toggle_ready)
 	_ready_button.disabled = true
-	layout.add_child(_ready_button)
+	_layout.add_child(_ready_button)
 	_start_button = _button(tr("Start race"))
 	_start_button.disabled = true
 	_start_button.pressed.connect(_request_start)
-	layout.add_child(_start_button)
+	_layout.add_child(_start_button)
 	_leave_button = _button(tr("Leave room"))
 	_leave_button.pressed.connect(MultiplayerService.leave_room)
 	_leave_button.visible = false
-	layout.add_child(_leave_button)
+	_layout.add_child(_leave_button)
 	var note := Label.new()
-	note.text = tr("All players need the same verified course and a direct connection to the host before the race can start.")
+	note.text = tr("The host can start with any number of players from 1 to 4 once everyone present is ready. Other players must be connected to the host.")
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.add_theme_color_override("font_color", Color("b8c7dc"))
-	layout.add_child(note)
+	_layout.add_child(note)
 	var back := _button(tr("Back"))
 	back.pressed.connect(back_requested.emit)
-	layout.add_child(back)
+	_layout.add_child(back)
 	_update_room(MultiplayerService.room_state)
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 
 func _create_room() -> void:
 	_set_busy(true)
+	_release_lobby_input_focus()
 	MultiplayerService.create_room(_name_edit.text)
 
 func _join_room() -> void:
@@ -142,6 +148,7 @@ func _join_room() -> void:
 		_status.text = tr("Enter the 8-character room code.")
 		return
 	_set_busy(true)
+	_release_lobby_input_focus()
 	MultiplayerService.join_room(_room_code.text, _name_edit.text)
 
 func _toggle_ready() -> void:
@@ -365,25 +372,30 @@ func _update_room(room: Dictionary) -> void:
 	var members: Variant = room.get("members", [])
 	var own_ready := false
 	var everyone_ready := true
+	var present_count := 0
 	if members is Array:
 		for member in members:
 			if not member is Dictionary:
 				continue
 			var own := str(member.get("user_id", "")) == MultiplayerService.identity_user_id
+			var present := bool(member.get("is_connected", true))
 			var is_ready := bool(member.get("is_ready", false))
+			if present:
+				present_count += 1
+				everyone_ready = everyone_ready and is_ready and str(member.get("loaded_manifest_hash", "")) == str(room.get("manifest_hash", ""))
 			own_ready = is_ready if own else own_ready
-			everyone_ready = everyone_ready and is_ready and str(member.get("loaded_manifest_hash", "")) == str(room.get("manifest_hash", ""))
 			var label := Label.new()
-			label.text = "%s%s%s" % [str(member.get("display_name", "Runner")), tr(" (you)") if own else "", tr(" · ready") if is_ready else tr(" · waiting")]
+			var member_status := tr(" · offline") if not present else (tr(" · ready") if is_ready else tr(" · waiting"))
+			label.text = "%s%s%s" % [str(member.get("display_name", "Runner")), tr(" (you)") if own else "", member_status]
 			_players.add_child(label)
 		_ready_button.text = tr("Not ready") if own_ready else tr("Ready")
 	_ready_button.disabled = not in_room or not _course_loaded or str(room.get("manifest_hash", "")).is_empty() or _prepared_hash != str(room.get("manifest_hash", ""))
 	_start_button.disabled = not MultiplayerService.can_start_race()
 	if MultiplayerService.is_room_owner():
-		_status.text = tr("Room code: %s · %d/4 players") % [str(room.get("room_code", "")), members.size() if members is Array else 0]
+		_status.text = tr("Room code: %s · %d players present (max 4)") % [str(room.get("room_code", "")), present_count]
 	else:
 		_status.text = tr("Joined room %s · preparing shared course") % str(room.get("room_code", ""))
-	if everyone_ready and members is Array and members.size() >= 2:
+	if everyone_ready and present_count > 0:
 		_status.text += "\n" + tr("All players are ready. Match networking is still under construction.")
 
 func _set_busy(value: bool) -> void:
@@ -396,6 +408,7 @@ func _button(label_text: String) -> Button:
 	var button := Button.new()
 	button.text = label_text
 	button.custom_minimum_size.y = 40.0
+	_lobby_buttons.append(button)
 	return button
 
 func _on_viewport_size_changed() -> void:
@@ -407,6 +420,11 @@ func _on_viewport_size_changed() -> void:
 		_panel.offset_right = panel_width * 0.5
 		_panel.offset_top = -panel_height * 0.5
 		_panel.offset_bottom = panel_height * 0.5
+		var compact := viewport.y < 620.0
+		_layout.add_theme_constant_override("separation", 6 if compact else 10)
+		_title.add_theme_font_size_override("font_size", 20 if compact else 24)
+		for button in _lobby_buttons:
+			button.custom_minimum_size.y = 32.0 if compact else 40.0
 	_ensure_focused_input_visible()
 
 func _ensure_focused_input_visible() -> void:
@@ -419,6 +437,22 @@ func _scroll_to_focused_input() -> void:
 		_scroll.ensure_control_visible(_name_edit)
 	elif is_instance_valid(_room_code) and _room_code.has_focus():
 		_scroll.ensure_control_visible(_room_code)
+
+func _restore_scroll_if_unfocused() -> void:
+	call_deferred("_reset_scroll_if_unfocused")
+
+func _reset_scroll_if_unfocused() -> void:
+	if is_instance_valid(_scroll) \
+		and (not is_instance_valid(_name_edit) or not _name_edit.has_focus()) \
+		and (not is_instance_valid(_room_code) or not _room_code.has_focus()):
+		_scroll.scroll_vertical = 0
+
+func _release_lobby_input_focus() -> void:
+	if is_instance_valid(_name_edit):
+		_name_edit.release_focus()
+	if is_instance_valid(_room_code):
+		_room_code.release_focus()
+	_reset_scroll_if_unfocused()
 
 func _panel_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
