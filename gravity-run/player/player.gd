@@ -1,14 +1,13 @@
 extends Node2D
 
+const RunnerMotionScript := preload("res://systems/runner_motion.gd")
+
 signal status_changed(gravity_direction: int, cooldown_left: float)
 signal gravity_flipped
 
 const PLAYER_X := 180.0
-const PLAYER_SIZE := Vector2(34.0, 44.0)
+const PLAYER_SIZE := RunnerMotionScript.SIZE
 const SPRITE_SURFACE_GAP := 1.0
-const PLAYER_SPEED_Y := 680.0
-const GRAVITY_ACCELERATION := 1900.0
-const COOLDOWN_SECONDS := 0.42
 const SWIPE_DISTANCE_MIN := 48.0
 
 var vertical_speed := 0.0
@@ -76,41 +75,20 @@ func is_spike_immune() -> bool:
 	return bool(effects.call("is_spike_immune"))
 
 func advance(delta: float, floor_surface_y: float, ceiling_surface_y: float, floor_supported: bool = true, ceiling_supported: bool = true) -> void:
-	cooldown_left = maxf(0.0, cooldown_left - delta)
 	effects.call("tick", delta)
-	var floor_contact_y := floor_surface_y - PLAYER_SIZE.y * 0.5
-	var ceiling_contact_y := ceiling_surface_y + PLAYER_SIZE.y * 0.5
-	var contact_y := floor_contact_y if gravity_direction > 0 else ceiling_contact_y
-	# A step can move the supporting surface away in the direction of gravity.
-	# Detach before integration so the character falls across the gap instead of
-	# being snapped instantly to the new surface height.
-	if grounded and float(gravity_direction) * (contact_y - position.y) > 12.0:
-		grounded = false
-		vertical_speed = 0.0
-	vertical_speed += float(gravity_direction) * GRAVITY_ACCELERATION * delta
-	position.y += vertical_speed * delta
-	var floor_y := floor_contact_y
-	var ceiling_y := ceiling_contact_y
-	if gravity_direction > 0:
-		if not floor_supported:
-			grounded = false
-		elif grounded:
-			position.y = floor_y
-			vertical_speed = 0.0
-		elif vertical_speed >= 0.0 and position.y >= floor_y and position.y - floor_y <= 38.0:
-			position.y = floor_y
-			vertical_speed = 0.0
-			grounded = true
-	else:
-		if not ceiling_supported:
-			grounded = false
-		elif grounded:
-			position.y = ceiling_y
-			vertical_speed = 0.0
-		elif vertical_speed <= 0.0 and position.y <= ceiling_y and ceiling_y - position.y <= 38.0:
-			position.y = ceiling_y
-			vertical_speed = 0.0
-			grounded = true
+	var motion_state := {
+		"y": position.y,
+		"vertical_speed": vertical_speed,
+		"gravity_direction": gravity_direction,
+		"grounded": grounded,
+		"cooldown": cooldown_left,
+	}
+	RunnerMotionScript.advance_vertical(motion_state, delta, floor_surface_y, ceiling_surface_y, floor_supported, ceiling_supported)
+	position.y = float(motion_state.y)
+	vertical_speed = float(motion_state.vertical_speed)
+	gravity_direction = int(motion_state.gravity_direction)
+	grounded = bool(motion_state.grounded)
+	cooldown_left = float(motion_state.cooldown)
 	_update_sprite_orientation()
 	status_changed.emit(gravity_direction, cooldown_left)
 
@@ -123,14 +101,20 @@ func _is_pause_button_position(point: Vector2) -> bool:
 	return Rect2(viewport_width - 88.0, 52.0, 88.0, 88.0).has_point(point)
 
 func _try_flip(new_direction: int) -> void:
-	if not grounded or cooldown_left > 0.0 or new_direction == gravity_direction:
+	var motion_state := {
+		"gravity_direction": gravity_direction,
+		"grounded": grounded,
+		"vertical_speed": vertical_speed,
+		"cooldown": cooldown_left,
+	}
+	if not RunnerMotionScript.try_flip(motion_state, new_direction, _flip_cooldown_multiplier):
 		return
-	gravity_direction = new_direction
+	gravity_direction = int(motion_state.gravity_direction)
+	grounded = bool(motion_state.grounded)
+	vertical_speed = float(motion_state.vertical_speed)
+	cooldown_left = float(motion_state.cooldown)
 	gravity_flipped.emit()
 	_update_sprite_orientation()
-	grounded = false
-	vertical_speed = float(gravity_direction) * PLAYER_SPEED_Y
-	cooldown_left = COOLDOWN_SECONDS * _flip_cooldown_multiplier
 	status_changed.emit(gravity_direction, cooldown_left)
 
 func _unhandled_input(event: InputEvent) -> void:

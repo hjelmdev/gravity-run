@@ -7,6 +7,11 @@ class_name CourseGenerator
 const FLOOR_LANE := 1
 const CEILING_LANE := 2
 const BOTH_LANES := FLOOR_LANE | CEILING_LANE
+const SLOPE_WIDTH := 440.0
+const SPIKE_GROUP_SPACING := 32.0
+const STEP_SPIKE_CLEARANCE := 32.0
+const SPIKE_WIDTH := 28.0
+const SPIKE_HEIGHT := 32.0
 const BASE_EVENT_SPACING := 390.0
 # Base game tops out at 500 px/s. Reserve for a future 1.5x speed effect too.
 const MAX_RUN_SPEED := 750.0

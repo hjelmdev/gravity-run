@@ -109,6 +109,29 @@ func _initialize() -> void:
 	assert(is_equal_approx(float(prediction_simulation.get_player("local").get("world_x", 0.0)), 420.0), "prediction state should reconcile to host authority")
 	authority_state["world_x"] = NAN
 	assert(not prediction_simulation.apply_authoritative_player_state("local", authority_state), "invalid network positions must be rejected")
+	var barrel_block_manifest: Resource = _make_manifest([
+		{"event_id": "target_block", "kind": "block", "x": 1000.0, "y": 460.0, "width": 48.0, "height": 72.0, "from_ceiling": false},
+		{"event_id": "test_barrel", "kind": "barrels", "x": 1000.0, "y": 460.0, "width": 54.0, "height": 54.0, "count": 1, "spacing": 70.0, "motion_speed_multiplier": 1.4, "spawn_lead_distance": 100.0},
+	], 10000)
+	var barrel_block_simulation := SimulationScript.new()
+	assert(barrel_block_simulation.configure(barrel_block_manifest, [{"user_id": "barrel_runner"}]).is_empty())
+	barrel_block_simulation.start()
+	for _frame in range(200):
+		barrel_block_simulation.advance_frame(1.0 / 60.0)
+	var barrel_block_world: Dictionary = barrel_block_simulation.get_snapshot().get("world_hazards", {})
+	assert(barrel_block_world.get("destroyed_event_ids", []).has("target_block"), "a rolling barrel should destroy a breakable block in the shared course")
+	assert(bool(barrel_block_world.get("barrels", [])[0].get("destroyed", false)), "a barrel should be consumed when it breaks a block")
+	var barrel_spike_manifest: Resource = _make_manifest([
+		{"event_id": "target_spikes", "kind": "spikes", "x": 1000.0, "start_x": 986.0, "y": 460.0, "width": 28.0, "count": 1, "spacing": 32.0, "from_ceiling": false},
+		{"event_id": "test_barrel", "kind": "barrels", "x": 1000.0, "y": 460.0, "width": 54.0, "height": 54.0, "count": 1, "spacing": 70.0, "motion_speed_multiplier": 1.4, "spawn_lead_distance": 100.0},
+	], 10000)
+	var barrel_spike_simulation := SimulationScript.new()
+	assert(barrel_spike_simulation.configure(barrel_spike_manifest, [{"user_id": "spike_runner"}]).is_empty())
+	barrel_spike_simulation.start()
+	for _frame in range(120):
+		barrel_spike_simulation.advance_frame(1.0 / 60.0)
+	var barrel_spike_world: Dictionary = barrel_spike_simulation.get_snapshot().get("world_hazards", {})
+	assert(bool(barrel_spike_world.get("barrels", [])[0].get("destroyed", false)), "spikes should destroy a rolling barrel")
 	print("Multiplayer simulation tests passed.")
 	quit()
 

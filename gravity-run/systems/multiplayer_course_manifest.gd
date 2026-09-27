@@ -1,9 +1,9 @@
 extends Resource
 class_name MultiplayerCourseManifest
 
-@export var protocol_version := 1
+@export var protocol_version := 2
 @export var generator_version := 0
-@export var match_rules_version := 1
+@export var match_rules_version := 2
 @export var course_identity := ""
 @export var seed_value: int = 0
 @export var course_length_px := 0
@@ -20,7 +20,7 @@ class_name MultiplayerCourseManifest
 func to_canonical_dictionary() -> Dictionary:
 	return {
 		"protocol_version": protocol_version,
-		"manifest_version": 1,
+		"manifest_version": 2,
 		"match_rules_version": match_rules_version,
 		"generator_version": generator_version,
 		"course_identity": course_identity,
@@ -48,7 +48,7 @@ func calculate_hash() -> String:
 	return context.finish().hex_encode()
 
 func load_canonical_dictionary(data: Dictionary) -> bool:
-	if int(data.get("manifest_version", -1)) != 1 or not data.get("world", {}) is Dictionary:
+	if int(data.get("manifest_version", -1)) != 2 or not data.get("world", {}) is Dictionary:
 		return false
 	var world: Dictionary = data.world
 	protocol_version = int(data.get("protocol_version", 0))
@@ -76,7 +76,7 @@ func load_canonical_dictionary(data: Dictionary) -> bool:
 	return validate().is_empty()
 
 func validate() -> String:
-	if protocol_version != 1 or match_rules_version != 1:
+	if protocol_version != 2 or match_rules_version != 2:
 		return "Unsupported multiplayer course protocol or rules version."
 	if generator_version < 1 or seed_value <= 0:
 		return "The course needs a supported generator version and positive seed."
@@ -93,7 +93,7 @@ func validate() -> String:
 		var event_x := float(event.x)
 		if not is_finite(event_x) or event_x < start_x or event_x > finish_x + 1000.0 or event_x < previous_x:
 			return "Manifest events must be finite, ordered, and inside the course bounds."
-		if str(event.kind) not in ["spikes", "block", "gap", "step", "slope"]:
+		if str(event.kind) not in ["spikes", "block", "barrels", "gap", "step", "slope"]:
 			return "The manifest contains an unsupported dynamic or unknown event type."
 		previous_x = event_x
 	if manifest_hash.length() != 64 or calculate_hash() != manifest_hash:

@@ -4,8 +4,8 @@ const Config := preload("res://systems/leaderboard_config.gd")
 const LobbyProvider := preload("res://systems/supabase_lobby_provider.gd")
 const SignalingTransport := preload("res://systems/supabase_signaling_transport.gd")
 const WebRTCTransport := preload("res://systems/webrtc_match_transport.gd")
-const PROTOCOL_VERSION := 1
-const GAME_VERSION := "1"
+const PROTOCOL_VERSION := 2
+const GAME_VERSION := "2"
 const DEFAULT_COURSE_LENGTH_PX := 45000
 
 signal room_changed(room: Dictionary)

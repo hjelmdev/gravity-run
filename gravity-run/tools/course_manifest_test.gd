@@ -26,12 +26,14 @@ func _run() -> void:
 		_check(events.size() > 40, "the finite course should contain enough planned events")
 		var has_slope := false
 		var has_gap := false
+		var has_barrels := false
 		for event in events:
-			_check(str(event.get("kind", "")) != "barrels", "multiplayer race manifests must exclude moving barrels in v1")
 			has_slope = has_slope or str(event.get("kind", "")) == "slope"
 			has_gap = has_gap or str(event.get("kind", "")) == "gap"
+			has_barrels = has_barrels or str(event.get("kind", "")) == "barrels"
 		_check(has_slope, "manifest should include resolved slopes when generated")
 		_check(has_gap, "manifest should include track gaps when generated")
+		_check(has_barrels, "multiplayer should include the shared generator's independent barrel encounters")
 		_check(str(first.call("validate")).is_empty(), "fresh manifest should pass its own schema and hash validation")
 		var tampered_events: Array = events.duplicate(true)
 		tampered_events[0]["x"] = float(tampered_events[0]["x"]) + 1.0

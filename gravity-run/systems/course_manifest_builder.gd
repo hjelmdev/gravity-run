@@ -11,9 +11,9 @@ const WORLD_WIDTH := 960.0
 const WORLD_HEIGHT := 540.0
 const FLOOR_START_Y := WORLD_HEIGHT - 80.0
 const CEILING_START_Y := 80.0
-const SLOPE_WIDTH := 440.0
-const SPIKE_GROUP_SPACING := 32.0
-const STEP_SPIKE_CLEARANCE := 32.0
+const SLOPE_WIDTH := CourseGenerator.SLOPE_WIDTH
+const SPIKE_GROUP_SPACING := CourseGenerator.SPIKE_GROUP_SPACING
+const STEP_SPIKE_CLEARANCE := CourseGenerator.STEP_SPIKE_CLEARANCE
 
 func build(seed_value: int, course_length_px: int, generator_version: int = CourseGenerator.GENERATOR_VERSION) -> Dictionary:
 	if seed_value <= 0:
@@ -54,10 +54,8 @@ func _make_multiplayer_ruleset() -> Resource:
 	var ruleset := CourseRulesetScript.new() as Resource
 	ruleset.set("ruleset_id", &"multiplayer_race")
 	ruleset.set("revision", 1)
-	ruleset.set("include_all_profiles", false)
-	ruleset.set("included_profile_ids", PackedStringArray([
-		"spike_group", "block", "floor_gap", "ceiling_gap", "terrain_step", "terrain_slope",
-	]))
+	# Match the default singleplayer encounter catalog; keep mode-specific rules above it.
+	ruleset.set("include_all_profiles", true)
 	return ruleset
 
 func _resolve_events(source_events: Array[Dictionary], course_length_px: int) -> Array[Dictionary]:
@@ -72,7 +70,9 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int) ->
 		var event_x := PLAYER_START_X + course_distance
 		var kind := str(source.get("kind", ""))
 		var from_ceiling := bool(source.get("from_ceiling", false))
-		var surface_y := ceiling_y if from_ceiling else floor_y
+		var floor_surface_y := _surface_y_at(resolved, event_x, false)
+		var ceiling_surface_y := _surface_y_at(resolved, event_x, true)
+		var surface_y := _surface_y_at(resolved, event_x, from_ceiling)
 		var event_prefix := "event_%05d" % event_index
 		match kind:
 			"spikes":
@@ -90,14 +90,36 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int) ->
 					"from_ceiling": from_ceiling,
 				})
 			"block":
+				var block_width := float(source.get("width", 48.0))
+				var block_height := float(source.get("height", 72.0))
+				if floor_surface_y - ceiling_surface_y < block_height + 56.0:
+					event_index += 1
+					continue
 				resolved.append({
 					"event_id": event_prefix,
 					"kind": "block",
 					"x": event_x,
 					"y": surface_y,
-					"width": float(source.get("width", 48.0)),
-					"height": float(source.get("height", 72.0)),
+					"width": block_width,
+					"height": block_height,
 					"from_ceiling": from_ceiling,
+				})
+			"barrels":
+				var barrel_height := float(source.get("height", 54.0))
+				if floor_surface_y - ceiling_surface_y < barrel_height + 56.0:
+					event_index += 1
+					continue
+				resolved.append({
+					"event_id": event_prefix,
+					"kind": "barrels",
+					"x": event_x,
+					"y": surface_y,
+					"width": float(source.get("width", 54.0 + (int(source.get("count", 1)) - 1) * 70.0)),
+					"height": barrel_height,
+					"count": int(source.get("count", 1)),
+					"spacing": 70.0,
+					"motion_speed_multiplier": float(source.get("motion_speed_multiplier", 1.0)),
+					"spawn_lead_distance": CourseGenerator.EVENT_SPAWN_LEAD_DISTANCE,
 				})
 			"gap":
 				resolved.append({
@@ -108,7 +130,7 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int) ->
 					"from_ceiling": from_ceiling,
 				})
 			"step":
-				var start_y := surface_y
+				var start_y := ceiling_y if from_ceiling else floor_y
 				var change := float(source.get("height", 84.0))
 				var low_limit := 40.0 if from_ceiling else 330.0
 				var high_limit := 220.0 if from_ceiling else WORLD_HEIGHT - 40.0
@@ -135,18 +157,18 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int) ->
 						"kind": "spikes",
 						"x": spike_start_x,
 						"start_x": spike_start_x,
-					"y": end_y if points_left else start_y,
-					"count": spike_count,
-					"spacing": SPIKE_GROUP_SPACING,
-					"width": spike_width + 28.0,
-					"from_ceiling": from_ceiling,
-				})
+						"y": end_y if points_left else start_y,
+						"count": spike_count,
+						"spacing": SPIKE_GROUP_SPACING,
+						"width": spike_width + 28.0,
+						"from_ceiling": from_ceiling,
+					})
 				if from_ceiling:
 					ceiling_y = end_y
 				else:
 					floor_y = end_y
 			"slope":
-				var start_y := surface_y
+				var start_y := ceiling_y if from_ceiling else floor_y
 				var low_limit := 40.0 if from_ceiling else 330.0
 				var high_limit := 220.0 if from_ceiling else WORLD_HEIGHT - 40.0
 				var direction := float(source.get("slope_direction", 1.0))
@@ -176,3 +198,22 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int) ->
 		return str(a.event_id) < str(b.event_id)
 	)
 	return resolved
+
+func _surface_y_at(events: Array[Dictionary], x: float, ceiling: bool) -> float:
+	var surface_y := CEILING_START_Y if ceiling else FLOOR_START_Y
+	for event in events:
+		if bool(event.get("from_ceiling", false)) != ceiling:
+			continue
+		match str(event.get("kind", "")):
+			"step":
+				if x >= float(event.get("x", 0.0)):
+					surface_y = float(event.get("end_y", surface_y))
+			"slope":
+				var start_x := float(event.get("start_x", 0.0))
+				var end_x := float(event.get("end_x", start_x))
+				if x < start_x:
+					break
+				if x <= end_x and end_x > start_x:
+					return lerpf(float(event.get("start_y", surface_y)), float(event.get("end_y", surface_y)), (x - start_x) / (end_x - start_x))
+				surface_y = float(event.get("end_y", surface_y))
+	return surface_y

@@ -6,18 +6,28 @@ const ManifestScript := preload("res://systems/multiplayer_course_manifest.gd")
 func _ready() -> void:
 	var manifest: Resource = ManifestScript.new()
 	var events: Array[Dictionary] = [
+		{"event_id": "block_a", "kind": "block", "x": 120.0, "y": 460.0, "width": 48.0, "height": 72.0, "from_ceiling": false},
 		{"kind": "gap", "x": 200.0, "width": 100.0, "from_ceiling": false},
 		{"kind": "gap", "x": 250.0, "width": 100.0, "from_ceiling": false},
+		{"event_id": "barrels_a", "kind": "barrels", "x": 350.0, "y": 460.0, "width": 124.0, "height": 54.0, "count": 2, "spacing": 70.0, "motion_speed_multiplier": 1.4, "spawn_lead_distance": 820.0},
+		{"event_id": "spikes_a", "kind": "spikes", "x": 500.0, "start_x": 470.0, "y": 460.0, "count": 2, "spacing": 32.0, "from_ceiling": false},
+		{"event_id": "step_a", "kind": "step", "x": 650.0, "start_y": 460.0, "end_y": 400.0, "spiked": false, "from_ceiling": false},
+		{"event_id": "slope_a", "kind": "slope", "x": 900.0, "start_x": 680.0, "end_x": 1120.0, "start_y": 400.0, "end_y": 460.0, "from_ceiling": false},
 	]
 	manifest.set("events", events)
 	var match_view: Node2D = MatchScript.new()
 	match_view.set("_manifest", manifest)
-	var floor_intervals: Array = match_view.call("_solid_surface_intervals", false, 0.0, 400.0)
-	assert(floor_intervals.size() == 2)
-	assert(floor_intervals[0].is_equal_approx(Vector2(0.0, 150.0)))
-	assert(floor_intervals[1].is_equal_approx(Vector2(300.0, 400.0)))
-	var ceiling_intervals: Array = match_view.call("_solid_surface_intervals", true, 0.0, 400.0)
-	assert(ceiling_intervals.size() == 1 and ceiling_intervals[0].is_equal_approx(Vector2(0.0, 400.0)))
+	var course_root := Node2D.new()
+	match_view.add_child(course_root)
+	match_view.set("_course_root", course_root)
+	match_view.call("_build_course_view")
+	var course_nodes: Dictionary = match_view.get("_course_nodes")
+	assert(course_nodes["block_a"].get_script().resource_path == "res://hazards/block.gd")
+	assert(course_nodes["barrels_a_0"].get_script().resource_path == "res://hazards/barrel.gd")
+	assert(course_nodes["spikes_a_0"].get_script().resource_path == "res://hazards/spikes.gd")
+	assert(course_nodes["step_a"].get_script().resource_path == "res://terrain/ledge.gd")
+	assert(course_nodes["slope_a"].get_script().resource_path == "res://terrain/slope.gd")
+	assert(course_root.get_child_count() == 9, "manifest events should instantiate the same block, barrel, spike and terrain scenes as singleplayer")
 	assert(MatchScript.distance_m(180.0, 180.0) == 0)
 	assert(MatchScript.distance_m(12005.0, 180.0) == 1182)
 	match_view.free()

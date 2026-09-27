@@ -4,16 +4,18 @@ extends Node2D
 
 var screen_width := 960.0
 var screen_height := 540.0
-const RUN_SPEED_BASE := 500.0
+const RUNNER_MOTION_SCRIPT := preload("res://systems/runner_motion.gd")
+const COURSE_GENERATOR_SCRIPT := preload("res://systems/course_generator.gd")
+const RUN_SPEED_BASE := RUNNER_MOTION_SCRIPT.BASE_RUN_SPEED
 const COIN_DISTANCE := 720.0
 const WORLD_WIDTH := 960.0
 const WORLD_HEIGHT := 540.0
-const SLOPE_WIDTH := 440.0
+const SLOPE_WIDTH := COURSE_GENERATOR_SCRIPT.SLOPE_WIDTH
 const PLAYER_X := 180.0
-const SPIKE_WIDTH := 28.0
-const SPIKE_HEIGHT := 32.0
-const SPIKE_GROUP_SPACING := 32.0
-const STEP_SPIKE_CLEARANCE := 32.0
+const SPIKE_WIDTH := COURSE_GENERATOR_SCRIPT.SPIKE_WIDTH
+const SPIKE_HEIGHT := COURSE_GENERATOR_SCRIPT.SPIKE_HEIGHT
+const SPIKE_GROUP_SPACING := COURSE_GENERATOR_SCRIPT.SPIKE_GROUP_SPACING
+const STEP_SPIKE_CLEARANCE := COURSE_GENERATOR_SCRIPT.STEP_SPIKE_CLEARANCE
 const DEMO_AI_LOOKAHEAD := 700.0
 const SPIKE_SCENE := preload("res://hazards/spikes.tscn")
 const BLOCK_SCENE := preload("res://hazards/block.tscn")
@@ -24,7 +26,6 @@ const LOOT_PLANNER_SCRIPT := preload("res://systems/loot_spawn_planner.gd")
 const RUN_LOOT_ENABLED := false
 const SLOPE_SCENE := preload("res://terrain/slope.tscn")
 const LEDGE_SCENE := preload("res://terrain/ledge.tscn")
-const COURSE_GENERATOR_SCRIPT := preload("res://systems/course_generator.gd")
 const COURSE_RULESET_SCRIPT := preload("res://systems/course_generation_ruleset.gd")
 const COURSE_RUN_DEFINITION_SCRIPT := preload("res://systems/course_run_definition.gd")
 const TRACK_GAP_SCRIPT := preload("res://terrain/track_gap.gd")
@@ -193,7 +194,8 @@ func _physics_process(delta: float) -> void:
 
 	var speed := _run_speed()
 	_update_speed_debug()
-	var movement := speed * delta if not run_blocked else 0.0
+	var movement_multiplier := _equipment_speed_multiplier() * float(player.call("get_speed_multiplier"))
+	var movement := RUNNER_MOTION_SCRIPT.distance_for_delta(delta, movement_multiplier, run_blocked)
 	if not run_blocked:
 		var previous_distance := float(run_state.get("distance_m"))
 		player.call("advance_world_x", movement)
@@ -421,10 +423,10 @@ func _surface_angle_at(x: float, ceiling: bool) -> float:
 	return 0.0
 
 func _run_speed() -> float:
-	return _base_run_speed() * _equipment_speed_multiplier()
+	return RUNNER_MOTION_SCRIPT.speed_for_multiplier(float(player.call("get_speed_multiplier")) * _equipment_speed_multiplier())
 
 func _base_run_speed() -> float:
-	return RUN_SPEED_BASE * float(player.call("get_speed_multiplier"))
+	return RUNNER_MOTION_SCRIPT.speed_for_multiplier(float(player.call("get_speed_multiplier")))
 
 func _equipment_speed_multiplier() -> float:
 	var equipment_multiplier := 1.0
