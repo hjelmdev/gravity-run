@@ -1,5 +1,7 @@
 extends RefCounted
 class_name CourseGenerator
+
+const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 ## Deterministic, data-driven encounter planning with a route-feasibility check.
 ## New hazard profiles register their own blocked-lane forecasts; the planner
 ## rejects overlapping/no-exit patterns and spaces lane changes conservatively.
@@ -115,7 +117,7 @@ func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> b
 	_profiles.append(_make_profile(&"spike_group", &"spikes", 3.0, BOTH_LANES, Vector2(124.0, 188.0), Vector2i(4, 6), PackedFloat32Array([32.0])))
 	_profiles.append(_make_profile(&"block", &"block", 2.3, BOTH_LANES, Vector2(44.0, 64.0), Vector2i(1, 1), PackedFloat32Array([82.0, 132.0, 168.0])))
 	var barrel_weight := 1.7 if generator_version == LEGACY_GENERATOR_VERSION else 12.0
-	var barrel_profile := _make_profile(&"barrel_chain", &"barrels", barrel_weight, FLOOR_LANE, Vector2(54.0, 194.0), Vector2i(1, 3), PackedFloat32Array([54.0, 76.0]))
+	var barrel_profile := _make_profile(&"barrel_chain", &"barrels", barrel_weight, FLOOR_LANE, Vector2(HazardRules.BARREL_WIDTH, 194.0), Vector2i(1, 3), PackedFloat32Array([HazardRules.BARREL_WIDTH, 76.0]))
 	barrel_profile.motion_speed_min = BARREL_SPEED_MULTIPLIER
 	barrel_profile.motion_speed_max = BARREL_SPEED_MULTIPLIER
 	_profiles.append(barrel_profile)
@@ -281,8 +283,8 @@ func _try_append_independent_barrel(base_event: Dictionary, clearance: float) ->
 	var barrel_event := _barrel_profile.create_event(_rng, base_distance, _difficulty, FLOOR_LANE)
 	# Put the extra floor-only barrel chain just beyond the base obstacle so it
 	# rolls into that obstacle on screen; its independent roll never replaces it.
-	var chain_width := float(barrel_event.get("width", 54.0)) - 54.0
-	var separation := float(base_event.get("width", 54.0)) * 0.5 + chain_width * 0.5 + 54.0 + 24.0
+	var chain_width := float(barrel_event.get("width", HazardRules.BARREL_WIDTH)) - HazardRules.BARREL_WIDTH
+	var separation := float(base_event.get("width", HazardRules.BARREL_WIDTH)) * 0.5 + chain_width * 0.5 + HazardRules.BARREL_WIDTH + 24.0
 	barrel_event["course_distance"] = base_distance + separation
 	barrel_event["threats"] = _barrel_profile.build_threat_intervals(barrel_event)
 	var trial: Array[Dictionary] = []

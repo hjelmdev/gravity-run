@@ -4,8 +4,11 @@ const BuilderScript := preload("res://systems/course_manifest_builder.gd")
 const RaceRulesScript := preload("res://systems/multiplayer_race_rules.gd")
 const SimulationScript := preload("res://systems/multiplayer_simulation.gd")
 const ManifestScript := preload("res://systems/multiplayer_course_manifest.gd")
+const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 
 func _initialize() -> void:
+	assert(not HazardRules.spike_group_intersects_rect(1000.0, 460.0, 1, 32.0, 28.0, 32.0, false, Rect2(Vector2(986.0, 428.0), Vector2(2.0, 2.0))), "the triangular spike tip must not collide like its old bounding box")
+	assert(HazardRules.spike_group_intersects_rect(1000.0, 460.0, 1, 32.0, 28.0, 32.0, false, Rect2(Vector2(999.0, 427.0), Vector2(2.0, 3.0))), "the actual triangular spike tip must collide in shared geometry")
 	var manifest: Resource = ManifestScript.new()
 	manifest.set("generator_version", 4)
 	manifest.set("course_identity", "sim-test")
@@ -122,7 +125,7 @@ func _initialize() -> void:
 	assert(barrel_block_world.get("destroyed_event_ids", []).has("target_block"), "a rolling barrel should destroy a breakable block in the shared course")
 	assert(bool(barrel_block_world.get("barrels", [])[0].get("destroyed", false)), "a barrel should be consumed when it breaks a block")
 	var barrel_spike_manifest: Resource = _make_manifest([
-		{"event_id": "target_spikes", "kind": "spikes", "x": 1000.0, "start_x": 986.0, "y": 460.0, "width": 28.0, "count": 1, "spacing": 32.0, "from_ceiling": false},
+		{"event_id": "target_spikes", "kind": "spikes", "x": 1000.0, "start_x": 1000.0, "y": 460.0, "width": 28.0, "count": 1, "spacing": 32.0, "from_ceiling": false},
 		{"event_id": "test_barrel", "kind": "barrels", "x": 1000.0, "y": 460.0, "width": 54.0, "height": 54.0, "count": 1, "spacing": 70.0, "motion_speed_multiplier": 1.4, "spawn_lead_distance": 100.0},
 	], 10000)
 	var barrel_spike_simulation := SimulationScript.new()

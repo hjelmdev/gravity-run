@@ -2,6 +2,7 @@ extends RefCounted
 class_name CourseManifestBuilder
 
 const CourseGeneratorScript := preload("res://systems/course_generator.gd")
+const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const CourseRulesetScript := preload("res://systems/course_generation_ruleset.gd")
 const CourseRunDefinitionScript := preload("res://systems/course_run_definition.gd")
 const ManifestScript := preload("res://systems/multiplayer_course_manifest.gd")
@@ -77,12 +78,13 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int) ->
 		match kind:
 			"spikes":
 				var count := int(source.get("count", 4))
-				var width := float((count - 1) * 32 + 28)
+				var group_spacing := float((count - 1) * SPIKE_GROUP_SPACING)
+				var width := group_spacing + CourseGenerator.SPIKE_WIDTH
 				resolved.append({
 					"event_id": event_prefix,
 					"kind": "spikes",
 					"x": event_x,
-					"start_x": event_x - width * 0.5,
+					"start_x": event_x - group_spacing * 0.5,
 					"y": surface_y,
 					"count": count,
 					"spacing": SPIKE_GROUP_SPACING,
@@ -105,7 +107,7 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int) ->
 					"from_ceiling": from_ceiling,
 				})
 			"barrels":
-				var barrel_height := float(source.get("height", 54.0))
+				var barrel_height := float(source.get("height", HazardRules.BARREL_WIDTH))
 				if floor_surface_y - ceiling_surface_y < barrel_height + 56.0:
 					event_index += 1
 					continue
@@ -114,10 +116,10 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int) ->
 					"kind": "barrels",
 					"x": event_x,
 					"y": surface_y,
-					"width": float(source.get("width", 54.0 + (int(source.get("count", 1)) - 1) * 70.0)),
+					"width": float(source.get("width", HazardRules.BARREL_WIDTH + (int(source.get("count", 1)) - 1) * HazardRules.BARREL_CHAIN_SPACING)),
 					"height": barrel_height,
 					"count": int(source.get("count", 1)),
-					"spacing": 70.0,
+					"spacing": HazardRules.BARREL_CHAIN_SPACING,
 					"motion_speed_multiplier": float(source.get("motion_speed_multiplier", 1.0)),
 					"spawn_lead_distance": CourseGenerator.EVENT_SPAWN_LEAD_DISTANCE,
 				})
@@ -160,7 +162,7 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int) ->
 						"y": end_y if points_left else start_y,
 						"count": spike_count,
 						"spacing": SPIKE_GROUP_SPACING,
-						"width": spike_width + 28.0,
+						"width": spike_width + CourseGenerator.SPIKE_WIDTH,
 						"from_ceiling": from_ceiling,
 					})
 				if from_ceiling:

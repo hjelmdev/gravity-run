@@ -8,6 +8,10 @@ Spelare på olika enheter ska kunna skapa eller gå med i en privat lobby med ko
 
 Första versionen har inga varv, respawn, liv, PvP-föremål, boosts, publikt matchmakingflöde, kontokrav eller permanenta multiplayerresultat. Dessa får däremot tydliga modellgränser så de kan läggas till utan att lobby-, ban- och nätverksprotokollet måste skrivas om.
 
+### Gemensam spelkod mellan singleplayer och multiplayer
+
+Singleplayer och multiplayer får inte ha egna varianter av hinderutseende eller grundläggande hinderregler. Båda använder samma `CourseGenerator`, samma hazard-/terrängscener och gemensamma kollisions-/rörelseregler. Multiplayer får ha en separat auktoritativ simulering och nätverksadapter, men den ska anropa samma regler för exempelvis spelarträffar, spiktrianglar, tunnors rörelse och tunna–hinder-interaktioner. Nya hinder eller ändrade mått ska definieras i den gemensamma modellen och sedan serialiseras till manifestet; manifestformatet beskriver banan men får inte bli en andra implementation av reglerna.
+
 ## Varför arbetet inte kan läggas direkt i `main.gd`
 
 - `main.gd::_physics_process()` ökar `course_distance` för **en** spelare, flyttar hinder/terräng åt vänster och håller spelaren vid `PLAYER_X`. Det är ett kameratrick för singleplayer, inte en gemensam världskoordinat. `main.gd::_run_speed()` använder redan `player.get_speed_multiplier()`, så befintliga fartökningar får banan att rulla förbi snabbare. Men en spelare kan inte springa ifrån en annan i en gemensam värld så länge de saknar varsin absolut X-position. **Bygg därför om singleplayer först:** spelaren får `world_x` som faktisk position, hinder/terräng ligger kvar vid absoluta X-positioner och kameran följer spelaren. Samma rörelsemodell återanvänds sedan i multiplayer. Renderad X-position för en annan spelare kan vara `PLAYER_X + other.world_x - local_player.world_x`.

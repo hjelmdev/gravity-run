@@ -5,6 +5,7 @@ extends Node2D
 var screen_width := 960.0
 var screen_height := 540.0
 const RUNNER_MOTION_SCRIPT := preload("res://systems/runner_motion.gd")
+const HAZARD_RULES_SCRIPT := preload("res://systems/hazard_interaction_rules.gd")
 const COURSE_GENERATOR_SCRIPT := preload("res://systems/course_generator.gd")
 const RUN_SPEED_BASE := RUNNER_MOTION_SCRIPT.BASE_RUN_SPEED
 const COIN_DISTANCE := 720.0
@@ -240,16 +241,19 @@ func _physics_process(delta: float) -> void:
 		if bool(obstacle.call("is_destroying_now")):
 			continue
 		var player_rect: Rect2 = player.call("get_player_rect")
-		if obstacle.has_method("intersects_spikes") and bool(obstacle.call("intersects_spikes", player_rect)):
-			if not bool(player.call("is_spike_immune")):
-				_end_run()
-				break
-		if _player_hits_obstacle(obstacle):
-			if obstacle.is_in_group("blocking_edges"):
-				blocked_by_edge = true
-				continue
-			if bool(player.call("is_spike_immune")) and obstacle.is_in_group("spikes"):
-				continue
+		var impact := HAZARD_RULES_SCRIPT.PlayerImpact.NONE
+		if obstacle.is_in_group("spikes") and obstacle.has_method("get_world_triangles"):
+			impact = HAZARD_RULES_SCRIPT.player_impact(player_rect, "spikes", Rect2(), obstacle.call("get_world_triangles"), Vector2.ZERO, 0.0, bool(player.call("is_spike_immune")))
+		elif obstacle.is_in_group("barrels"):
+			var barrel_size: Vector2 = obstacle.get("size")
+			var barrel_center: Vector2 = HAZARD_RULES_SCRIPT.barrel_center(obstacle.global_position, barrel_size.x, barrel_size.y, bool(obstacle.get("from_ceiling")))
+			impact = HAZARD_RULES_SCRIPT.player_impact(player_rect, "barrel", Rect2(), [], barrel_center, HAZARD_RULES_SCRIPT.barrel_radius(barrel_size.x, barrel_size.y))
+		else:
+			var kind := "edge" if obstacle.is_in_group("blocking_edges") else "rect"
+			impact = HAZARD_RULES_SCRIPT.player_impact(player_rect, kind, obstacle.call("get_hitbox_rect"))
+		if impact == HAZARD_RULES_SCRIPT.PlayerImpact.BLOCKED:
+			blocked_by_edge = true
+		elif impact == HAZARD_RULES_SCRIPT.PlayerImpact.LETHAL:
 			_end_run()
 			break
 	if not game_over:
@@ -257,20 +261,19 @@ func _physics_process(delta: float) -> void:
 		for terrain in slopes:
 			if not terrain.has_method("is_terrain_step") or not bool(terrain.call("is_terrain_step")):
 				continue
-			if bool(terrain.call("intersects_spikes", player_rect)) and not bool(player.call("is_spike_immune")):
+			var spike_triangles: Array = terrain.call("get_world_spike_triangles") if terrain.has_method("get_world_spike_triangles") else []
+			if HAZARD_RULES_SCRIPT.player_impact(player_rect, "spikes", Rect2(), spike_triangles, Vector2.ZERO, 0.0, bool(player.call("is_spike_immune"))) == HAZARD_RULES_SCRIPT.PlayerImpact.LETHAL:
 				_end_run()
 				break
-			if bool(terrain.call("intersects_wall", player_rect)):
+			var from_ceiling := bool(terrain.call("is_ceiling_slope"))
+			var gravity_direction := int(player.call("get_gravity_direction"))
+			var step_rect: Rect2 = terrain.call("get_wall_rect")
+			var impact := HAZARD_RULES_SCRIPT.player_impact(player_rect, "step", step_rect, [], Vector2.ZERO, 0.0, false, gravity_direction, from_ceiling, float(terrain.call("get_start_y")), float(terrain.call("get_end_y")))
+			if impact == HAZARD_RULES_SCRIPT.PlayerImpact.BLOCKED:
 				# Let the runner pass a step when its surface moves away in the
 				# direction of gravity: down over a floor drop or up over a rising
 				# ceiling step.
-				var from_ceiling := bool(terrain.call("is_ceiling_slope"))
-				var gravity_direction := int(player.call("get_gravity_direction"))
-				var surface_delta := float(terrain.call("get_end_y")) - float(terrain.call("get_start_y"))
-				var surface_moves_away := (gravity_direction > 0 and not from_ceiling and surface_delta > 0.0) \
-					or (gravity_direction < 0 and from_ceiling and surface_delta < 0.0)
-				if not surface_moves_away:
-					blocked_by_edge = true
+				blocked_by_edge = true
 	run_blocked = blocked_by_edge and not game_over
 	hud.call("set_run_blocked", run_blocked)
 	if not demo_mode:
@@ -471,13 +474,13 @@ func _spawn_course_event(event: Dictionary) -> void:
 			_spawn_obstacle_scene(BLOCK_SCENE, width, height, from_ceiling, event_x)
 		&"barrels":
 			var count := int(event.get("count", 1))
-			var chain_width := float(count - 1) * 70.0
+			var chain_width := float(count - 1) * HAZARD_RULES_SCRIPT.BARREL_CHAIN_SPACING
 			var motion_speed_multiplier := float(event.get("motion_speed_multiplier", 1.0))
 			# Keep the barrel's encounter timing tied to the canonical planner lead
 			# even when a wide desktop viewport requires spawning it much earlier.
 			var early_spawn_offset := maxf(event_spawn_lead - COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE, 0.0) * (motion_speed_multiplier - 1.0)
 			for index in range(count):
-				_spawn_obstacle_scene(BARREL_SCENE, 54.0, height, false, event_x + early_spawn_offset - chain_width * 0.5 + float(index) * 70.0, motion_speed_multiplier)
+				_spawn_obstacle_scene(BARREL_SCENE, HAZARD_RULES_SCRIPT.BARREL_WIDTH, height, false, event_x + early_spawn_offset - chain_width * 0.5 + float(index) * HAZARD_RULES_SCRIPT.BARREL_CHAIN_SPACING, motion_speed_multiplier)
 		&"gap":
 			var gap := TRACK_GAP_SCRIPT.new() as TrackGap
 			gap.position = Vector2(event_x, 0.0)
@@ -575,21 +578,31 @@ func _resolve_obstacle_interactions() -> void:
 	for barrel in obstacles:
 		if not is_instance_valid(barrel) or barrel.is_queued_for_deletion() or bool(barrel.call("is_destroying_now")) or not barrel.is_in_group("barrels"):
 			continue
-		var barrel_rect: Rect2 = barrel.call("get_hitbox_rect")
+		var barrel_size: Vector2 = barrel.get("size")
+		var radius := HAZARD_RULES_SCRIPT.barrel_radius(barrel_size.x, barrel_size.y)
+		var center := HAZARD_RULES_SCRIPT.barrel_center(barrel.global_position, barrel_size.x, barrel_size.y, bool(barrel.get("from_ceiling")))
 		for obstacle in obstacles:
 			if obstacle == barrel or not is_instance_valid(obstacle) or obstacle.is_queued_for_deletion() or bool(obstacle.call("is_destroying_now")):
 				continue
-			if obstacle.is_in_group("spikes") and obstacle.has_method("intersects_rect") and bool(obstacle.call("intersects_rect", barrel_rect)):
-				barrel.call("destroy")
-				break
+			if obstacle.is_in_group("spikes") and obstacle.has_method("get_world_triangles"):
+				var impact: int = HAZARD_RULES_SCRIPT.barrel_impact(center, radius, "spikes", Rect2(), obstacle.call("get_world_triangles"))
+				if impact == HAZARD_RULES_SCRIPT.BarrelImpact.BARREL_DESTROYED:
+					barrel.call("destroy")
+					break
 		if bool(barrel.call("is_destroying_now")):
 			continue
 		for terrain in slopes:
 			if not terrain.has_method("is_terrain_step") or not bool(terrain.call("is_terrain_step")):
 				continue
+			if bool(terrain.get("has_spikes")) and terrain.has_method("get_world_spike_triangles"):
+				var spike_impact: int = HAZARD_RULES_SCRIPT.barrel_impact(center, radius, "spikes", Rect2(), terrain.call("get_world_spike_triangles"))
+				if spike_impact == HAZARD_RULES_SCRIPT.BarrelImpact.BARREL_DESTROYED:
+					barrel.call("destroy")
+					break
 			# Barrels travel left with the world; allow them to roll off a floor drop.
 			var is_floor_drop := not bool(terrain.call("is_ceiling_slope")) and float(terrain.call("get_start_y")) > float(terrain.call("get_end_y"))
-			if not is_floor_drop and bool(barrel.call("intersects_rect", terrain.call("get_wall_rect"))):
+			var step_impact: int = HAZARD_RULES_SCRIPT.barrel_impact(center, radius, "step", terrain.call("get_wall_rect"))
+			if not is_floor_drop and step_impact == HAZARD_RULES_SCRIPT.BarrelImpact.BARREL_DESTROYED:
 				barrel.call("destroy")
 				break
 		if bool(barrel.call("is_destroying_now")):
@@ -599,7 +612,8 @@ func _resolve_obstacle_interactions() -> void:
 				continue
 			if not obstacle.is_in_group("breakable"):
 				continue
-			if bool(barrel.call("intersects_rect", obstacle.call("get_hitbox_rect"))):
+			var block_impact: int = HAZARD_RULES_SCRIPT.barrel_impact(center, radius, "block", obstacle.call("get_hitbox_rect"))
+			if block_impact == HAZARD_RULES_SCRIPT.BarrelImpact.BARREL_AND_TARGET_DESTROYED:
 				obstacle.call("destroy")
 				barrel.call("destroy")
 				break

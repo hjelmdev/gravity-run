@@ -8,6 +8,8 @@ const BarrelScene := preload("res://hazards/barrel.tscn")
 const SlopeScene := preload("res://terrain/slope.tscn")
 const LedgeScene := preload("res://terrain/ledge.tscn")
 const TrackGapScript := preload("res://terrain/track_gap.gd")
+const CourseGenerator := preload("res://systems/course_generator.gd")
+const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 
 const WORLD_HEIGHT := 540.0
 const CAMERA_LEAD := 180.0
@@ -342,7 +344,7 @@ func _build_course_view() -> void:
 				for index in range(int(event.get("count", 1))):
 					var spike := SpikeScene.instantiate() as Node2D
 					spike.position = Vector2(start_x + float(index) * float(event.get("spacing", 32.0)), float(event.get("y", surface_y)))
-					spike.call("configure", Vector2(28.0, 32.0), from_ceiling)
+					spike.call("configure", Vector2(CourseGenerator.SPIKE_WIDTH, CourseGenerator.SPIKE_HEIGHT), from_ceiling)
 					spike.name = "Spike_%s_%d" % [event_id, index]
 					_course_root.add_child(spike)
 					_course_nodes["%s_%d" % [event_id, index]] = spike
@@ -355,7 +357,7 @@ func _build_course_view() -> void:
 				_course_nodes[event_id] = block
 			"barrels":
 				var count := int(event.get("count", 1))
-				var spacing := float(event.get("spacing", 70.0))
+				var spacing := float(event.get("spacing", HazardRules.BARREL_CHAIN_SPACING))
 				var chain_width := float(count - 1) * spacing
 				var speed_multiplier := float(event.get("motion_speed_multiplier", 1.0))
 				var spawn_offset := float(event.get("spawn_lead_distance", 820.0)) * (speed_multiplier - 1.0)
@@ -363,7 +365,7 @@ func _build_course_view() -> void:
 					var barrel_id := "%s_%d" % [event_id, index]
 					var barrel := BarrelScene.instantiate() as Node2D
 					barrel.position = Vector2(x + spawn_offset - chain_width * 0.5 + float(index) * spacing, float(event.get("y", floor_y)))
-					barrel.call("configure", Vector2(54.0, float(event.get("height", 54.0))), false)
+					barrel.call("configure", Vector2(HazardRules.BARREL_WIDTH, float(event.get("height", HazardRules.BARREL_WIDTH))), false)
 					barrel.call("set_motion_speed_multiplier", speed_multiplier)
 					barrel.name = "Barrel_%s" % barrel_id
 					_course_root.add_child(barrel)

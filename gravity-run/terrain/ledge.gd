@@ -1,8 +1,9 @@
 extends "res://hazards/hazard.gd"
 
+const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
+
 const SPIKE_DEPTH := 24.0
 const SPIKE_COLOR := Color("ff647c")
-const WALL_THICKNESS := 4.0
 
 var start_surface_y := 0.0
 var end_surface_y := 0.0
@@ -50,8 +51,7 @@ func scale_track_height(scale: float) -> void:
 	queue_redraw()
 
 func get_wall_rect() -> Rect2:
-	var top := minf(start_surface_y, end_surface_y)
-	return Rect2(Vector2(global_position.x - WALL_THICKNESS * 0.5, top), Vector2(WALL_THICKNESS, absf(end_surface_y - start_surface_y)))
+	return HazardRules.step_wall_rect(global_position.x, start_surface_y, end_surface_y)
 
 func intersects_wall(rect: Rect2) -> bool:
 	return get_wall_rect().intersects(rect)
@@ -89,37 +89,20 @@ func intersects_spikes(rect: Rect2) -> bool:
 		var triangle := PackedVector2Array()
 		for point in local_triangle:
 			triangle.append(to_global(point))
-		if _triangle_intersects_rect(triangle, rect):
+		if HazardRules.triangle_intersects_rect(triangle, rect):
 			return true
 	return false
 
-func _triangle_intersects_rect(triangle: PackedVector2Array, rect: Rect2) -> bool:
-	var rectangle := PackedVector2Array([
-		rect.position,
-		Vector2(rect.end.x, rect.position.y),
-		rect.end,
-		Vector2(rect.position.x, rect.end.y)
-	])
-	var axes := PackedVector2Array([Vector2.RIGHT, Vector2.DOWN])
-	for i in range(triangle.size()):
-		var edge: Vector2 = triangle[(i + 1) % triangle.size()] - triangle[i]
-		axes.append(Vector2(-edge.y, edge.x).normalized())
-	for axis in axes:
-		if _projections_are_separate(triangle, rectangle, axis):
-			return false
-	return true
+func get_world_spike_triangles() -> Array[PackedVector2Array]:
+	var triangles: Array[PackedVector2Array] = []
+	if not has_spikes:
+		return triangles
+	for local_triangle in _spike_triangles_local():
+		var triangle := PackedVector2Array()
+		for point in local_triangle:
+			triangle.append(to_global(point))
+		triangles.append(triangle)
+	return triangles
 
-func _projections_are_separate(first: PackedVector2Array, second: PackedVector2Array, axis: Vector2) -> bool:
-	var first_min := first[0].dot(axis)
-	var first_max := first_min
-	for point in first:
-		var projection := point.dot(axis)
-		first_min = minf(first_min, projection)
-		first_max = maxf(first_max, projection)
-	var second_min := second[0].dot(axis)
-	var second_max := second_min
-	for point in second:
-		var projection := point.dot(axis)
-		second_min = minf(second_min, projection)
-		second_max = maxf(second_max, projection)
-	return first_max < second_min or second_max < first_min
+func _triangle_intersects_rect(triangle: PackedVector2Array, rect: Rect2) -> bool:
+	return HazardRules.triangle_intersects_rect(triangle, rect)

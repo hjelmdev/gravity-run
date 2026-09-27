@@ -3,6 +3,8 @@ class_name MultiplayerSimulation
 
 const RaceRulesScript := preload("res://systems/multiplayer_race_rules.gd")
 const RunnerMotionScript := preload("res://systems/runner_motion.gd")
+const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
+const CourseGenerator := preload("res://systems/course_generator.gd")
 const TICK_RATE := 60
 const FIXED_DELTA := 1.0 / TICK_RATE
 const PLAYER_WIDTH := RunnerMotionScript.SIZE.x
@@ -64,7 +66,7 @@ func configure(course_manifest: Resource, players: Array) -> String:
 		if str(event.get("kind", "")) != "barrels":
 			continue
 		var count := clampi(int(event.get("count", 1)), 1, 6)
-		var spacing := float(event.get("spacing", 70.0))
+		var spacing := float(event.get("spacing", HazardRules.BARREL_CHAIN_SPACING))
 		var chain_width := float(count - 1) * spacing
 		var multiplier := maxf(float(event.get("motion_speed_multiplier", 1.0)), 1.0)
 		var spawn_lead := float(event.get("spawn_lead_distance", 820.0))
@@ -74,9 +76,9 @@ func configure(course_manifest: Resource, players: Array) -> String:
 				"event_id": str(event.get("event_id", "")),
 				"x": float(event.get("x", 0.0)) + spawn_lead * (multiplier - 1.0) - chain_width * 0.5 + float(index) * spacing,
 				"y": float(event.get("y", manifest.get("initial_floor_y"))),
-				"width": 54.0,
-				"height": float(event.get("height", 54.0)),
-				"speed": RunnerMotionScript.BASE_RUN_SPEED * (multiplier - 1.0),
+				"width": HazardRules.BARREL_WIDTH,
+				"height": float(event.get("height", HazardRules.BARREL_WIDTH)),
+				"motion_speed_multiplier": multiplier,
 				"spawn_time": maxf(0.0, float(event.get("x", 0.0)) - spawn_lead - float(manifest.get("start_x"))) / RunnerMotionScript.BASE_RUN_SPEED,
 				"spawned": false,
 				"fall_velocity": 0.0,
@@ -200,32 +202,19 @@ func _step_world_hazards() -> void:
 			if _world_elapsed < float(barrel.get("spawn_time", INF)):
 				continue
 			barrel.spawned = true
-		var delta_x := float(barrel.get("speed", 0.0)) * FIXED_DELTA
-		barrel.x = float(barrel.x) - delta_x
-		var floor_info := _surface_at(float(barrel.x), false)
-		var floor_y := float(floor_info.y)
-		if bool(barrel.falling):
-			barrel.fall_velocity = float(barrel.fall_velocity) + 1800.0 * FIXED_DELTA
-			barrel.y = float(barrel.y) + float(barrel.fall_velocity) * FIXED_DELTA
-			if bool(floor_info.supported) and float(barrel.y) >= floor_y:
-				barrel.y = floor_y
-				barrel.falling = false
-				barrel.fall_velocity = 0.0
-		elif not bool(floor_info.supported) or floor_y - float(barrel.y) > 14.0:
-			barrel.falling = true
-			barrel.fall_velocity = 0.0
-		elif floor_y - float(barrel.y) >= -14.0:
-			barrel.y = floor_y
-		barrel.roll_angle = float(barrel.roll_angle) - delta_x / maxf(minf(float(barrel.width), float(barrel.height)) * 0.5, 1.0)
-		barrel.rotation = _surface_angle_at(float(barrel.x), false)
+		var reference_movement := RunnerMotionScript.BASE_RUN_SPEED * FIXED_DELTA
+		var projected_x := float(barrel.x) - reference_movement * (float(barrel.motion_speed_multiplier) - 1.0)
+		var floor_info := _surface_at(projected_x, false)
+		HazardRules.advance_barrel(barrel, FIXED_DELTA, reference_movement, float(floor_info.y), _surface_angle_at(projected_x, false), bool(floor_info.supported))
 		_resolve_barrel_interactions(barrel)
 
 func _resolve_barrel_interactions(barrel: Dictionary) -> void:
 	if bool(barrel.get("destroyed", false)):
 		return
-	var radius := minf(float(barrel.get("width", 54.0)), float(barrel.get("height", 54.0))) * 0.5
-	var center := Vector2(float(barrel.get("x", 0.0)), float(barrel.get("y", 0.0)) - radius)
-	var barrel_rect := Rect2(center - Vector2(radius, radius), Vector2(radius * 2.0, radius * 2.0))
+	var barrel_width := float(barrel.get("width", HazardRules.BARREL_WIDTH))
+	var barrel_height := float(barrel.get("height", HazardRules.BARREL_WIDTH))
+	var radius := HazardRules.barrel_radius(barrel_width, barrel_height)
+	var center := HazardRules.barrel_center(Vector2(float(barrel.get("x", 0.0)), float(barrel.get("y", 0.0))), barrel_width, barrel_height)
 	for event in manifest.get("events"):
 		var event_id := str(event.get("event_id", ""))
 		if _destroyed_event_ids.has(event_id):
@@ -234,9 +223,10 @@ func _resolve_barrel_interactions(barrel: Dictionary) -> void:
 		if kind == "spikes":
 			var spike_start := float(event.get("start_x", event.get("x", 0.0)))
 			var spike_y := float(event.get("y", 0.0))
-			var spike_width := float(event.get("width", 28.0))
-			var spike_rect_y := spike_y - 32.0 if not bool(event.get("from_ceiling", false)) else spike_y
-			if barrel_rect.intersects(Rect2(Vector2(spike_start, spike_rect_y), Vector2(spike_width, 32.0))):
+			var count := int(event.get("count", 1))
+			var spacing := float(event.get("spacing", CourseGenerator.SPIKE_GROUP_SPACING))
+			var triangles: Array = HazardRules.spike_group_triangles(spike_start, spike_y, count, spacing, CourseGenerator.SPIKE_WIDTH, CourseGenerator.SPIKE_HEIGHT, bool(event.get("from_ceiling", false)))
+			if HazardRules.barrel_impact(center, radius, "spikes", Rect2(), triangles) == HazardRules.BarrelImpact.BARREL_DESTROYED:
 				barrel.destroyed = true
 				return
 		elif kind == "block":
@@ -244,7 +234,8 @@ func _resolve_barrel_interactions(barrel: Dictionary) -> void:
 			var height := float(event.get("height", 72.0))
 			var edge_y := float(event.get("y", 0.0))
 			var block_y := edge_y - height if not bool(event.get("from_ceiling", false)) else edge_y
-			if barrel_rect.intersects(Rect2(Vector2(float(event.get("x", 0.0)) - width * 0.5, block_y), Vector2(width, height))):
+			var impact := HazardRules.barrel_impact(center, radius, "block", Rect2(Vector2(float(event.get("x", 0.0)) - width * 0.5, block_y), Vector2(width, height)))
+			if impact == HazardRules.BarrelImpact.BARREL_AND_TARGET_DESTROYED:
 				_destroyed_event_ids[event_id] = true
 				barrel.destroyed = true
 				return
@@ -252,16 +243,11 @@ func _resolve_barrel_interactions(barrel: Dictionary) -> void:
 		if str(event.get("kind", "")) != "step":
 			continue
 		var step_x := float(event.get("x", 0.0))
-		var step_top := minf(float(event.get("start_y", 0.0)), float(event.get("end_y", 0.0)))
-		var step_rect := Rect2(Vector2(step_x - 2.0, step_top), Vector2(4.0, absf(float(event.get("end_y", 0.0)) - float(event.get("start_y", 0.0)))))
+		var step_rect := HazardRules.step_wall_rect(step_x, float(event.get("start_y", 0.0)), float(event.get("end_y", 0.0)))
 		var floor_drop := not bool(event.get("from_ceiling", false)) and float(event.get("start_y", 0.0)) > float(event.get("end_y", 0.0))
-		if not floor_drop and barrel_rect.intersects(step_rect):
+		if not floor_drop and HazardRules.barrel_impact(center, radius, "step", step_rect) == HazardRules.BarrelImpact.BARREL_DESTROYED:
 			barrel.destroyed = true
 			return
-
-func _circle_intersects_rect(center: Vector2, radius: float, rect: Rect2) -> bool:
-	var closest := Vector2(clampf(center.x, rect.position.x, rect.end.x), clampf(center.y, rect.position.y, rect.end.y))
-	return center.distance_squared_to(closest) <= radius * radius
 
 func _surface_angle_at(x: float, ceiling: bool) -> float:
 	for event in manifest.get("events"):
@@ -345,12 +331,9 @@ func _blocks_at_next_x(player: Dictionary, next_x: float) -> bool:
 			continue
 		if kind == "step":
 			var from_ceiling := bool(event.get("from_ceiling", false))
-			var surface_delta := float(event.get("end_y", 0.0)) - float(event.get("start_y", 0.0))
-			var moves_away := (direction > 0 and not from_ceiling and surface_delta > 0.0) or (direction < 0 and from_ceiling and surface_delta < 0.0)
-			var wall_x := float(event.get("x", 0.0))
-			var top := minf(float(event.get("start_y", 0.0)), float(event.get("end_y", 0.0)))
-			var height := absf(float(event.get("end_y", 0.0)) - float(event.get("start_y", 0.0)))
-			if not moves_away and player_rect.intersects(Rect2(Vector2(wall_x - 5.0, top), Vector2(10.0, height))):
+			var step_rect := HazardRules.step_wall_rect(float(event.get("x", 0.0)), float(event.get("start_y", 0.0)), float(event.get("end_y", 0.0)))
+			var impact := HazardRules.player_impact(player_rect, "step", step_rect, [], Vector2.ZERO, 0.0, false, direction, from_ceiling, float(event.get("start_y", 0.0)), float(event.get("end_y", 0.0)))
+			if impact == HazardRules.PlayerImpact.BLOCKED:
 				return true
 		if kind == "block":
 			var width := float(event.get("width", 48.0))
@@ -358,14 +341,16 @@ func _blocks_at_next_x(player: Dictionary, next_x: float) -> bool:
 			var edge_y := float(event.get("y", 0.0))
 			var rect_y := edge_y - height if not bool(event.get("from_ceiling", false)) else edge_y
 			var block := Rect2(Vector2(float(event.get("x", 0.0)) - width * 0.5, rect_y), Vector2(width, height))
-			if player_rect.intersects(block):
+			if HazardRules.player_impact(player_rect, "block", block) == HazardRules.PlayerImpact.LETHAL:
 				return true
 	for barrel in _barrels:
 		if not bool(barrel.get("spawned", false)) or bool(barrel.get("destroyed", false)):
 			continue
-		var radius := minf(float(barrel.get("width", 54.0)), float(barrel.get("height", 54.0))) * 0.5
-		var center := Vector2(float(barrel.get("x", 0.0)), float(barrel.get("y", 0.0)) - radius)
-		if _circle_intersects_rect(center, radius, player_rect):
+		var barrel_width := float(barrel.get("width", HazardRules.BARREL_WIDTH))
+		var barrel_height := float(barrel.get("height", HazardRules.BARREL_WIDTH))
+		var radius := HazardRules.barrel_radius(barrel_width, barrel_height)
+		var center := HazardRules.barrel_center(Vector2(float(barrel.get("x", 0.0)), float(barrel.get("y", 0.0))), barrel_width, barrel_height)
+		if HazardRules.player_impact(player_rect, "barrel", Rect2(), [], center, radius) == HazardRules.PlayerImpact.LETHAL:
 			return true
 	return false
 
@@ -377,23 +362,24 @@ func _hits_lethal_event(player: Dictionary) -> bool:
 			continue
 		if kind == "spikes":
 			var x := float(event.get("start_x", event.get("x", 0.0)))
-			var width := float(event.get("width", 32.0))
-			var y := float(event.get("y", 0.0))
-			var spike_rect := Rect2(Vector2(x, y - 32.0 if not bool(event.get("from_ceiling", false)) else y), Vector2(width, 32.0))
-			if rect.intersects(spike_rect):
+			var triangles: Array = HazardRules.spike_group_triangles(x, float(event.get("y", 0.0)), int(event.get("count", 1)), float(event.get("spacing", CourseGenerator.SPIKE_GROUP_SPACING)), CourseGenerator.SPIKE_WIDTH, CourseGenerator.SPIKE_HEIGHT, bool(event.get("from_ceiling", false)))
+			if HazardRules.player_impact(rect, "spikes", Rect2(), triangles) == HazardRules.PlayerImpact.LETHAL:
 				return true
 		if kind == "block":
 			var width := float(event.get("width", 48.0))
 			var height := float(event.get("height", 72.0))
 			var edge_y := float(event.get("y", 0.0))
 			var block_y := edge_y - height if not bool(event.get("from_ceiling", false)) else edge_y
-			if rect.intersects(Rect2(Vector2(float(event.get("x", 0.0)) - width * 0.5, block_y), Vector2(width, height))):
+			var block_rect := Rect2(Vector2(float(event.get("x", 0.0)) - width * 0.5, block_y), Vector2(width, height))
+			if HazardRules.player_impact(rect, "block", block_rect) == HazardRules.PlayerImpact.LETHAL:
 				return true
 	for barrel in _barrels:
 		if not bool(barrel.get("spawned", false)) or bool(barrel.get("destroyed", false)):
 			continue
-		var radius := minf(float(barrel.get("width", 54.0)), float(barrel.get("height", 54.0))) * 0.5
-		var center := Vector2(float(barrel.get("x", 0.0)), float(barrel.get("y", 0.0)) - radius)
-		if _circle_intersects_rect(center, radius, rect):
+		var barrel_width := float(barrel.get("width", HazardRules.BARREL_WIDTH))
+		var barrel_height := float(barrel.get("height", HazardRules.BARREL_WIDTH))
+		var radius := HazardRules.barrel_radius(barrel_width, barrel_height)
+		var center := HazardRules.barrel_center(Vector2(float(barrel.get("x", 0.0)), float(barrel.get("y", 0.0))), barrel_width, barrel_height)
+		if HazardRules.player_impact(rect, "barrel", Rect2(), [], center, radius) == HazardRules.PlayerImpact.LETHAL:
 			return true
 	return false
