@@ -140,11 +140,31 @@
 		};
 		const updateOrientation = () => {
 			document.documentElement.classList.toggle('phone-portrait', mobileOrTablet && isPortrait());
+			updateMobileShell();
+		};
+		const updateMobileShell = () => {
+			if (!mobileOrTablet) return;
+			const shell = document.getElementById('game-shell');
+			if (!shell) return;
+			if (document.documentElement.classList.contains('phone-portrait')) {
+				for (const property of ['position', 'left', 'top', 'width', 'height']) shell.style.removeProperty(property);
+				return;
+			}
+			const viewport = window.visualViewport;
+			shell.style.position = 'fixed';
+			shell.style.left = `${viewport?.offsetLeft ?? 0}px`;
+			shell.style.top = `${viewport?.offsetTop ?? 0}px`;
+			shell.style.width = `${viewport?.width ?? window.innerWidth}px`;
+			shell.style.height = `${viewport?.height ?? window.innerHeight}px`;
 		};
 		updateOrientation();
-		screen.orientation?.addEventListener?.('change', updateOrientation);
-		window.addEventListener('orientationchange', updateOrientation);
-		portraitQuery.addEventListener?.('change', updateOrientation);
+		const refreshOrientationAndViewport = () => updateOrientation();
+		screen.orientation?.addEventListener?.('change', refreshOrientationAndViewport);
+		window.addEventListener('orientationchange', refreshOrientationAndViewport);
+		window.addEventListener('resize', updateMobileShell);
+		window.visualViewport?.addEventListener?.('resize', updateMobileShell);
+		window.visualViewport?.addEventListener?.('scroll', updateMobileShell);
+		portraitQuery.addEventListener?.('change', refreshOrientationAndViewport);
 		// Retire an older root-scoped Godot worker. The game export in ./game owns its own cache.
 		if ('serviceWorker' in navigator) {
 			const scope = new URL('./', location.href).href;

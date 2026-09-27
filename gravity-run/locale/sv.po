@@ -1036,3 +1036,9 @@ msgstr "Gravitationsstövlar"
 
 msgid "item.boots_gravity_01.description"
 msgstr "Stadiga sulor som minskar pausen mellan gravitationsvändningar med 3 %."
+
+msgid "Flip gravity"
+msgstr "Vänd gravitationen"
+
+msgid "Swipe up or down to flip gravity"
+msgstr "Svep uppåt eller nedåt för att vända gravitationen"

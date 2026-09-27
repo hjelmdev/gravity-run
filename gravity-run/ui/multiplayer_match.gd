@@ -107,15 +107,13 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _simulation == null or not _simulation.started or _player_state(_local_user_id).get("state", "") != "running":
 		return
 	if event is InputEventScreenTouch:
-		if PlayerProfile.flip_control not in ["swipe", "tap"]:
-			return
 		if event.pressed:
 			_touch_index = event.index
 			_touch_start = event.position
 			if PlayerProfile.flip_control == "tap":
 				_request_flip(-int(_player_state(_local_user_id).get("gravity_direction", 1)))
 		elif event.index == _touch_index:
-			if PlayerProfile.flip_control == "swipe":
+			if PlayerProfile.flip_control != "tap":
 				var swipe_delta: Vector2 = event.position - _touch_start
 				if absf(swipe_delta.y) >= 48.0 and absf(swipe_delta.y) > absf(swipe_delta.x) * 1.2:
 					_request_flip(-1 if swipe_delta.y < 0.0 else 1)
@@ -365,6 +363,8 @@ func _build_hud() -> void:
 	add_child(layer)
 	var hud := Control.new()
 	hud.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# A full-rect HUD must not consume touch events intended for the game world.
+	hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(hud)
 	_distance_label = Label.new()
 	_distance_label.position = Vector2(16, 12)
@@ -400,6 +400,41 @@ func _build_hud() -> void:
 	leave.offset_bottom = 54
 	leave.pressed.connect(_leave_match)
 	hud.add_child(leave)
+	var flip_button := Button.new()
+	flip_button.text = tr("Flip gravity")
+	flip_button.custom_minimum_size = Vector2(150, 54)
+	flip_button.anchor_left = 1.0
+	flip_button.anchor_right = 1.0
+	flip_button.anchor_top = 1.0
+	flip_button.anchor_bottom = 1.0
+	flip_button.offset_left = -174
+	flip_button.offset_right = -16
+	flip_button.offset_top = -76
+	flip_button.offset_bottom = -18
+	flip_button.add_theme_font_size_override("font_size", 20)
+	flip_button.pressed.connect(_flip_gravity)
+	hud.add_child(flip_button)
+	var touch_hint := Label.new()
+	touch_hint.text = tr("Swipe up or down to flip gravity")
+	touch_hint.anchor_left = 0.5
+	touch_hint.anchor_right = 0.5
+	touch_hint.anchor_top = 1.0
+	touch_hint.anchor_bottom = 1.0
+	touch_hint.offset_left = -210
+	touch_hint.offset_right = 0
+	touch_hint.offset_top = -62
+	touch_hint.offset_bottom = -22
+	touch_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	touch_hint.add_theme_font_size_override("font_size", 15)
+	touch_hint.add_theme_color_override("font_color", Color("b9c8dc"))
+	hud.add_child(touch_hint)
+
+func _flip_gravity() -> void:
+	if _simulation == null:
+		return
+	var state := _player_state(_local_user_id)
+	if str(state.get("state", "")) == "running":
+		_request_flip(-int(state.get("gravity_direction", 1)))
 
 func status_label_color() -> void:
 	_status_label.add_theme_font_size_override("font_size", 28)
