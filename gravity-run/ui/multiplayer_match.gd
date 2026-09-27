@@ -66,6 +66,9 @@ var _diagnostic_text: TextEdit
 var _diagnostic_event_times: Dictionary = {}
 var _last_snapshot_rejection := ""
 var _local_finish_ignored_logged := false
+var _finish_payload: Dictionary = {}
+var _finish_acknowledged_peers: Dictionary = {}
+var _finish_retry_elapsed := 0.0
 
 func _ready() -> void:
 	set_process(true)
@@ -153,6 +156,8 @@ func _process(delta: float) -> void:
 			if _snapshot_elapsed >= 1.0 / 15.0:
 				_snapshot_elapsed = 0.0
 				MultiplayerService.send_peer_message_to_all("snapshot", {"kind": "snapshot", "state": _snapshot})
+			if bool(_snapshot.get("finished", false)):
+				_retry_unacknowledged_finish(delta)
 		else:
 			_visual_correction = _visual_correction.move_toward(Vector2.ZERO, delta * 420.0)
 			_compose_client_snapshot()
@@ -222,7 +227,9 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 			"race_go_ack":
 				print("[MP_DIAG] ", JSON.stringify({"event": "race_go_ack", "room_id": MultiplayerService.get_room_id(), "peer_id": peer_user_id, "at_ms": Time.get_ticks_msec()}))
 			"match_finished_ack":
-				_record_match_diag("reliable_finish_ack", {"peer_id": peer_user_id, "tick": int(payload.get("tick", -1))})
+				if str(payload.get("room_id", "")) == MultiplayerService.get_room_id() and int(payload.get("tick", -1)) == int(_finish_payload.get("tick", -2)):
+					_finish_acknowledged_peers[peer_user_id] = true
+					_record_match_diag("reliable_finish_ack", {"peer_id": peer_user_id, "tick": int(payload.get("tick", -1))})
 			"flip":
 				var sequence := int(payload.get("input_sequence", 0))
 				if sequence > int(_last_input_sequence.get(peer_user_id, 0)):
@@ -311,7 +318,7 @@ func _send_reliable_player_terminal(user_id: String) -> void:
 		_record_match_diag("player_terminal_queued", {"peer_id": peer_user_id, "player_id": user_id, "state": str(player_state.get("state", "")), "queued": queued})
 
 func _send_reliable_match_finished(snapshot: Dictionary) -> void:
-	var payload := {
+	_finish_payload = {
 		"kind": "match_finished",
 		"room_id": MultiplayerService.get_room_id(),
 		"course_identity": str(snapshot.get("course_identity", "")),
@@ -319,14 +326,28 @@ func _send_reliable_match_finished(snapshot: Dictionary) -> void:
 		"finished": true,
 		"players": snapshot.get("players", []),
 	}
+	_finish_acknowledged_peers.clear()
+	_finish_retry_elapsed = 0.0
+	_queue_finish_for_unacknowledged_peers()
+
+func _retry_unacknowledged_finish(delta: float) -> void:
+	if _finish_payload.is_empty():
+		return
+	_finish_retry_elapsed += delta
+	if _finish_retry_elapsed < 0.75:
+		return
+	_finish_retry_elapsed = 0.0
+	_queue_finish_for_unacknowledged_peers()
+
+func _queue_finish_for_unacknowledged_peers() -> void:
 	for member in MultiplayerService.get_members():
 		if not member is Dictionary:
 			continue
 		var peer_user_id := str(member.get("user_id", ""))
-		if peer_user_id.is_empty() or peer_user_id == _local_user_id:
+		if peer_user_id.is_empty() or peer_user_id == _local_user_id or bool(_finish_acknowledged_peers.get(peer_user_id, false)):
 			continue
-		var queued := MultiplayerService.queue_reliable_peer_message(peer_user_id, payload)
-		_record_match_diag("match_finished_queued", {"peer_id": peer_user_id, "tick": int(snapshot.get("tick", -1)), "queued": queued})
+		var queued := MultiplayerService.queue_reliable_peer_message(peer_user_id, _finish_payload)
+		_record_match_diag("match_finished_queued", {"peer_id": peer_user_id, "tick": int(_finish_payload.get("tick", -1)), "queued": queued})
 
 func _accept_reliable_player_terminal(payload: Dictionary) -> void:
 	if str(payload.get("room_id", "")) != MultiplayerService.get_room_id() or str(payload.get("course_identity", "")) != str(_manifest.get("course_identity")):
