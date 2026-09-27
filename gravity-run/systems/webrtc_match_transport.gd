@@ -5,6 +5,7 @@ signal peer_data_received(peer_user_id: String, channel_name: String, payload: D
 
 const STUN_URL := "stun:stun.l.google.com:19302"
 const MAX_PACKET_BYTES := 65536
+const MAX_SNAPSHOT_BUFFERED_BYTES := 32768
 const CONNECTION_TIMEOUT_SECONDS := 18.0
 const MAX_CONNECTION_RETRIES := 1
 
@@ -107,18 +108,38 @@ func handle_signal(envelope: Dictionary) -> void:
 					entry.pending_candidates = candidates
 
 func send_to_peer(peer_user_id: String, channel_name: String, payload: Dictionary) -> bool:
-	if not _entries.has(peer_user_id) or JSON.stringify(payload).to_utf8_buffer().size() > MAX_PACKET_BYTES:
-		return false
+	return _send_bytes_to_peer(peer_user_id, channel_name, JSON.stringify(payload).to_utf8_buffer(), channel_name == "snapshot") == OK
+
+func send_to_all(channel_name: String, payload: Dictionary) -> Dictionary:
+	var serialization_started_usec := Time.get_ticks_usec()
+	var packet := JSON.stringify(payload).to_utf8_buffer()
+	var serialized_usec := Time.get_ticks_usec() - serialization_started_usec
+	var result := {"sent": 0, "failed": 0, "dropped": 0, "bytes": 0, "packet_bytes": packet.size(), "serialized_usec": serialized_usec}
+	if packet.size() > MAX_PACKET_BYTES:
+		result.failed = _entries.size()
+		return result
+	for peer_user_id in _entries.keys():
+		var error := _send_bytes_to_peer(str(peer_user_id), channel_name, packet, channel_name == "snapshot")
+		if error == ERR_BUSY:
+			result.dropped += 1
+		elif error != OK:
+			result.failed += 1
+		else:
+			result.sent += 1
+			result.bytes += packet.size()
+	return result
+
+func _send_bytes_to_peer(peer_user_id: String, channel_name: String, packet: PackedByteArray, drop_congested_snapshot: bool = false) -> int:
+	if not _entries.has(peer_user_id) or packet.size() > MAX_PACKET_BYTES:
+		return ERR_INVALID_PARAMETER
 	var entry: Dictionary = _entries[peer_user_id]
 	var channel: WebRTCDataChannel = entry.get("control") if channel_name == "control" else entry.get("snapshot")
 	if channel == null or channel.get_ready_state() != WebRTCDataChannel.STATE_OPEN:
-		return false
+		return ERR_UNAVAILABLE
+	if drop_congested_snapshot and channel.get_buffered_amount() > MAX_SNAPSHOT_BUFFERED_BYTES:
+		return ERR_BUSY
 	channel.write_mode = WebRTCDataChannel.WRITE_MODE_TEXT
-	return channel.put_packet(JSON.stringify(payload).to_utf8_buffer()) == OK
-
-func send_to_all(channel_name: String, payload: Dictionary) -> void:
-	for peer_user_id in _entries.keys():
-		send_to_peer(str(peer_user_id), channel_name, payload)
+	return channel.put_packet(packet)
 
 func connected_peer_ids() -> PackedStringArray:
 	var result := PackedStringArray()

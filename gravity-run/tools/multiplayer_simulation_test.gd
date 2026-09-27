@@ -44,7 +44,11 @@ func _initialize() -> void:
 	])
 	assert(configuration_error.is_empty(), configuration_error)
 	assert(int(simulation.get_player("fast").get("skin_id", -1)) == 3, "player skin selection should be included in authoritative simulation state")
+	assert(is_equal_approx(float(simulation.get_player("slow").get("world_x", -1.0)), float(simulation.get_player("fast").get("world_x", -2.0))), "every runner must share the same simulation start position")
 	simulation.start()
+	assert(int(simulation.get_snapshot().get("tick", -1)) == 0, "the shared simulation must begin at tick zero")
+	simulation.advance_frame(1.0 / 60.0)
+	assert(int(simulation.get_snapshot().get("tick", -1)) == 1, "one fixed simulation step after the shared start must produce tick one")
 	assert(simulation.submit_flip("slow", -1))
 	assert(not simulation.submit_flip("slow", 1))
 	var last_events: Array[Dictionary] = []

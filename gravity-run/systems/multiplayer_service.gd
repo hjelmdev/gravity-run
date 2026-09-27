@@ -99,9 +99,8 @@ func begin_peer_connection() -> void:
 func send_peer_message(peer_user_id: String, channel_name: String, payload: Dictionary) -> bool:
 	return _webrtc_transport.send_to_peer(peer_user_id, channel_name, payload) if _webrtc_transport != null else false
 
-func send_peer_message_to_all(channel_name: String, payload: Dictionary) -> void:
-	if _webrtc_transport != null:
-		_webrtc_transport.send_to_all(channel_name, payload)
+func send_peer_message_to_all(channel_name: String, payload: Dictionary) -> Dictionary:
+	return _webrtc_transport.send_to_all(channel_name, payload) if _webrtc_transport != null else {"sent": 0, "failed": 0, "dropped": 0, "bytes": 0, "packet_bytes": 0, "serialized_usec": 0}
 
 func get_connected_peer_ids() -> PackedStringArray:
 	return _webrtc_transport.connected_peer_ids() if _webrtc_transport != null else PackedStringArray()

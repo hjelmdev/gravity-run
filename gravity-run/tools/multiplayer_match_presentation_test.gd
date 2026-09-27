@@ -32,10 +32,26 @@ func _ready() -> void:
 	assert(MatchScript.interpolated_player_state("running", "dead", 0.0) == "dead", "an authoritative death should display immediately even while position is interpolated")
 	assert(MatchScript.interpolated_player_state("dead", "running", 1.0) == "dead", "an older/out-of-order running state must not resurrect a dead remote runner")
 	assert(MatchScript.interpolated_player_state("running", "running", 0.25) == "running", "running state should remain unchanged during position interpolation")
+	var gravity_before: Dictionary = {"user_id": "remote", "world_x": 100.0, "y": 80.0, "vertical_speed": 60.0, "state": "running", "gravity_direction": -1, "grounded": false}
+	var gravity_after: Dictionary = {"user_id": "remote", "world_x": 200.0, "y": 140.0, "vertical_speed": -60.0, "state": "running", "gravity_direction": 1, "grounded": true}
+	var mid_flip: Dictionary = MatchScript.interpolate_player_sample(gravity_before, gravity_after, 0.5)
+	assert(is_equal_approx(float(mid_flip.world_x), 150.0) and int(mid_flip.gravity_direction) == -1 and not bool(mid_flip.grounded), "motion should interpolate while discrete gravity/contact state waits for the authoritative endpoint")
+	var end_flip: Dictionary = MatchScript.interpolate_player_sample(gravity_before, gravity_after, 1.0)
+	assert(int(end_flip.gravity_direction) == 1 and bool(end_flip.grounded), "discrete movement state should switch at the authoritative sample")
+	var terminal_flip: Dictionary = MatchScript.interpolate_player_sample(gravity_before, {"user_id": "remote", "world_x": 200.0, "y": 140.0, "state": "dead", "gravity_direction": 1}, 0.1)
+	assert(str(terminal_flip.state) == "dead", "terminal state should be immediate even while position is interpolated")
 	assert(not MatchScript.may_show_results(false, {"finished": false}), "a guest must not show local predicted results before the host finishes")
 	assert(MatchScript.may_show_results(false, {"finished": true}), "a guest should show results once the host's authoritative snapshot is finished")
 	assert(MatchScript.may_show_results(true, {"finished": false}), "the host remains authoritative for its own results")
 	assert(is_equal_approx(MatchScript.estimate_shared_start_msec(1000, 5.0, [400, 600]), 6250.0), "host start should compensate for measured peer delivery latency")
+	assert(is_equal_approx(MatchScript.estimate_guest_clock_offset_ms(5200, 5000, 5400), 0.0), "clock-offset estimation should use the probe round-trip midpoint")
+	assert(is_equal_approx(MatchScript.estimate_guest_clock_offset_ms(15200, 10000, 10400), 5000.0), "clock-offset estimation should translate a guest clock into host time")
+	assert(is_equal_approx(MatchScript.render_target_tick(100.0, 0.0, 5.0, -1.0), 95.0), "snapshot rendering should start behind the newest host tick")
+	assert(is_equal_approx(MatchScript.render_target_tick(100.0, 1.0, 5.0, 95.0), 103.0), "snapshot extrapolation must be capped to three ticks")
+	assert(is_equal_approx(MatchScript.render_target_tick(100.0, 0.0, 5.0, 96.0), 96.0), "the render timeline must never move backwards")
+	assert(MatchScript.correction_after_authority(Vector2(102.0, 202.0), Vector2(100.0, 200.0)).is_equal_approx(Vector2(2.0, 2.0)), "small local prediction errors should fade smoothly")
+	assert(MatchScript.correction_after_authority(Vector2(300.0, 200.0), Vector2(100.0, 200.0)) == Vector2.ZERO, "large prediction errors should snap to authority")
+	assert(MatchScript.correction_after_authority(Vector2(102.0, 202.0), Vector2(100.0, 200.0), "running", "dead") == Vector2.ZERO, "terminal state transitions must not be visually delayed")
 	var ranking := [
 		{"user_id": "alpha", "state": "running", "world_x": 780.0},
 		{"user_id": "beta", "state": "running", "world_x": 780.0},
@@ -57,15 +73,26 @@ func _ready() -> void:
 	draw_order_root.add_child(remote_runner)
 	draw_order_view.set("_local_user_id", "local")
 	draw_order_view.set("_player_views", {"local": local_runner, "remote": remote_runner})
+	draw_order_view.set("_visual_slot_by_user", {"local": -14.0, "remote": 14.0, "third": 0.0})
 	draw_order_view.call("_bring_local_runner_to_front")
 	assert(draw_order_root.get_child(draw_order_root.get_child_count() - 1) == local_runner, "each client should draw its own runner in front regardless of shared player order")
 	var overlap_states: Array = [
 		{"user_id": "local", "world_x": 400.0, "y": 200.0},
 		{"user_id": "remote", "world_x": 400.0, "y": 200.0},
+		{"user_id": "third", "world_x": 400.0, "y": 270.0},
 	]
 	var local_visual: Vector2 = draw_order_view.call("_visual_player_position", overlap_states[0], overlap_states)
 	var remote_visual: Vector2 = draw_order_view.call("_visual_player_position", overlap_states[1], overlap_states)
-	assert(absf(local_visual.x - remote_visual.x) >= 19.0, "overlapping runners should be visually separated without changing their simulated world coordinates")
+	assert(is_equal_approx(absf(local_visual.x - remote_visual.x), 28.0), "overlapping runners should use stable roster offsets")
+	var crossed_states: Array = [
+		{"user_id": "local", "world_x": 411.0, "y": 200.0},
+		{"user_id": "remote", "world_x": 389.0, "y": 200.0},
+		{"user_id": "third", "world_x": 400.0, "y": 270.0},
+	]
+	var local_offset_before_crossing := local_visual.x - float(overlap_states[0].world_x)
+	var local_after_crossing: Vector2 = draw_order_view.call("_visual_player_position", crossed_states[0], crossed_states)
+	assert(is_equal_approx(local_after_crossing.x - float(crossed_states[0].world_x), local_offset_before_crossing), "a runner crossing another or changing vertical lane must not change its stable visual slot")
+	assert(is_equal_approx(MatchScript.stable_visual_offset("local", ["third", "remote", "local"]), MatchScript.stable_visual_offset("local", ["local", "third", "remote"])), "visual slots must not depend on player array order")
 	draw_order_view.free()
 	match_view.add_child(course_root)
 	match_view.set("_course_root", course_root)
