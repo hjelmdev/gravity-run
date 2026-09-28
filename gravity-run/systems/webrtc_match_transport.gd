@@ -18,6 +18,7 @@ var _entries: Dictionary = {}
 var _attempt_by_peer: Dictionary = {}
 var _retry_count_by_peer: Dictionary = {}
 var _started := false
+var _last_diagnostic_buffer_sample_by_peer: Dictionary = {}
 
 func configure(room: Dictionary, local_user_id: String) -> void:
 	var new_room_id := str(room.get("room_id", ""))
@@ -179,6 +180,7 @@ func close_all() -> void:
 
 func _process(_delta: float) -> void:
 	for peer_user_id in _entries.keys():
+		var poll_started_usec := Time.get_ticks_usec()
 		var entry: Dictionary = _entries[peer_user_id]
 		var connection: WebRTCPeerConnection = entry.connection
 		connection.poll()
@@ -197,6 +199,9 @@ func _process(_delta: float) -> void:
 		if state != int(entry.get("last_pc_state", -1)):
 			entry.last_pc_state = state
 			print("[MP_DIAG] ", JSON.stringify({"event": "webrtc_connection_state", "room_id": _room_id, "peer_id": peer_user_id, "state_code": state, "elapsed_ms": Time.get_ticks_msec() - int(entry.get("created_at_msec", Time.get_ticks_msec()))}))
+			var diagnostics := get_node_or_null("/root/MultiplayerDiagnostics")
+			if diagnostics != null:
+				diagnostics.record_event("webrtc_connection_state", {"peer_id": peer_user_id, "state_code": state, "elapsed_ms": Time.get_ticks_msec() - int(entry.get("created_at_msec", Time.get_ticks_msec()))}, true)
 		if state == WebRTCPeerConnection.STATE_FAILED or state == WebRTCPeerConnection.STATE_CLOSED:
 			_fail_peer(str(peer_user_id), "Direct peer connection failed. Try another network or host.")
 			continue
@@ -217,6 +222,15 @@ func _process(_delta: float) -> void:
 			entry.channels_open_notified = true
 			peer_state_changed.emit(str(peer_user_id), "connected", "Both direct peer channels opened.")
 			_retry_count_by_peer.erase(str(peer_user_id))
+		var poll_usec := Time.get_ticks_usec() - poll_started_usec
+		var diagnostics := get_node_or_null("/root/MultiplayerDiagnostics")
+		if diagnostics != null:
+			diagnostics.increment_total("transport_polls")
+			diagnostics.record_timing("webrtc_peer_poll_including_handlers", poll_usec)
+			var now_msec := Time.get_ticks_msec()
+			if now_msec - int(_last_diagnostic_buffer_sample_by_peer.get(peer_user_id, 0)) >= 1000:
+				_last_diagnostic_buffer_sample_by_peer[peer_user_id] = now_msec
+				diagnostics.record_event("webrtc_channel_buffers", {"peer_id": peer_user_id, "control_buffered_bytes": int(control.get_buffered_amount()) if control != null else -1, "snapshot_buffered_bytes": int(snapshot.get_buffered_amount()) if snapshot != null else -1, "reliable_queue_length": int(entry.get("reliable_queue", []).size()), "connected": channels_open}, false)
 
 func _create_peer_entry(peer_user_id: String, attempt_id: String, make_offer: bool) -> Dictionary:
 	var connection := WebRTCPeerConnection.new()

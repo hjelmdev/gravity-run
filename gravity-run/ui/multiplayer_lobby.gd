@@ -49,6 +49,19 @@ var _manifest_build_started_msec := 0
 var _manifest_transfer_started_msec: Dictionary = {}
 var _manifest_transfer_last_sent_msec: Dictionary = {}
 var _manifest_verified_peers: Dictionary = {}
+var _diagnostics_status: Label
+var _diagnostics_opt_in_button: Button
+var _diagnostics_opt_out_button: Button
+var _diagnostics_session_button: Button
+var _latest_report_status: Label
+var _latest_report_copy_button: Button
+var _latest_report_save_button: Button
+var _diagnostics_session_id_edit: LineEdit
+var _fetch_diagnostics_button: Button
+var _list_diagnostics_sessions_button: Button
+var _download_fetched_diagnostics_button: Button
+var _diagnostics_layout_option: OptionButton
+var _diagnostics_instances_option: OptionButton
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -110,6 +123,30 @@ func _build_ui() -> void:
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_layout.add_child(_status)
+	_latest_report_status = Label.new()
+	_latest_report_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_latest_report_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_layout.add_child(_latest_report_status)
+	var report_actions := HBoxContainer.new()
+	_layout.add_child(report_actions)
+	_latest_report_copy_button = _button(tr("Copy last multiplayer report"))
+	_latest_report_copy_button.pressed.connect(_copy_latest_multiplayer_report)
+	report_actions.add_child(_latest_report_copy_button)
+	_latest_report_save_button = _button(tr("Save last report"))
+	_latest_report_save_button.pressed.connect(_save_latest_multiplayer_report)
+	report_actions.add_child(_latest_report_save_button)
+	_diagnostics_session_id_edit = LineEdit.new()
+	_diagnostics_session_id_edit.placeholder_text = tr("Shared debug ID")
+	_layout.add_child(_diagnostics_session_id_edit)
+	_fetch_diagnostics_button = _button(tr("Fetch all reports for debug ID"))
+	_fetch_diagnostics_button.pressed.connect(func() -> void: MultiplayerDiagnostics.fetch_shared_session(_diagnostics_session_id_edit.text.strip_edges()))
+	_layout.add_child(_fetch_diagnostics_button)
+	_list_diagnostics_sessions_button = _button(tr("List recent diagnostic sessions"))
+	_list_diagnostics_sessions_button.pressed.connect(_list_diagnostic_sessions)
+	_layout.add_child(_list_diagnostics_sessions_button)
+	_download_fetched_diagnostics_button = _button(tr("Save fetched reports JSON"))
+	_download_fetched_diagnostics_button.pressed.connect(_save_fetched_diagnostics)
+	_layout.add_child(_download_fetched_diagnostics_button)
 	_name_edit = LineEdit.new()
 	_name_edit.placeholder_text = tr("Display name")
 	_name_edit.max_length = 16
@@ -230,6 +267,37 @@ func _build_ui() -> void:
 	_leave_button.pressed.connect(MultiplayerService.leave_room)
 	_leave_button.visible = false
 	_room_view.add_child(_leave_button)
+	_diagnostics_opt_in_button = _button(tr("Enable diagnostic upload for this account"))
+	_diagnostics_opt_in_button.pressed.connect(func() -> void: MultiplayerDiagnostics.opt_in(true))
+	_room_view.add_child(_diagnostics_opt_in_button)
+	_diagnostics_opt_out_button = _button(tr("Disable diagnostic upload"))
+	_diagnostics_opt_out_button.pressed.connect(func() -> void: MultiplayerDiagnostics.opt_in(false))
+	_room_view.add_child(_diagnostics_opt_out_button)
+	_diagnostics_session_button = _button(tr("Create shared debug ID"))
+	_diagnostics_session_button.pressed.connect(func() -> void: MultiplayerDiagnostics.start_shared_session(""))
+	_room_view.add_child(_diagnostics_session_button)
+	_diagnostics_status = Label.new()
+	_diagnostics_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_diagnostics_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_diagnostics_status.text = MultiplayerDiagnostics.get_status()
+	_room_view.add_child(_diagnostics_status)
+	_diagnostics_layout_option = OptionButton.new()
+	_diagnostics_layout_option.add_item(tr("Test layout: unknown"), 0)
+	_diagnostics_layout_option.add_item(tr("Split view + separate host"), 1)
+	_diagnostics_layout_option.add_item(tr("Three separate windows"), 2)
+	_diagnostics_layout_option.add_item(tr("Separate devices"), 3)
+	_diagnostics_layout_option.add_item(tr("Other setup"), 4)
+	_diagnostics_layout_option.item_selected.connect(_on_diagnostic_layout_selected)
+	_room_view.add_child(_diagnostics_layout_option)
+	_diagnostics_instances_option = OptionButton.new()
+	_diagnostics_instances_option.add_item(tr("Instances on this device: unknown"), 0)
+	for count in range(1, 6):
+		_diagnostics_instances_option.add_item(tr("Instances on this device: %d") % count, count)
+	_diagnostics_instances_option.item_selected.connect(_on_diagnostic_instances_selected)
+	_room_view.add_child(_diagnostics_instances_option)
+	_update_diagnostic_option_selections()
+	MultiplayerDiagnostics.report_changed.connect(_on_diagnostics_status_changed)
+	_update_latest_report_actions()
 	for view in [_home_view, _create_view, _join_view, _room_view]:
 		view.visible = false
 	_show_view("home")
@@ -520,6 +588,10 @@ func _send_manifest_to_peer(peer_user_id: String) -> void:
 	_status.text = tr("Sending the shared course manifest to %s…") % peer_user_id
 
 func _on_peer_data_received(peer_user_id: String, channel_name: String, payload: Dictionary) -> void:
+	if channel_name == "control" and str(payload.get("kind", "")) == "diagnostic_session":
+		if MultiplayerDiagnostics.accept_shared_session(payload, peer_user_id):
+			_on_diagnostics_status_changed("Shared diagnostic ID: %s" % str(payload.get("session_id", "")))
+		return
 	if channel_name != "control":
 		return
 	if str(payload.get("kind", "")) == "course_manifest_chunk" and not MultiplayerService.is_room_owner():
@@ -616,6 +688,9 @@ func _update_room(room: Dictionary) -> void:
 	_ready_button.disabled = not in_room
 	_start_button.disabled = true
 	_leave_button.visible = in_room
+	_diagnostics_opt_in_button.visible = in_room
+	_diagnostics_opt_out_button.visible = in_room
+	_diagnostics_session_button.visible = in_room and MultiplayerService.is_room_owner()
 	if not in_room:
 		if not _busy:
 			_status.text = ""
@@ -713,6 +788,83 @@ func _update_room(room: Dictionary) -> void:
 			_status.text = tr("Everyone is ready — waiting for a direct connection.")
 		else:
 			_status.text = tr("Everyone is ready.")
+
+func _on_diagnostics_status_changed(message: String) -> void:
+	if is_instance_valid(_diagnostics_status):
+		_diagnostics_status.text = message
+	if is_instance_valid(_latest_report_status):
+		_latest_report_status.text = message
+
+func _on_diagnostic_layout_selected(index: int) -> void:
+	var layouts := ["unknown", "split_host", "three_windows", "separate_devices", "other"]
+	var current_instances := MultiplayerDiagnostics.get_instances_on_device()
+	MultiplayerDiagnostics.set_test_context(str(layouts[index]), current_instances)
+
+func _on_diagnostic_instances_selected(index: int) -> void:
+	var count_id := _diagnostics_instances_option.get_item_id(index)
+	var layout_id := _diagnostics_layout_option.get_selected_id()
+	var layouts := ["unknown", "split_host", "three_windows", "separate_devices", "other"]
+	MultiplayerDiagnostics.set_test_context(str(layouts[layout_id]), count_id if count_id > 0 else null)
+
+func _update_diagnostic_option_selections() -> void:
+	if not is_instance_valid(_diagnostics_layout_option):
+		return
+	var layouts := ["unknown", "split_host", "three_windows", "separate_devices", "other"]
+	var layout_index := layouts.find(MultiplayerDiagnostics.get_test_layout())
+	_diagnostics_layout_option.select(maxi(layout_index, 0))
+	var instances := MultiplayerDiagnostics.get_instances_on_device()
+	var instance_index := 0 if instances == null else int(instances)
+	_diagnostics_instances_option.select(clampi(instance_index, 0, 5))
+	if is_instance_valid(_latest_report_status):
+		_latest_report_status.text = message
+	_update_latest_report_actions()
+
+func _update_latest_report_actions() -> void:
+	if not is_instance_valid(_latest_report_status):
+		return
+	var latest := MultiplayerDiagnostics.get_latest_report()
+	var available := not latest.is_empty()
+	_latest_report_status.visible = available
+	_latest_report_copy_button.visible = available
+	_latest_report_save_button.visible = available
+	_diagnostics_session_id_edit.visible = available
+	_fetch_diagnostics_button.visible = available
+	_list_diagnostics_sessions_button.visible = available
+	_download_fetched_diagnostics_button.visible = available and not MultiplayerDiagnostics.get_fetched_session_text().is_empty()
+	if available:
+		var session_id := str(latest.get("diagnostic_session_id", ""))
+		if _diagnostics_session_id_edit.text.is_empty():
+			_diagnostics_session_id_edit.text = session_id
+		_latest_report_status.text = tr("Latest report · debug ID: %s · %s") % [session_id if not session_id.is_empty() else tr("local only"), MultiplayerDiagnostics.get_status()]
+
+func _copy_latest_multiplayer_report() -> void:
+	DisplayServer.clipboard_set(MultiplayerDiagnostics.get_export_text(true))
+	_latest_report_status.text = tr("Compact report copied. Debug ID: %s") % str(MultiplayerDiagnostics.get_latest_report().get("diagnostic_session_id", tr("local only")))
+
+func _save_latest_multiplayer_report() -> void:
+	var saved_path := MultiplayerDiagnostics.save_latest_report()
+	if OS.has_feature("web"):
+		var base64 := Marshalls.raw_to_base64(MultiplayerDiagnostics.get_export_text(false).to_utf8_buffer())
+		JavaScriptBridge.eval("(()=>{const a=document.createElement('a');a.href='data:application/json;base64,%s';a.download='gravity-run-multiplayer-report.json';a.click()})()" % base64, true)
+		_latest_report_status.text = tr("Download requested. Debug ID: %s") % str(MultiplayerDiagnostics.get_latest_report().get("diagnostic_session_id", ""))
+	else:
+		_latest_report_status.text = tr("Full report saved: %s") % saved_path
+
+func _save_fetched_diagnostics() -> void:
+	var json_text := MultiplayerDiagnostics.get_fetched_session_text()
+	if json_text.is_empty():
+		return
+	if OS.has_feature("web"):
+		var base64 := Marshalls.raw_to_base64(json_text.to_utf8_buffer())
+		JavaScriptBridge.eval("(()=>{const a=document.createElement('a');a.href='data:application/json;base64,%s';a.download='gravity-run-diagnostic-session.json';a.click()})()" % base64, true)
+		_latest_report_status.text = tr("Fetched reports download requested.")
+	else:
+		var saved_path := MultiplayerDiagnostics.save_fetched_session()
+		_latest_report_status.text = tr("All fetched client reports saved: %s") % saved_path
+
+func _list_diagnostic_sessions() -> void:
+	_latest_report_status.text = tr("Loading recent diagnostic sessions…")
+	MultiplayerDiagnostics.request_sessions()
 
 func _show_view(view_name: String) -> void:
 	_active_view = view_name

@@ -120,6 +120,10 @@ var _local_finish_ignored_logged := false
 var _finish_payload: Dictionary = {}
 var _finish_acknowledged_peers: Dictionary = {}
 var _finish_retry_elapsed := 0.0
+var _diagnostic_status_label: Label
+var _last_diagnostic_visual_order: Array[String] = []
+var _snapshot_sequence := 0
+var _last_diagnostic_snapshot_sequence := -1
 
 func _ready() -> void:
 	set_process(true)
@@ -173,11 +177,27 @@ func _ready() -> void:
 	else:
 		_status_label.text = tr("Waiting for the host to synchronize the start…") if _queue_match_setup() else tr("Could not queue match setup for the host. Reconnect or leave the race.")
 	_waiting_since = _network_clock
+	var diagnostic_roster: Array[Dictionary] = []
+	for member_id in stable_user_ids:
+		for member in members:
+			if member is Dictionary and str(member.get("user_id", "")) == member_id:
+				diagnostic_roster.append({"user_id": member_id, "display_name": str(member.get("display_name", "Runner")), "skin_id": int(member.get("skin_id", 0))})
+				break
+	var local_label := "unknown"
+	for index in range(diagnostic_roster.size()):
+		if str(diagnostic_roster[index].get("user_id", "")) == _local_user_id:
+			local_label = "p%d" % index
+	MultiplayerDiagnostics.begin_match({"role": "host" if MultiplayerService.is_room_owner() else "guest", "player_label": local_label, "roster": diagnostic_roster, "match_generation": _start_generation, "course_identity": str(_manifest.get("course_identity"))})
+	MultiplayerDiagnostics.report_changed.connect(_on_diagnostics_status_changed)
 
 func _process(delta: float) -> void:
 	if _simulation == null:
 		return
 	var frame_work_started_usec := Time.get_ticks_usec()
+	var phase := "results" if _results_panel != null and _results_panel.visible else ("running" if _simulation.started else "startup")
+	if _camera_mode == CAMERA_MODE_SPECTATING:
+		phase = "spectating"
+	MultiplayerDiagnostics.set_phase(phase)
 	_network_clock += delta
 	var just_started := false
 	if _return_requested and not MultiplayerService.is_room_owner() and _return_request_started_at > 0.0 and _network_clock - _return_request_started_at >= 10.0:
@@ -190,6 +210,7 @@ func _process(delta: float) -> void:
 	if _go_start_at > 0.0 and _network_clock >= _go_start_at and not _simulation.started:
 		_simulation.start()
 		just_started = true
+		MultiplayerDiagnostics.mark_simulation_started({"players": _simulation.get_snapshot().get("players", []).size(), "match_generation": _start_generation, "planned_host_start_msec": _planned_host_start_msec, "actual_start_msec": Time.get_ticks_msec(), "start_error_msec": Time.get_ticks_msec() - _planned_local_start_msec})
 		_record_match_diag("simulation_started", {"players": _simulation.get_snapshot().get("players", []).size(), "match_generation": _start_generation, "planned_host_start_msec": _planned_host_start_msec, "actual_start_msec": Time.get_ticks_msec(), "start_error_msec": Time.get_ticks_msec() - _planned_local_start_msec})
 		if MultiplayerService.is_room_owner():
 			MultiplayerService.advance_match_phase("RUNNING")
@@ -207,16 +228,20 @@ func _process(delta: float) -> void:
 			simulation_delta = maxf(_network_clock - _go_start_at, 0.0)
 		var events: Array[Dictionary]
 		if MultiplayerService.is_room_owner():
+			var simulation_started_usec := Time.get_ticks_usec()
 			events = _simulation.advance_frame(simulation_delta, true)
+			MultiplayerDiagnostics.record_timing("host_simulation", Time.get_ticks_usec() - simulation_started_usec, {"tick": int(_simulation.get("tick")), "backlog_seconds": float(_simulation.get_snapshot().get("backlog_seconds", 0.0))})
 		else:
 			if not _terminal_overlays.has(_local_user_id):
 				var tick_before_prediction := int(_simulation.get("tick"))
 				var requested_tick := _requested_prediction_tick()
 				var target_tick := _prediction_target_tick()
+				var prediction_started_usec := Time.get_ticks_usec()
 				_prediction_frames += 1
 				if target_tick < requested_tick:
 					_prediction_cap_frames += 1
 				events = _simulation.advance_to_tick(target_tick, SimulationScript.MAX_CATCHUP_TICKS, [_local_user_id])
+				MultiplayerDiagnostics.record_timing("guest_prediction", Time.get_ticks_usec() - prediction_started_usec, {"requested_tick": requested_tick, "target_tick": target_tick, "actual_tick": int(_simulation.get("tick"))})
 				_prediction_tick_samples.append(int(_simulation.get("tick")) - tick_before_prediction)
 				while _prediction_tick_samples.size() > 300:
 					_prediction_tick_samples.pop_front()
@@ -241,9 +266,17 @@ func _process(delta: float) -> void:
 			_snapshot_elapsed += delta
 			if _snapshot_elapsed >= SNAPSHOT_INTERVAL_SECONDS:
 				_snapshot_elapsed = fmod(_snapshot_elapsed, SNAPSHOT_INTERVAL_SECONDS)
+				_snapshot_sequence += 1
+				_snapshot["snapshot_seq"] = _snapshot_sequence
 				_snapshot["match_generation"] = _start_generation
 				var snapshot_payload := {"kind": "snapshot", "state": _snapshot}
+				var snapshot_started_usec := Time.get_ticks_usec()
 				var send_result: Dictionary = MultiplayerService.send_peer_message_to_all("snapshot", snapshot_payload)
+				MultiplayerDiagnostics.increment_total("snapshot_attempts")
+				MultiplayerDiagnostics.increment_total("snapshot_sent", int(send_result.get("sent", 0)))
+				MultiplayerDiagnostics.increment_total("snapshot_send_failed", int(send_result.get("failed", 0)))
+				MultiplayerDiagnostics.increment_total("snapshot_send_dropped", int(send_result.get("dropped", 0)))
+				MultiplayerDiagnostics.record_timing("snapshot_serialization_and_send", Time.get_ticks_usec() - snapshot_started_usec, {"sent": send_result.get("sent", 0), "bytes": send_result.get("bytes", 0), "failed": send_result.get("failed", 0), "dropped": send_result.get("dropped", 0)})
 				_snapshot_send_totals.count += int(send_result.get("sent", 0))
 				_snapshot_send_totals.bytes += int(send_result.get("bytes", 0))
 				_snapshot_send_totals.serialized_usec += int(send_result.get("serialized_usec", 0))
@@ -262,10 +295,13 @@ func _process(delta: float) -> void:
 	_update_hud()
 	_refresh_camera_state()
 	_sync_player_views()
+	var local_state := _player_state(_local_user_id)
+	MultiplayerDiagnostics.set_metrics({"simulation_tick": int(_simulation.get("tick")), "host_tick": int(_last_authoritative_tick) if not MultiplayerService.is_room_owner() else int(_simulation.get("tick")), "snapshot_buffer_size": _snapshot_buffer.size(), "snapshot_render_tick": _snapshot_render_tick, "prediction_lead_ticks": int(_simulation.get("tick")) - _last_authoritative_tick, "camera_mode": _camera_mode, "camera_left": _camera_left_cached, "local_player_state": local_state.get("state", "unknown"), "local_world_x": local_state.get("world_x", 0.0), "estimated_rtt_ms": _estimated_peer_rtt_msec, "snapshot_delay_ticks": _snapshot_delay_ticks})
 	queue_redraw()
 	_frame_cost_samples.append(Time.get_ticks_usec() - frame_work_started_usec)
 	while _frame_cost_samples.size() > 300:
 		_frame_cost_samples.pop_front()
+	MultiplayerDiagnostics.record_timing("match_process_work", Time.get_ticks_usec() - frame_work_started_usec)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if _simulation == null or not _simulation.started or _player_state(_local_user_id).get("state", "") != "running":
@@ -322,6 +358,8 @@ func _request_flip(direction: int) -> void:
 
 func _on_peer_data_received(peer_user_id: String, channel_name: String, payload: Dictionary) -> void:
 	_last_peer_traffic_msec[peer_user_id] = Time.get_ticks_msec()
+	if channel_name != "snapshot":
+		MultiplayerDiagnostics.record_event("peer_packet_received", {"peer_id": peer_user_id, "channel": channel_name, "kind": str(payload.get("kind", ""))}, str(payload.get("kind", "")) in ["player_terminal", "match_finished", "race_start_commit"])
 	if not MultiplayerService.is_room_owner() and peer_user_id != _owner_user_id:
 		_record_match_diag("non_owner_authority_rejected", {"peer_id": peer_user_id, "channel": channel_name, "kind": str(payload.get("kind", ""))})
 		return
@@ -331,6 +369,8 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 		if not _is_active_room_member(peer_user_id) and not is_rostered_leave:
 			return
 		match packet_kind:
+			"diagnostic_session":
+				pass # A guest may never create or relay the host-authorized session.
 			"player_explicit_leave":
 				if _is_current_start_generation(payload) and _simulation.mark_disconnected(peer_user_id, "explicit_leave"):
 					_trace_match_event("player_explicit_leave", {"user_id": peer_user_id, "tick": int(_simulation.get("tick"))})
@@ -399,11 +439,25 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 		elif channel_name == "control" and str(payload.get("kind", "")) == "match_finished_ack":
 			if str(payload.get("room_id", "")) == MultiplayerService.get_room_id():
 				_record_match_diag("reliable_finish_ack", {"peer_id": peer_user_id, "tick": int(payload.get("tick", -1))})
+		elif channel_name == "control" and str(payload.get("kind", "")) == "diagnostic_session":
+			if MultiplayerDiagnostics.accept_shared_session(payload, peer_user_id):
+				MultiplayerDiagnostics.attach_session_to_capture()
+				_record_match_diag("diagnostic_session_received", {"session_id": str(payload.get("session_id", ""))})
 		elif channel_name == "snapshot" and str(payload.get("kind", "")) == "snapshot":
 			var new_snapshot: Variant = payload.get("state", {})
+			MultiplayerDiagnostics.increment_total("snapshot_received")
+			if new_snapshot is Dictionary:
+				var received_sequence := int(new_snapshot.get("snapshot_seq", -1))
+				if received_sequence >= 0:
+					if _last_diagnostic_snapshot_sequence >= 0 and received_sequence <= _last_diagnostic_snapshot_sequence:
+						MultiplayerDiagnostics.increment_total("snapshot_out_of_order_or_duplicate")
+					elif _last_diagnostic_snapshot_sequence >= 0 and received_sequence > _last_diagnostic_snapshot_sequence + 1:
+						MultiplayerDiagnostics.increment_total("snapshot_sequence_gaps", received_sequence - _last_diagnostic_snapshot_sequence - 1)
+					_last_diagnostic_snapshot_sequence = maxi(_last_diagnostic_snapshot_sequence, received_sequence)
 			_trace_match_event("snapshot_received", {"tick": int(new_snapshot.get("tick", -1)) if new_snapshot is Dictionary else -1})
 			var previous_tick := _last_authoritative_tick
 			if _accept_authoritative_snapshot(new_snapshot):
+				MultiplayerDiagnostics.increment_total("snapshot_accepted")
 				if previous_tick < 0:
 					_record_match_diag("snapshot_stream_started", {"tick": int(new_snapshot.get("tick", -1))})
 				if bool(_authoritative_snapshot.get("finished", false)):
@@ -446,6 +500,7 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 				if bool(_authoritative_snapshot.get("finished", false)):
 					_status_label.text = tr("Race finished")
 			else:
+				MultiplayerDiagnostics.increment_total("snapshot_rejected")
 				_record_match_diag("snapshot_rejected", {"reason": _last_snapshot_rejection, "last_tick": _last_authoritative_tick, "incoming_tick": int(new_snapshot.get("tick", -1)) if new_snapshot is Dictionary else -1, "incoming_finished": bool(new_snapshot.get("finished", false)) if new_snapshot is Dictionary else false})
 
 func _on_peer_connection_state_changed(peer_user_id: String, state: String, message: String) -> void:
@@ -1045,6 +1100,7 @@ func _try_schedule_start() -> void:
 		if not bool(_received_match_ready.get(user_id, false)) or not bool(_received_runner_profile.get(user_id, false)):
 			return
 	_start_generation = "%s:%d" % [MultiplayerService.get_room_id(), Time.get_ticks_msec()]
+	MultiplayerDiagnostics.set_match_generation(_start_generation)
 	_start_probe_sent_at.clear()
 	_start_peer_offsets.clear()
 	_start_probe_retry_count = 0
@@ -1086,6 +1142,7 @@ func _receive_start_probe(payload: Dictionary) -> void:
 	if generation.is_empty() or probe_id.is_empty():
 		return
 	_start_generation = generation
+	MultiplayerDiagnostics.set_match_generation(_start_generation)
 	var guest_received_msec := Time.get_ticks_msec()
 	var queued := MultiplayerService.queue_reliable_peer_message(_owner_user_id, {
 		"kind": "race_start_probe_ack",
@@ -1475,6 +1532,30 @@ func _sync_player_views() -> void:
 			(_player_views[user_id] as Node2D).queue_free()
 			_player_views.erase(user_id)
 	_bring_local_runner_to_front()
+	if _simulation != null and not _snapshot.is_empty():
+		var ordered: Array[Dictionary] = []
+		var sample_players: Array[Dictionary] = []
+		for state in states:
+			if not state is Dictionary:
+				continue
+			var user_id := str(state.get("user_id", ""))
+			var view: Node2D = _player_views.get(user_id)
+			var final_position := view.position if is_instance_valid(view) else _visual_player_position(state, states)
+			ordered.append({"user_id": user_id, "world_x": final_position.x, "state": str(state.get("state", "unknown"))})
+			var sprite := view.get_node_or_null("AnimatedSprite2D") as AnimatedSprite2D if is_instance_valid(view) else null
+			sample_players.append({"user_id": user_id, "simulated": Vector2(float(state.get("world_x", 0.0)), float(state.get("y", 0.0))), "rendered_local": final_position, "screen_position": final_position - Vector2(camera_left, 0.0), "visual_offset_x": float(_visual_slot_by_user.get(user_id, 0.0)), "gravity_direction": int(state.get("gravity_direction", 1)), "state": str(state.get("state", "unknown")), "z_index": view.z_index if is_instance_valid(view) else 0, "sibling_index": view.get_index() if is_instance_valid(view) else -1, "visible": view.visible if is_instance_valid(view) else false, "flip_v": sprite.flip_v if sprite != null else false})
+		ordered.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+			if not is_equal_approx(float(a.world_x), float(b.world_x)):
+				return float(a.world_x) < float(b.world_x)
+			return str(a.user_id) < str(b.user_id)
+		)
+		var order: Array[String] = []
+		for item in ordered:
+			order.append(str(item.user_id))
+		if not _last_diagnostic_visual_order.is_empty() and order != _last_diagnostic_visual_order:
+			MultiplayerDiagnostics.record_event("visual_order_changed", {"before": _last_diagnostic_visual_order, "after": order, "positions": ordered}, true)
+		_last_diagnostic_visual_order = order
+		MultiplayerDiagnostics.record_start_sample({"camera_left": camera_left, "snapshot_render_tick": _snapshot_render_tick, "authority_tick": _last_authoritative_tick, "simulation_tick": int(_simulation.get("tick")), "visual_correction": _visual_correction, "players": sample_players})
 
 func _visual_player_position(state: Dictionary, states: Array) -> Vector2:
 	var world_position := Vector2(float(state.get("world_x", 0.0)), float(state.get("y", 0.0)))
@@ -1610,6 +1691,8 @@ static func distance_m(world_x: float, start_x: float) -> int:
 	return maxi(0, int((world_x - start_x) / 10.0))
 
 func _record_match_diag(event_name: String, details: Dictionary) -> void:
+	var important := event_name in ["simulation_started", "race_start_handshake_started", "race_start_probe_ack", "race_start_committed", "race_start_commit_received", "snapshot_stream_started", "camera_state_changed", "player_terminal_queued", "player_terminal_received", "match_terminal_snapshot", "match_finished_queued", "reliable_finish_ack", "results_panel_shown", "match_peer_failed", "flip_input_sent", "flip_input_queued", "flip_result_received", "diagnostic_session_received"]
+	MultiplayerDiagnostics.record_event(event_name, details, important)
 	var now := Time.get_ticks_msec()
 	var signature := event_name + ":" + str(details.get("reason", ""))
 	if _diagnostic_event_times.has(signature) and now - int(_diagnostic_event_times[signature]) < 1000:
@@ -1625,7 +1708,7 @@ func _record_match_diag(event_name: String, details: Dictionary) -> void:
 	while _diagnostic_lines.size() > 160:
 		_diagnostic_lines.pop_front()
 	print(line)
-	if is_instance_valid(_diagnostic_text):
+	if is_instance_valid(_diagnostic_text) and is_instance_valid(_diagnostic_panel) and _diagnostic_panel.visible:
 		_diagnostic_text.text = "\n".join(_diagnostic_lines)
 		_diagnostic_text.scroll_vertical = _diagnostic_text.get_line_count()
 
@@ -1634,11 +1717,37 @@ func _toggle_diagnostics() -> void:
 		_diagnostic_panel.visible = not _diagnostic_panel.visible
 
 func _copy_diagnostics() -> void:
-	if _diagnostic_lines.is_empty():
-		_record_match_diag("diagnostics_opened", {"note": "No match diagnostics captured yet."})
-	DisplayServer.clipboard_set("\n".join(_diagnostic_lines))
+	var report_text := MultiplayerDiagnostics.get_export_text(true)
+	DisplayServer.clipboard_set(report_text)
 	if is_instance_valid(_diagnostic_text):
-		_diagnostic_text.text = "\n".join(_diagnostic_lines) + "\n\n" + tr("Copied. Paste these logs here.")
+		_diagnostic_text.text = report_text
+		_diagnostic_text.select_all()
+		_diagnostic_text.scroll_vertical = 0
+		if not OS.has_feature("web"):
+			_diagnostic_status_label.text = tr("Report copied. Debug ID: %s") % str(MultiplayerDiagnostics.get_latest_report().get("diagnostic_session_id", "local only"))
+
+func _save_full_diagnostics() -> void:
+	var saved_path := MultiplayerDiagnostics.save_latest_report()
+	if OS.has_feature("web"):
+		var json_text := MultiplayerDiagnostics.get_export_text(false)
+		var base64 := Marshalls.raw_to_base64(json_text.to_utf8_buffer())
+		JavaScriptBridge.eval("(()=>{const a=document.createElement('a');a.href='data:application/json;base64,%s';a.download='gravity-run-multiplayer-report.json';a.click()})()" % base64, true)
+		_diagnostic_status_label.text = tr("Full report download requested. %s") % saved_path
+	else:
+		_diagnostic_status_label.text = tr("Full report saved locally: %s") % saved_path
+
+func _mark_diagnostic_problem() -> void:
+	MultiplayerDiagnostics.mark_problem("flimmer/lagg")
+
+func _set_diagnostic_opt_in() -> void:
+	MultiplayerDiagnostics.opt_in(true)
+
+func _create_diagnostic_session() -> void:
+	MultiplayerDiagnostics.start_shared_session(_start_generation)
+
+func _on_diagnostics_status_changed(message: String) -> void:
+	if is_instance_valid(_diagnostic_status_label):
+		_diagnostic_status_label.text = message
 
 func _build_hud() -> void:
 	var layer := CanvasLayer.new()
@@ -1779,10 +1888,35 @@ func _build_hud() -> void:
 	var diagnostic_actions := HBoxContainer.new()
 	diagnostic_layout.add_child(diagnostic_actions)
 	var copy_button := Button.new()
-	copy_button.text = tr("Copy diagnostics")
+	copy_button.text = tr("Copy report")
 	copy_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	copy_button.pressed.connect(_copy_diagnostics)
 	diagnostic_actions.add_child(copy_button)
+	var save_button := Button.new()
+	save_button.text = tr("Save full report")
+	save_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	save_button.pressed.connect(_save_full_diagnostics)
+	diagnostic_actions.add_child(save_button)
+	var mark_button := Button.new()
+	mark_button.text = tr("Mark lag / flicker")
+	mark_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mark_button.pressed.connect(_mark_diagnostic_problem)
+	diagnostic_actions.add_child(mark_button)
+	var opt_in_button := Button.new()
+	opt_in_button.text = tr("Enable report upload")
+	opt_in_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	opt_in_button.pressed.connect(_set_diagnostic_opt_in)
+	diagnostic_actions.add_child(opt_in_button)
+	if MultiplayerService.is_room_owner():
+		var session_button := Button.new()
+		session_button.text = tr("Create shared debug ID")
+		session_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		session_button.pressed.connect(_create_diagnostic_session)
+		diagnostic_actions.add_child(session_button)
+	_diagnostic_status_label = Label.new()
+	_diagnostic_status_label.text = MultiplayerDiagnostics.get_status()
+	_diagnostic_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	diagnostic_layout.add_child(_diagnostic_status_label)
 	var close_button := Button.new()
 	close_button.text = tr("Close")
 	close_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1802,6 +1936,7 @@ func _show_results() -> void:
 		return
 	_snapshot = result_snapshot.duplicate(true)
 	_log_terminal_snapshot("results_panel_shown", _snapshot)
+	MultiplayerDiagnostics.finish_match("finished")
 	_results_panel.visible = true
 	_status_label.visible = false
 	_result_label.visible = true
@@ -1936,6 +2071,7 @@ func _show_failure(message: String) -> void:
 
 func _leave_match() -> void:
 	_leaving_match = true
+	MultiplayerDiagnostics.finish_match("left")
 	if not MultiplayerService.is_room_owner() and not _start_generation.is_empty():
 		MultiplayerService.queue_reliable_peer_message(_owner_user_id, {"kind": "player_explicit_leave", "room_id": MultiplayerService.get_room_id(), "match_generation": _start_generation})
 	MultiplayerService.leave_room()
