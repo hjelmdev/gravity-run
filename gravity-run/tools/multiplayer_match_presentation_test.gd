@@ -52,6 +52,7 @@ func _ready() -> void:
 	assert(MatchScript.correction_after_authority(Vector2(102.0, 202.0), Vector2(100.0, 200.0)).is_equal_approx(Vector2(2.0, 2.0)), "small local prediction errors should fade smoothly")
 	assert(MatchScript.correction_after_authority(Vector2(300.0, 200.0), Vector2(100.0, 200.0)) == Vector2.ZERO, "large prediction errors should snap to authority")
 	assert(MatchScript.correction_after_authority(Vector2(102.0, 202.0), Vector2(100.0, 200.0), "running", "dead") == Vector2.ZERO, "terminal state transitions must not be visually delayed")
+	assert(MatchScript.fade_render_correction(Vector2(50.0, 30.0), 0.1, 420.0).is_equal_approx(Vector2(50.0, 0.0)), "guest forward prediction must not be damped toward a stale host snapshot between updates")
 	var ranking := [
 		{"user_id": "alpha", "state": "running", "world_x": 780.0},
 		{"user_id": "beta", "state": "running", "world_x": 780.0},

@@ -209,7 +209,7 @@ func _process(delta: float) -> void:
 			if bool(_snapshot.get("finished", false)):
 				_retry_unacknowledged_finish(delta)
 		else:
-			_visual_correction = _visual_correction.move_toward(Vector2.ZERO, delta * LOCAL_CORRECTION_SPEED)
+			_visual_correction = fade_render_correction(_visual_correction, delta, LOCAL_CORRECTION_SPEED)
 			_compose_client_snapshot()
 	_update_hud()
 	_sync_player_views()
@@ -902,6 +902,12 @@ static func correction_after_authority(rendered_position: Vector2, authoritative
 	if authoritative_state in TERMINAL_STATES or previous_state in TERMINAL_STATES or correction.length() > LOCAL_CORRECTION_SNAP_DISTANCE:
 		return Vector2.ZERO
 	return correction.clamp(Vector2(-160.0, -160.0), Vector2(160.0, 160.0))
+
+static func fade_render_correction(correction: Vector2, delta: float, speed: float) -> Vector2:
+	# Horizontal correction is the local guest's prediction lead over the delayed
+	# host snapshot. Fading it every frame counteracts forward movement and feels
+	# like input lag; retain it between snapshots and recompute at the next one.
+	return Vector2(correction.x, move_toward(correction.y, 0.0, maxf(delta, 0.0) * maxf(speed, 0.0)))
 
 static func estimate_shared_start_msec(host_now_msec: int, safety_margin_seconds: float, peer_round_trip_msec: Array) -> float:
 	var average_one_way_msec := 0.0
