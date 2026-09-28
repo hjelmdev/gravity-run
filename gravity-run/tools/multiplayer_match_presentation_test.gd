@@ -50,9 +50,10 @@ func _ready() -> void:
 	assert(is_equal_approx(MatchScript.render_target_tick(100.0, 1.0, 5.0, 95.0), 103.0), "snapshot extrapolation must be capped to three ticks")
 	assert(is_equal_approx(MatchScript.render_target_tick(100.0, 0.0, 5.0, 96.0), 96.0), "the render timeline must never move backwards")
 	assert(MatchScript.correction_after_authority(Vector2(102.0, 202.0), Vector2(100.0, 200.0)).is_equal_approx(Vector2(2.0, 2.0)), "small local prediction errors should fade smoothly")
-	assert(MatchScript.correction_after_authority(Vector2(300.0, 200.0), Vector2(100.0, 200.0)) == Vector2.ZERO, "large prediction errors should snap to authority")
+	assert(MatchScript.correction_after_authority(Vector2(300.0, 200.0), Vector2(100.0, 200.0)).is_equal_approx(Vector2(200.0, 0.0)), "large ordinary prediction errors should be smoothed, not abruptly erased")
+	assert(MatchScript.correction_after_authority(Vector2(100.0, 350.0), Vector2(100.0, 200.0)).is_equal_approx(Vector2(0.0, 150.0)), "large vertical errors must not erase an unrelated horizontal render anchor")
 	assert(MatchScript.correction_after_authority(Vector2(102.0, 202.0), Vector2(100.0, 200.0), "running", "dead") == Vector2.ZERO, "terminal state transitions must not be visually delayed")
-	assert(MatchScript.fade_render_correction(Vector2(50.0, 30.0), 0.1, 420.0).is_equal_approx(Vector2(50.0, 0.0)), "guest forward prediction must not be damped toward a stale host snapshot between updates")
+	assert(MatchScript.fade_render_correction(Vector2(50.0, 30.0), 0.1, 420.0).length() < Vector2(50.0, 30.0).length(), "a replay continuity error should fade smoothly in both axes")
 	var ranking := [
 		{"user_id": "alpha", "state": "running", "world_x": 780.0},
 		{"user_id": "beta", "state": "running", "world_x": 780.0},

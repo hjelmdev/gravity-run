@@ -10,7 +10,9 @@ const FIXED_DELTA := 1.0 / TICK_RATE
 const PLAYER_WIDTH := RunnerMotionScript.SIZE.x
 const PLAYER_HEIGHT := RunnerMotionScript.SIZE.y
 const RUN_SPEED := RunnerMotionScript.BASE_RUN_SPEED
-const MAX_CATCHUP_TICKS := 5
+const MAX_CATCHUP_TICKS := 12
+const MAX_FUTURE_INPUT_TICKS := 24
+const MAX_INPUT_RESULTS := 64
 
 var manifest: Resource
 var tick := 0
@@ -23,6 +25,10 @@ var _last_flip_tick: Dictionary = {}
 var _barrels: Array[Dictionary] = []
 var _destroyed_event_ids: Dictionary = {}
 var _world_elapsed := 0.0
+var _queued_flip_inputs: Array[Dictionary] = []
+var _processed_inputs: Dictionary = {}
+var _last_queued_sequence: Dictionary = {}
+var _peak_backlog_seconds := 0.0
 
 func configure(course_manifest: Resource, players: Array) -> String:
 	var player_error := RaceRulesScript.validate_players(players)
@@ -44,6 +50,10 @@ func configure(course_manifest: Resource, players: Array) -> String:
 	_barrels.clear()
 	_destroyed_event_ids.clear()
 	_world_elapsed = 0.0
+	_queued_flip_inputs.clear()
+	_processed_inputs.clear()
+	_last_queued_sequence.clear()
+	_peak_backlog_seconds = 0.0
 	for player in players:
 		var user_id := str(player.user_id)
 		var floor_y := float(manifest.get("initial_floor_y"))
@@ -155,23 +165,153 @@ func submit_flip(user_id: String, desired_gravity: int) -> bool:
 func advance_frame(delta: float, finish_when_all_inactive: bool = true) -> Array[Dictionary]:
 	if not started or match_finished:
 		return []
-	_accumulator = minf(_accumulator + maxf(delta, 0.0), FIXED_DELTA * MAX_CATCHUP_TICKS)
+	_accumulator += maxf(delta, 0.0)
+	_peak_backlog_seconds = maxf(_peak_backlog_seconds, _accumulator)
 	var events: Array[Dictionary] = []
 	var steps := 0
 	while _accumulator >= FIXED_DELTA and steps < MAX_CATCHUP_TICKS:
 		_accumulator -= FIXED_DELTA
-		tick += 1
-		_step_world_hazards()
-		_step_player_states(events, finish_when_all_inactive)
+		_step_one_tick(events, finish_when_all_inactive)
 		steps += 1
 	return events
+
+func advance_to_tick(target_tick: int, max_steps: int = MAX_CATCHUP_TICKS) -> Array[Dictionary]:
+	var events: Array[Dictionary] = []
+	if not started or match_finished:
+		return events
+	var steps := 0
+	while tick < target_tick and steps < maxi(max_steps, 0) and not match_finished:
+		_step_one_tick(events, false)
+		steps += 1
+	return events
+
+func _step_one_tick(events: Array[Dictionary], finish_when_all_inactive: bool) -> void:
+	tick += 1
+	_apply_queued_flip_inputs(tick)
+	_step_world_hazards()
+	_step_player_states(events, finish_when_all_inactive)
+
+func queue_flip(user_id: String, sequence: int, desired_gravity: int, target_tick: int) -> Dictionary:
+	if not started or match_finished or not _players.has(user_id):
+		return {"queued": false, "reason": "inactive_or_unknown_player"}
+	if sequence <= int(_last_queued_sequence.get(user_id, 0)) or sequence <= 0:
+		return {"queued": false, "reason": "duplicate_or_stale_sequence"}
+	if desired_gravity not in [-1, 1]:
+		return {"queued": false, "reason": "invalid_gravity"}
+	var effective_tick := maxi(target_tick, tick + 1)
+	if effective_tick > tick + MAX_FUTURE_INPUT_TICKS:
+		return {"queued": false, "reason": "target_tick_too_far"}
+	_queued_flip_inputs.append({"user_id": user_id, "sequence": sequence, "gravity_direction": desired_gravity, "target_tick": effective_tick})
+	_last_queued_sequence[user_id] = sequence
+	return {"queued": true, "target_tick": effective_tick}
+
+func _apply_queued_flip_inputs(step_tick: int) -> void:
+	_queued_flip_inputs.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if int(a.get("target_tick", 0)) != int(b.get("target_tick", 0)):
+			return int(a.get("target_tick", 0)) < int(b.get("target_tick", 0))
+		if str(a.get("user_id", "")) != str(b.get("user_id", "")):
+			return str(a.get("user_id", "")) < str(b.get("user_id", ""))
+		return int(a.get("sequence", 0)) < int(b.get("sequence", 0))
+	)
+	var pending: Array[Dictionary] = []
+	for command in _queued_flip_inputs:
+		if int(command.get("target_tick", 0)) > step_tick:
+			pending.append(command)
+			continue
+		var user_id := str(command.get("user_id", ""))
+		var sequence := int(command.get("sequence", 0))
+		var accepted := submit_flip(user_id, int(command.get("gravity_direction", 0)))
+		var results: Array = _processed_inputs.get(user_id, [])
+		results.append({"sequence": sequence, "target_tick": int(command.get("target_tick", 0)), "processed_tick": step_tick, "accepted": accepted})
+		while results.size() > MAX_INPUT_RESULTS:
+			results.pop_front()
+		_processed_inputs[user_id] = results
+	_queued_flip_inputs = pending
 
 func get_snapshot() -> Dictionary:
 	var snapshot_players: Array[Dictionary] = []
 	for user_id in _players:
 		snapshot_players.append((_players[user_id] as Dictionary).duplicate(true))
 	snapshot_players.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return str(a.user_id) < str(b.user_id))
-	return {"tick": tick, "course_identity": str(manifest.get("course_identity")) if manifest != null else "", "players": snapshot_players, "placements": _placements.duplicate(true), "finished": match_finished, "world_hazards": {"barrels": _barrels.duplicate(true), "destroyed_event_ids": _destroyed_event_ids.keys()}}
+	return {"tick": tick, "course_identity": str(manifest.get("course_identity")) if manifest != null else "", "players": snapshot_players, "placements": _placements.duplicate(true), "finished": match_finished, "world_time": _world_elapsed, "accumulator": fmod(_accumulator, FIXED_DELTA), "world_hazards": {"barrels": _barrels.duplicate(true), "destroyed_event_ids": _destroyed_event_ids.keys()}, "processed_inputs": _processed_inputs.duplicate(true), "backlog_seconds": _accumulator, "peak_backlog_seconds": _peak_backlog_seconds}
+
+func restore_checkpoint(checkpoint: Variant) -> bool:
+	if not checkpoint is Dictionary or manifest == null:
+		return false
+	if str(checkpoint.get("course_identity", "")) != str(manifest.get("course_identity")):
+		return false
+	var checkpoint_tick := int(checkpoint.get("tick", -1))
+	var world_time := float(checkpoint.get("world_time", NAN))
+	var accumulator := float(checkpoint.get("accumulator", NAN))
+	var raw_players: Variant = checkpoint.get("players", null)
+	var raw_placements: Variant = checkpoint.get("placements", null)
+	var raw_hazards: Variant = checkpoint.get("world_hazards", null)
+	var raw_results: Variant = checkpoint.get("processed_inputs", {})
+	if checkpoint_tick < 0 or not is_finite(world_time) or world_time < 0.0 or absf(world_time - float(checkpoint_tick) * FIXED_DELTA) > 0.001 or not is_finite(accumulator) or accumulator < 0.0 or accumulator >= FIXED_DELTA or not raw_players is Array or not raw_placements is Array or not raw_results is Dictionary:
+		return false
+	if not authoritative_world_hazard_error(raw_hazards).is_empty() or raw_players.size() != _players.size():
+		return false
+	var restored_players := {}
+	for state in raw_players:
+		if not state is Dictionary:
+			return false
+		var user_id := str(state.get("user_id", ""))
+		if not _players.has(user_id) or restored_players.has(user_id):
+			return false
+		var x := float(state.get("world_x", NAN))
+		var y := float(state.get("y", NAN))
+		var vertical_speed := float(state.get("vertical_speed", NAN))
+		var cooldown := float(state.get("cooldown", NAN))
+		var gravity_direction := int(state.get("gravity_direction", 0))
+		if not is_finite(x) or not is_finite(y) or not is_finite(vertical_speed) or not is_finite(cooldown) or gravity_direction not in [-1, 1] or str(state.get("state", "")) not in ["running", "dead", "finished", "disconnected"]:
+			return false
+		restored_players[user_id] = state.duplicate(true)
+	if restored_players.size() != _players.size():
+		return false
+	var candidate_hazards: Dictionary = raw_hazards.duplicate(true)
+	var expected_events := {}
+	for event in manifest.get("events"):
+		expected_events[str(event.get("event_id", ""))] = true
+	for destroyed_id in candidate_hazards.get("destroyed_event_ids", []):
+		if not expected_events.has(str(destroyed_id)):
+			return false
+	for barrel in candidate_hazards.get("barrels", []):
+		for key in ["x", "y", "width", "height", "motion_speed_multiplier", "spawn_time", "fall_velocity", "roll_angle", "rotation"]:
+			if not is_finite(float(barrel.get(key, NAN))):
+				return false
+	var expected_user_ids := {}
+	for user_id in _players:
+		expected_user_ids[str(user_id)] = true
+	for user_id in raw_results:
+		var user_results: Variant = raw_results[user_id]
+		if not expected_user_ids.has(str(user_id)) or not user_results is Array or user_results.size() > MAX_INPUT_RESULTS:
+			return false
+		for result in user_results:
+			if not result is Dictionary or int(result.get("sequence", 0)) <= 0 or int(result.get("processed_tick", -1)) < 0 or int(result.get("processed_tick", -1)) > checkpoint_tick or typeof(result.get("accepted")) != TYPE_BOOL:
+				return false
+	var candidate_destroyed := {}
+	for event_id in candidate_hazards.get("destroyed_event_ids", []):
+		candidate_destroyed[str(event_id)] = true
+	# Validate the complete frame before mutating any live simulation state.
+	tick = checkpoint_tick
+	_world_elapsed = world_time
+	_accumulator = accumulator
+	_players = restored_players
+	_placements = raw_placements.duplicate(true)
+	_barrels = candidate_hazards.get("barrels", []).duplicate(true)
+	_destroyed_event_ids = candidate_destroyed
+	_processed_inputs = raw_results.duplicate(true)
+	_queued_flip_inputs.clear()
+	_last_queued_sequence.clear()
+	for user_id in _processed_inputs:
+		var results: Array = _processed_inputs[user_id]
+		var highest_sequence := 0
+		for result in results:
+			highest_sequence = maxi(highest_sequence, int(result.get("sequence", 0)))
+		if highest_sequence > 0:
+			_last_queued_sequence[user_id] = highest_sequence
+	match_finished = bool(checkpoint.get("finished", false))
+	return true
 
 func apply_authoritative_world_hazards(world_hazards: Variant) -> bool:
 	if not authoritative_world_hazard_error(world_hazards).is_empty():

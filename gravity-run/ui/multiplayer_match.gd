@@ -2,6 +2,7 @@ extends Node2D
 
 const PlayerScene := preload("res://player/player.tscn")
 const SimulationScript := preload("res://systems/multiplayer_simulation.gd")
+const LocalPredictionScript := preload("res://systems/multiplayer_local_prediction.gd")
 const SpikeScene := preload("res://hazards/spikes.tscn")
 const BlockScene := preload("res://hazards/block.tscn")
 const BarrelScene := preload("res://hazards/barrel.tscn")
@@ -19,12 +20,13 @@ const SNAPSHOT_RATE := 15.0
 const SNAPSHOT_INTERVAL_SECONDS := 1.0 / SNAPSHOT_RATE
 const SNAPSHOT_EXTRAPOLATION_LIMIT_TICKS := 3.0
 const SIMULATION_TICK_RATE := 60.0
-const LOCAL_CORRECTION_SNAP_DISTANCE := 120.0
-const LOCAL_CORRECTION_SPEED := 420.0
+const LOCAL_CORRECTION_SPEED := 720.0
+const MAX_PREDICTION_LEAD_TICKS := 6
 const VISUAL_PLAYER_SLOT_SPACING := 28.0
 
 var _manifest: Resource
 var _simulation: RefCounted
+var _local_prediction: RefCounted
 var _snapshot: Dictionary = {}
 var _authoritative_snapshot: Dictionary = {}
 var _snapshot_buffer: Array[Dictionary] = []
@@ -33,7 +35,6 @@ var _last_authoritative_tick := -1
 var _visual_correction := Vector2.ZERO
 var _visual_slot_by_user: Dictionary = {}
 var _input_sequence := 0
-var _pending_input_sequences: Array[int] = []
 var _last_input_sequence: Dictionary = {}
 var _start_generation := ""
 var _start_probe_sent_at: Dictionary = {}
@@ -135,6 +136,9 @@ func _ready() -> void:
 	if not configuration_error.is_empty():
 		_show_failure(configuration_error)
 		return
+	if not MultiplayerService.is_room_owner():
+		_local_prediction = LocalPredictionScript.new()
+		_local_prediction.bind(_simulation, _local_user_id)
 	_build_course_view()
 	_snapshot = _simulation.get_snapshot()
 	_sync_player_views()
@@ -175,9 +179,11 @@ func _process(delta: float) -> void:
 		var simulation_delta := delta
 		if just_started:
 			simulation_delta = maxf(_network_clock - _go_start_at, 0.0)
-		var events: Array[Dictionary] = _simulation.advance_frame(simulation_delta, MultiplayerService.is_room_owner())
-		if str(_simulation.get_player(_local_user_id).get("state", "running")) in ["dead", "finished", "disconnected"]:
-			_pending_input_sequences.clear()
+		var events: Array[Dictionary]
+		if MultiplayerService.is_room_owner():
+			events = _simulation.advance_frame(simulation_delta, true)
+		else:
+			events = _simulation.advance_to_tick(_prediction_target_tick(), SimulationScript.MAX_CATCHUP_TICKS)
 		if MultiplayerService.is_room_owner():
 			for event in events:
 				var event_kind := str(event.get("kind", ""))
@@ -194,7 +200,8 @@ func _process(delta: float) -> void:
 			_snapshot_elapsed += delta
 			if _snapshot_elapsed >= SNAPSHOT_INTERVAL_SECONDS:
 				_snapshot_elapsed = fmod(_snapshot_elapsed, SNAPSHOT_INTERVAL_SECONDS)
-				var snapshot_payload := {"kind": "snapshot", "state": _snapshot, "ack_input_sequences": _last_input_sequence.duplicate(true)}
+				_snapshot["match_generation"] = _start_generation
+				var snapshot_payload := {"kind": "snapshot", "state": _snapshot}
 				var send_result: Dictionary = MultiplayerService.send_peer_message_to_all("snapshot", snapshot_payload)
 				_snapshot_send_totals.count += int(send_result.get("sent", 0))
 				_snapshot_send_totals.bytes += int(send_result.get("bytes", 0))
@@ -203,7 +210,7 @@ func _process(delta: float) -> void:
 				_snapshot_send_totals.dropped += int(send_result.get("dropped", 0))
 			_snapshot_send_metrics_elapsed += delta
 			if _snapshot_send_metrics_elapsed >= 5.0:
-				_record_match_diag("snapshot_send_quality", {"peers_sent": _snapshot_send_totals.count, "bytes": _snapshot_send_totals.bytes, "mean_bytes_per_peer": int(_snapshot_send_totals.bytes / maxi(_snapshot_send_totals.count, 1)), "serialization_usec": _snapshot_send_totals.serialized_usec, "failed": _snapshot_send_totals.failed, "dropped_congested": _snapshot_send_totals.dropped})
+				_record_match_diag("snapshot_send_quality", {"peers_sent": _snapshot_send_totals.count, "bytes": _snapshot_send_totals.bytes, "mean_bytes_per_peer": int(_snapshot_send_totals.bytes / maxi(_snapshot_send_totals.count, 1)), "serialization_usec": _snapshot_send_totals.serialized_usec, "failed": _snapshot_send_totals.failed, "dropped_congested": _snapshot_send_totals.dropped, "simulation_backlog_ms": int(float(_snapshot.get("backlog_seconds", 0.0)) * 1000.0), "peak_simulation_backlog_ms": int(float(_snapshot.get("peak_backlog_seconds", 0.0)) * 1000.0), "host_tick": int(_snapshot.get("tick", -1))})
 				_snapshot_send_totals = {"count": 0, "bytes": 0, "serialized_usec": 0, "failed": 0, "dropped": 0}
 				_snapshot_send_metrics_elapsed = 0.0
 			if bool(_snapshot.get("finished", false)):
@@ -249,18 +256,23 @@ func _request_flip(direction: int) -> void:
 		return
 	if not MultiplayerService.is_room_owner():
 		_input_sequence += 1
+		var target_tick := int(_simulation.get("tick")) + 1
+		var sent_at_msec := Time.get_ticks_msec()
+		_local_prediction.remember_input(_input_sequence, target_tick, direction, sent_at_msec)
 		var input_payload := {
 			"kind": "flip",
+			"match_generation": _start_generation,
 			"gravity_direction": direction,
 			"input_sequence": _input_sequence,
-			"client_tick": int(_simulation.tick),
+			"target_host_tick": target_tick,
+			"sent_at_msec": sent_at_msec,
 		}
 		if MultiplayerService.send_peer_message(_owner_user_id, "control", input_payload):
-			_pending_input_sequences.append(_input_sequence)
-			_record_match_diag("flip_input_sent", {"sequence": _input_sequence, "client_tick": int(_simulation.tick)})
+			_record_match_diag("flip_input_sent", {"sequence": _input_sequence, "target_host_tick": target_tick, "predicted_tick": int(_simulation.get("tick"))})
 		else:
+			_local_prediction.reject_input(_input_sequence)
 			_simulation.apply_authoritative_player_state(_local_user_id, previous_state)
-			_record_match_diag("flip_input_send_failed", {"sequence": _input_sequence, "client_tick": int(_simulation.tick)})
+			_record_match_diag("flip_input_send_failed", {"sequence": _input_sequence, "target_host_tick": target_tick})
 
 func _on_peer_data_received(peer_user_id: String, channel_name: String, payload: Dictionary) -> void:
 	if MultiplayerService.is_room_owner() and channel_name == "control":
@@ -290,18 +302,26 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 			"race_start_cancel_ack":
 				pass
 			"match_finished_ack":
-				if str(payload.get("room_id", "")) == MultiplayerService.get_room_id() and int(payload.get("tick", -1)) == int(_finish_payload.get("tick", -2)):
+				if str(payload.get("room_id", "")) == MultiplayerService.get_room_id() and str(payload.get("match_generation", "")) == _start_generation and int(payload.get("tick", -1)) == int(_finish_payload.get("tick", -2)):
 					_finish_acknowledged_peers[peer_user_id] = true
 					_record_match_diag("reliable_finish_ack", {"peer_id": peer_user_id, "tick": int(payload.get("tick", -1))})
 			"flip":
 				var sequence := int(payload.get("input_sequence", 0))
-				if sequence > int(_last_input_sequence.get(peer_user_id, 0)):
-					var accepted: bool = _simulation.submit_flip(peer_user_id, int(payload.get("gravity_direction", 0)))
+				if str(payload.get("match_generation", "")) != _start_generation:
+					_record_match_diag("flip_input_rejected", {"peer_id": peer_user_id, "sequence": sequence, "reason": "match_generation_mismatch"})
+				elif sequence > int(_last_input_sequence.get(peer_user_id, 0)):
+					var queued: Dictionary = _simulation.queue_flip(peer_user_id, sequence, int(payload.get("gravity_direction", 0)), int(payload.get("target_host_tick", -1)))
 					_last_input_sequence[peer_user_id] = sequence
-					_record_match_diag("flip_input_processed", {"peer_id": peer_user_id, "sequence": sequence, "client_tick": int(payload.get("client_tick", -1)), "host_tick": int(_simulation.get("tick")), "accepted": accepted})
+					var peer_offset := float((_start_peer_offsets.get(peer_user_id, {}) as Dictionary).get("offset_msec", 0.0))
+					var input_age_msec := maxi(0, Time.get_ticks_msec() - int(payload.get("sent_at_msec", Time.get_ticks_msec())) + int(round(peer_offset)))
+					_record_match_diag("flip_input_queued", {"peer_id": peer_user_id, "sequence": sequence, "requested_tick": int(payload.get("target_host_tick", -1)), "effective_tick": int(queued.get("target_tick", -1)), "queued": bool(queued.get("queued", false)), "reason": str(queued.get("reason", "")), "host_tick": int(_simulation.get("tick")), "estimated_input_one_way_ms": input_age_msec})
+					if not bool(queued.get("queued", false)):
+						MultiplayerService.queue_reliable_peer_message(peer_user_id, {"kind": "flip_result", "room_id": MultiplayerService.get_room_id(), "match_generation": _start_generation, "sequence": sequence, "accepted": false, "processed_tick": int(_simulation.get("tick")), "reason": str(queued.get("reason", "rejected"))})
 	elif not MultiplayerService.is_room_owner():
 		if channel_name == "control" and str(payload.get("kind", "")) == "match_finished":
 			_accept_reliable_match_finished(payload)
+		elif channel_name == "control" and str(payload.get("kind", "")) == "flip_result":
+			_accept_flip_result(payload)
 		elif channel_name == "control" and str(payload.get("kind", "")) == "player_terminal":
 			_accept_reliable_player_terminal(payload)
 		elif channel_name == "control" and str(payload.get("kind", "")) == "match_setup_request":
@@ -324,7 +344,6 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 			var new_snapshot: Variant = payload.get("state", {})
 			var previous_tick := _last_authoritative_tick
 			if _accept_authoritative_snapshot(new_snapshot):
-				_acknowledge_local_inputs(payload.get("ack_input_sequences", {}))
 				if previous_tick < 0:
 					_record_match_diag("snapshot_stream_started", {"tick": int(new_snapshot.get("tick", -1))})
 				if bool(_authoritative_snapshot.get("finished", false)):
@@ -348,7 +367,7 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 					var latest_sample: Dictionary = _snapshot_buffer.back() if not _snapshot_buffer.is_empty() else {}
 					var latest_age_msec := (Time.get_ticks_msec() - _last_snapshot_receive_msec) if _last_snapshot_receive_msec > 0 else -1
 					var latest_tick := int(latest_sample.get("tick", -1))
-					_record_match_diag("snapshot_quality", {"room_id": MultiplayerService.get_room_id(), "samples": _snapshot_interarrival_count, "mean_interarrival_ms": _snapshot_interarrival_total_msec / _snapshot_interarrival_count, "estimated_interval_ms": _snapshot_mean_interval_msec, "jitter_ewma_ms": _snapshot_jitter_msec, "latest_age_ms": latest_age_msec, "buffer_samples": _snapshot_buffer.size(), "buffer_tick_span": latest_tick - int(_snapshot_buffer.front().get("tick", latest_tick)) if not _snapshot_buffer.is_empty() else 0, "render_tick": _snapshot_render_tick, "render_samples": _snapshot_render_samples, "extrapolation_frames": _snapshot_extrapolated_frames, "extrapolation_ratio": float(_snapshot_extrapolated_frames) / maxf(float(_snapshot_render_samples), 1.0), "max_local_correction_px": _max_local_correction_px, "estimated_missing_ticks": _snapshot_tick_gaps})
+					_record_match_diag("snapshot_quality", {"room_id": MultiplayerService.get_room_id(), "samples": _snapshot_interarrival_count, "mean_interarrival_ms": _snapshot_interarrival_total_msec / _snapshot_interarrival_count, "estimated_interval_ms": _snapshot_mean_interval_msec, "jitter_ewma_ms": _snapshot_jitter_msec, "latest_age_ms": latest_age_msec, "buffer_samples": _snapshot_buffer.size(), "buffer_tick_span": latest_tick - int(_snapshot_buffer.front().get("tick", latest_tick)) if not _snapshot_buffer.is_empty() else 0, "render_tick": _snapshot_render_tick, "local_prediction_tick": int(_simulation.get("tick")), "authoritative_tick": _last_authoritative_tick, "prediction_lead_ticks": int(_simulation.get("tick")) - _last_authoritative_tick, "render_samples": _snapshot_render_samples, "extrapolation_frames": _snapshot_extrapolated_frames, "extrapolation_ratio": float(_snapshot_extrapolated_frames) / maxf(float(_snapshot_render_samples), 1.0), "max_local_correction_px": _max_local_correction_px, "estimated_missing_ticks": _snapshot_tick_gaps})
 					_snapshot_interarrival_total_msec = 0
 					_snapshot_interarrival_count = 0
 					_snapshot_tick_gaps = 0
@@ -381,6 +400,7 @@ func _send_reliable_player_terminal(user_id: String) -> void:
 	var payload := {
 		"kind": "player_terminal",
 		"room_id": MultiplayerService.get_room_id(),
+		"match_generation": _start_generation,
 		"course_identity": str(_manifest.get("course_identity")),
 		"tick": int(_simulation.get("tick")),
 		"player": player_state,
@@ -398,6 +418,7 @@ func _send_reliable_match_finished(snapshot: Dictionary) -> void:
 	_finish_payload = {
 		"kind": "match_finished",
 		"room_id": MultiplayerService.get_room_id(),
+		"match_generation": _start_generation,
 		"course_identity": str(snapshot.get("course_identity", "")),
 		"tick": int(snapshot.get("tick", -1)),
 		"finished": true,
@@ -427,7 +448,7 @@ func _queue_finish_for_unacknowledged_peers() -> void:
 		_record_match_diag("match_finished_queued", {"peer_id": peer_user_id, "tick": int(_finish_payload.get("tick", -1)), "queued": queued})
 
 func _accept_reliable_player_terminal(payload: Dictionary) -> void:
-	if str(payload.get("room_id", "")) != MultiplayerService.get_room_id() or str(payload.get("course_identity", "")) != str(_manifest.get("course_identity")):
+	if str(payload.get("room_id", "")) != MultiplayerService.get_room_id() or str(payload.get("match_generation", "")) != _start_generation or str(payload.get("course_identity", "")) != str(_manifest.get("course_identity")):
 		_record_match_diag("player_terminal_rejected", {"reason": "room_or_course_mismatch"})
 		return
 	var player: Variant = payload.get("player", {})
@@ -476,6 +497,9 @@ func _accept_reliable_match_finished(payload: Dictionary) -> void:
 	if str(payload.get("room_id", "")) != MultiplayerService.get_room_id() or str(payload.get("course_identity", "")) != str(_manifest.get("course_identity")):
 		_record_match_diag("reliable_finish_rejected", {"reason": "room_or_course_mismatch"})
 		return
+	if str(payload.get("match_generation", "")) != _start_generation:
+		_record_match_diag("reliable_finish_rejected", {"reason": "match_generation_mismatch"})
+		return
 	var incoming_tick := int(payload.get("tick", -1))
 	var states: Variant = payload.get("players", null)
 	if not bool(payload.get("finished", false)) or incoming_tick < 0 or not states is Array:
@@ -500,19 +524,22 @@ func _accept_reliable_match_finished(payload: Dictionary) -> void:
 	var terminal := {
 		"tick": incoming_tick,
 		"course_identity": str(payload.get("course_identity", "")),
+		"match_generation": _start_generation,
 		"finished": true,
 		"players": states.duplicate(true),
 		"placements": [],
 		"world_hazards": _authoritative_snapshot.get("world_hazards", _simulation.get_snapshot().get("world_hazards", {})),
 	}
 	_authoritative_snapshot = terminal.duplicate(true)
+	_authoritative_snapshot["match_generation"] = _start_generation
 	_snapshot = terminal.duplicate(true)
-	_pending_input_sequences.clear()
+	if _local_prediction != null:
+		_local_prediction.clear()
 	_visual_correction = Vector2.ZERO
 	_last_authoritative_tick = maxi(_last_authoritative_tick, incoming_tick)
 	_snapshot_buffer.clear()
 	_log_terminal_snapshot("guest_received_reliable_finish", terminal)
-	MultiplayerService.queue_reliable_peer_message(_owner_user_id, {"kind": "match_finished_ack", "room_id": MultiplayerService.get_room_id(), "tick": incoming_tick})
+	MultiplayerService.queue_reliable_peer_message(_owner_user_id, {"kind": "match_finished_ack", "room_id": MultiplayerService.get_room_id(), "match_generation": _start_generation, "tick": incoming_tick})
 
 func _accept_authoritative_snapshot(snapshot: Variant) -> bool:
 	if not snapshot is Dictionary:
@@ -520,6 +547,9 @@ func _accept_authoritative_snapshot(snapshot: Variant) -> bool:
 		return false
 	if str(snapshot.get("course_identity", "")) != str(_manifest.get("course_identity")):
 		_last_snapshot_rejection = "course_identity_mismatch"
+		return false
+	if str(snapshot.get("match_generation", "")) != _start_generation:
+		_last_snapshot_rejection = "match_generation_mismatch"
 		return false
 	var incoming_tick := int(snapshot.get("tick", -1))
 	var states: Variant = snapshot.get("players", null)
@@ -549,44 +579,62 @@ func _accept_authoritative_snapshot(snapshot: Variant) -> bool:
 	if local_state.is_empty():
 		_last_snapshot_rejection = "local_player_missing"
 		return false
-	var hazard_state: Variant = snapshot.get("world_hazards", {})
-	var hazard_error: String = _simulation.authoritative_world_hazard_error(hazard_state)
-	if hazard_error.is_empty():
-		_simulation.apply_authoritative_world_hazards(hazard_state)
-	else:
-		# Hazard data is useful but must not gate authoritative runner updates. A
-		# stale/mismatched barrel roster used to freeze every guest-side host pose.
-		_record_match_diag("snapshot_hazards_rejected", {"reason": hazard_error, "tick": incoming_tick})
-	var predicted: Dictionary = _simulation.get_player(_local_user_id)
-	var predicted_render := Vector2(float(predicted.get("world_x", 0.0)), float(predicted.get("y", 0.0))) + _visual_correction
-	var authoritative_position := Vector2(float(local_state.get("world_x", 0.0)), float(local_state.get("y", 0.0)))
-	# Full rollback/replay needs per-tick collision and input history. Until that
-	# exists, authority controls simulation while runner and camera share a
-	# bounded render-only correction.
-	_visual_correction = correction_after_authority(predicted_render, authoritative_position, str(predicted.get("state", "running")), str(local_state.get("state", "running")))
-	_max_local_correction_px = maxf(_max_local_correction_px, _visual_correction.length())
-	if not _simulation.apply_authoritative_player_state(_local_user_id, local_state):
-		_last_snapshot_rejection = "local_player_state_invalid"
-		return false
+	var old_render := _local_render_position()
+	var old_prediction_tick := int(_simulation.get("tick"))
+	var previous_authoritative_tick := _last_authoritative_tick
+	var previous_authoritative_snapshot := _authoritative_snapshot
 	_last_authoritative_tick = incoming_tick
 	_last_snapshot_rejection = ""
 	_authoritative_snapshot = snapshot.duplicate(true)
+	var replay_target := maxi(old_prediction_tick, _prediction_target_tick())
+	var reconciliation: Dictionary = _local_prediction.reconcile(snapshot, replay_target)
+	if not bool(reconciliation.get("ok", false)):
+		_last_authoritative_tick = previous_authoritative_tick
+		_authoritative_snapshot = previous_authoritative_snapshot
+		_last_snapshot_rejection = "checkpoint_or_replay_failed:%s" % str(reconciliation.get("reason", "unknown"))
+		return false
+	var replayed: Dictionary = reconciliation.get("new_player", {})
+	_visual_correction = correction_after_authority(old_render, Vector2(float(replayed.get("world_x", 0.0)), float(replayed.get("y", 0.0))), "running", str(local_state.get("state", "running")))
+	for result in reconciliation.get("confirmed_inputs", []):
+		_record_match_diag("local_input_confirmed", {"sequence": int(result.get("sequence", 0)), "accepted": bool(result.get("accepted", false)), "target_tick": int(result.get("target_tick", -1)), "processed_tick": int(result.get("processed_tick", -1)), "input_ack_delay_ms": maxi(0, Time.get_ticks_msec() - int(result.get("sent_at_msec", Time.get_ticks_msec())))})
+	var replay_errors: Array = reconciliation.get("replay_errors", [])
+	if not replay_errors.is_empty() or bool(reconciliation.get("replay_was_bounded", false)):
+		_record_match_diag("prediction_replay_limited", {"snapshot_tick": incoming_tick, "requested_target_tick": int(reconciliation.get("target_tick", replay_target)), "replayed_to_tick": int(reconciliation.get("replayed_to_tick", -1)), "errors": replay_errors})
+	_max_local_correction_px = maxf(_max_local_correction_px, _visual_correction.length())
 	_snapshot_buffer.append({"tick": incoming_tick, "received_at": _network_clock, "state": _authoritative_snapshot})
 	while _snapshot_buffer.size() > 32:
 		_snapshot_buffer.pop_front()
 	return true
 
-func _acknowledge_local_inputs(acknowledgements: Variant) -> void:
-	if not acknowledgements is Dictionary:
+func _accept_flip_result(payload: Dictionary) -> void:
+	if str(payload.get("room_id", "")) != MultiplayerService.get_room_id() or str(payload.get("match_generation", "")) != _start_generation:
 		return
-	var acknowledged_sequence := int(acknowledgements.get(_local_user_id, 0))
-	if acknowledged_sequence <= 0:
+	var sequence := int(payload.get("sequence", 0))
+	if sequence <= 0:
 		return
-	var remaining: Array[int] = []
-	for sequence in _pending_input_sequences:
-		if sequence > acknowledged_sequence:
-			remaining.append(sequence)
-	_pending_input_sequences = remaining
+	if bool(payload.get("accepted", false)):
+		return # Accepted commands are retired only by a checkpoint containing their applied tick.
+	if _local_prediction == null or not _local_prediction.reject_input(sequence):
+		return
+	_record_match_diag("local_input_confirmed", {"sequence": sequence, "accepted": false, "processed_tick": int(payload.get("processed_tick", -1)), "reason": str(payload.get("reason", ""))})
+	if _authoritative_snapshot.is_empty():
+		return
+	var old_render := _local_render_position()
+	var reconciliation: Dictionary = _local_prediction.reconcile(_authoritative_snapshot, maxi(int(_simulation.get("tick")), _prediction_target_tick()))
+	if bool(reconciliation.get("ok", false)):
+		var replayed: Dictionary = reconciliation.get("new_player", {})
+		var authority_player := _player_state(_local_user_id)
+		_visual_correction = correction_after_authority(old_render, Vector2(float(replayed.get("world_x", 0.0)), float(replayed.get("y", 0.0))), "running", str(authority_player.get("state", "running")))
+
+func _prediction_target_tick() -> int:
+	if _planned_local_start_msec <= 0:
+		return maxi(_last_authoritative_tick, 0)
+	var elapsed_msec := maxi(Time.get_ticks_msec() - _planned_local_start_msec, 0)
+	var wall_clock_tick := int(floor(float(elapsed_msec) * SIMULATION_TICK_RATE / 1000.0))
+	var target := wall_clock_tick + 2
+	var prediction_ceiling := MAX_PREDICTION_LEAD_TICKS if _last_authoritative_tick < 0 else _last_authoritative_tick + MAX_PREDICTION_LEAD_TICKS
+	target = mini(target, prediction_ceiling)
+	return maxi(target, 0)
 
 func _log_terminal_snapshot(reason: String, snapshot: Dictionary) -> void:
 	var player_summary: Array[Dictionary] = []
@@ -606,7 +654,7 @@ func _compose_client_snapshot() -> void:
 		return
 	var latest: Dictionary = _snapshot_buffer.back()
 	var latest_tick := float(latest.get("tick", 0))
-	var render_target := render_target_tick(latest_tick, _network_clock - float(latest.get("received_at", _network_clock)), _snapshot_delay_ticks, _snapshot_render_tick)
+	var render_target := render_target_tick(latest_tick, _network_clock - float(latest.get("received_at", _network_clock)), _snapshot_delay_ticks, _snapshot_render_tick, 0.0)
 	_snapshot_render_tick = render_target
 	_snapshot_render_samples += 1
 	if render_target > latest_tick:
@@ -627,8 +675,6 @@ func _compose_client_snapshot() -> void:
 	var later_state: Dictionary = later.state
 	var span_ticks := float(later.get("tick", 0)) - float(earlier.get("tick", 0))
 	var weight := clampf((render_target - float(earlier.get("tick", 0))) / span_ticks, 0.0, 1.0) if span_ticks > 0.0 else 1.0
-	if render_target > latest_tick and span_ticks > 0.0:
-		weight = 1.0 + (render_target - latest_tick) / span_ticks
 	var earlier_players: Dictionary = {}
 	var later_players: Dictionary = {}
 	for state in earlier_state.get("players", []):
@@ -645,6 +691,10 @@ func _compose_client_snapshot() -> void:
 		if user_id == _local_user_id:
 			var local: Dictionary = _simulation.get_player(user_id)
 			if not local.is_empty():
+				var authoritative_local := _player_state(user_id)
+				if str(local.get("state", "running")) in ["dead", "finished", "disconnected"] and str(authoritative_local.get("state", "running")) == "running":
+					local["state"] = "running"
+					local["blocked"] = bool(authoritative_local.get("blocked", false))
 				displayed.append(local)
 			continue
 		var from: Dictionary = earlier_players.get(user_id, {})
@@ -843,7 +893,8 @@ func _receive_start_commit(payload: Dictionary) -> void:
 		return
 	_go_start_at = _network_clock + maxf(float(_planned_local_start_msec - Time.get_ticks_msec()) / 1000.0, 0.0)
 	_start_committed = true
-	_pending_input_sequences.clear()
+	if _local_prediction != null:
+		_local_prediction.clear()
 	_visual_correction = Vector2.ZERO
 	MultiplayerService.queue_reliable_peer_message(_owner_user_id, {"kind": "race_start_commit_ack", "room_id": MultiplayerService.get_room_id(), "generation": _start_generation, "start_tick": 0})
 	_record_match_diag("race_start_commit_received", {"generation": _start_generation, "planned_host_start_msec": _planned_host_start_msec, "planned_local_start_msec": _planned_local_start_msec, "remaining_ms": int(maxf(_go_start_at - _network_clock, 0.0) * 1000.0), "start_tick": 0})
@@ -899,15 +950,12 @@ static func render_target_tick(latest_tick: float, elapsed_since_latest: float, 
 static func correction_after_authority(rendered_position: Vector2, authoritative_position: Vector2, previous_state: String = "running", authoritative_state: String = "running") -> Vector2:
 	const TERMINAL_STATES := ["dead", "finished", "disconnected"]
 	var correction := rendered_position - authoritative_position
-	if authoritative_state in TERMINAL_STATES or previous_state in TERMINAL_STATES or correction.length() > LOCAL_CORRECTION_SNAP_DISTANCE:
+	if authoritative_state in TERMINAL_STATES:
 		return Vector2.ZERO
-	return correction.clamp(Vector2(-160.0, -160.0), Vector2(160.0, 160.0))
+	return correction.clamp(Vector2(-1000.0, -1000.0), Vector2(1000.0, 1000.0))
 
 static func fade_render_correction(correction: Vector2, delta: float, speed: float) -> Vector2:
-	# Horizontal correction is the local guest's prediction lead over the delayed
-	# host snapshot. Fading it every frame counteracts forward movement and feels
-	# like input lag; retain it between snapshots and recompute at the next one.
-	return Vector2(correction.x, move_toward(correction.y, 0.0, maxf(delta, 0.0) * maxf(speed, 0.0)))
+	return correction.move_toward(Vector2.ZERO, maxf(delta, 0.0) * maxf(speed, 0.0))
 
 static func estimate_shared_start_msec(host_now_msec: int, safety_margin_seconds: float, peer_round_trip_msec: Array) -> float:
 	var average_one_way_msec := 0.0
@@ -1158,7 +1206,7 @@ func _bring_local_runner_to_front() -> void:
 		_course_root.move_child(local_view, _course_root.get_child_count() - 1)
 
 func _update_hud() -> void:
-	var own: Dictionary = _simulation.get_player(_local_user_id) if _simulation != null else {}
+	var own: Dictionary = _player_state(_local_user_id)
 	if own.is_empty():
 		return
 	var distance := distance_m(float(own.get("world_x", 0.0)), float(_manifest.get("start_x")))
