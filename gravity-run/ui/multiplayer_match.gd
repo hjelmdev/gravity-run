@@ -35,6 +35,8 @@ var _local_prediction: RefCounted
 var _snapshot: Dictionary = {}
 var _authoritative_snapshot: Dictionary = {}
 var _snapshot_buffer: Array[Dictionary] = []
+var _local_render_history: Array[Dictionary] = []
+var _local_render_clock_tick := 0.0
 var _terminal_overlays: Dictionary = {}
 var _match_roster_ids: Array[String] = []
 var _finish_revision := 0
@@ -52,6 +54,7 @@ var _last_authoritative_tick := -1
 var _last_snapshot_received_network_clock := -1.0
 var _estimated_peer_rtt_msec := 0.0
 var _prediction_cap_frames := 0
+var _prediction_replay_limit_frames := 0
 var _prediction_frames := 0
 var _prediction_tick_samples: Array[int] = []
 var _frame_cost_samples: Array[int] = []
@@ -88,6 +91,8 @@ var _snapshot_render_tick := -1.0
 var _snapshot_extrapolated_frames := 0
 var _snapshot_render_samples := 0
 var _max_local_correction_px := 0.0
+var _max_correction_x_px := 0.0
+var _max_correction_y_px := 0.0
 var _snapshot_send_totals := {"count": 0, "bytes": 0, "serialized_usec": 0, "failed": 0, "dropped": 0}
 var _status_label: Label
 var _distance_label: Label
@@ -129,6 +134,7 @@ var _authority_stall_elapsed := 0.0
 var _authority_stall_reported := false
 var _match_snapshot_received := 0
 var _match_snapshot_rejected := 0
+var _camera_delta_x_frame := 0.0
 
 func _ready() -> void:
 	set_process(true)
@@ -175,6 +181,8 @@ func _ready() -> void:
 		_local_prediction.bind(_simulation, _local_user_id)
 	_build_course_view()
 	_snapshot = _simulation.get_snapshot()
+	if not MultiplayerService.is_room_owner():
+		_reset_local_render_history(int(_simulation.get("tick")))
 	_sync_player_views()
 	if MultiplayerService.is_room_owner():
 		_received_match_ready[_local_user_id] = true
@@ -296,13 +304,19 @@ func _process(delta: float) -> void:
 				_retry_unacknowledged_finish(delta)
 		else:
 			_visual_correction = fade_render_correction(_visual_correction, delta, LOCAL_CORRECTION_SPEED)
+			_max_correction_x_px = maxf(_max_correction_x_px, absf(_visual_correction.x))
+			_max_correction_y_px = maxf(_max_correction_y_px, absf(_visual_correction.y))
+			_record_local_render_sample()
+			_advance_local_render_clock(delta)
 			_compose_client_snapshot()
 	_update_hud()
 	_update_authority_health(delta)
+	var previous_camera_left := _camera_left_cached
 	_refresh_camera_state()
+	_camera_delta_x_frame = _camera_left_cached - previous_camera_left
 	_sync_player_views()
 	var local_state := _player_state(_local_user_id)
-	MultiplayerDiagnostics.set_metrics({"simulation_tick": int(_simulation.get("tick")), "host_tick": int(_last_authoritative_tick) if not MultiplayerService.is_room_owner() else int(_simulation.get("tick")), "snapshot_buffer_size": _snapshot_buffer.size(), "snapshot_render_tick": _snapshot_render_tick, "prediction_lead_ticks": int(_simulation.get("tick")) - _last_authoritative_tick, "camera_mode": _camera_mode, "camera_left": _camera_left_cached, "local_player_state": local_state.get("state", "unknown"), "local_world_x": local_state.get("world_x", 0.0), "estimated_rtt_ms": _estimated_peer_rtt_msec, "snapshot_delay_ticks": _snapshot_delay_ticks, "render_mode": _current_render_mode()})
+	MultiplayerDiagnostics.set_metrics({"simulation_tick": int(_simulation.get("tick")), "host_tick": int(_last_authoritative_tick) if not MultiplayerService.is_room_owner() else int(_simulation.get("tick")), "snapshot_buffer_size": _snapshot_buffer.size(), "snapshot_render_tick": _snapshot_render_tick, "prediction_lead_ticks": int(_simulation.get("tick")) - _last_authoritative_tick, "camera_mode": _camera_mode, "camera_left": _camera_left_cached, "camera_delta_x": _camera_delta_x_frame, "visual_correction_x": _visual_correction.x, "visual_correction_y": _visual_correction.y, "local_player_state": local_state.get("state", "unknown"), "local_world_x": local_state.get("world_x", 0.0), "estimated_rtt_ms": _estimated_peer_rtt_msec, "snapshot_delay_ticks": _snapshot_delay_ticks, "render_mode": _current_render_mode()})
 	queue_redraw()
 	_frame_cost_samples.append(Time.get_ticks_usec() - frame_work_started_usec)
 	while _frame_cost_samples.size() > 300:
@@ -490,11 +504,12 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 					var latest_sample: Dictionary = _snapshot_buffer.back() if not _snapshot_buffer.is_empty() else {}
 					var latest_age_msec := (Time.get_ticks_msec() - _last_snapshot_receive_msec) if _last_snapshot_receive_msec > 0 else -1
 					var latest_tick := int(latest_sample.get("tick", -1))
-					_record_match_diag("snapshot_quality", {"room_id": MultiplayerService.get_room_id(), "samples": _snapshot_interarrival_count, "snapshot_rate_hz": SNAPSHOT_RATE, "snapshot_delay_ticks": _snapshot_delay_ticks, "mean_interarrival_ms": _snapshot_interarrival_total_msec / _snapshot_interarrival_count, "estimated_interval_ms": _snapshot_mean_interval_msec, "jitter_ewma_ms": _snapshot_jitter_msec, "latest_age_ms": latest_age_msec, "estimated_rtt_ms": _estimated_peer_rtt_msec, "buffer_samples": _snapshot_buffer.size(), "buffer_tick_span": latest_tick - int(_snapshot_buffer.front().get("tick", latest_tick)) if not _snapshot_buffer.is_empty() else 0, "render_tick": _snapshot_render_tick, "local_prediction_tick": int(_simulation.get("tick")), "authoritative_tick": _last_authoritative_tick, "prediction_lead_ticks": int(_simulation.get("tick")) - _last_authoritative_tick, "prediction_capped_frames": _prediction_cap_frames, "prediction_frames": _prediction_frames, "prediction_ticks_p95_per_frame": percentile_int(_prediction_tick_samples, 0.95), "reconcile_p95_usec": percentile_int(_reconcile_cost_samples, 0.95), "reconcile_max_usec": _max_reconcile_usec, "frame_work_p95_usec": percentile_int(_frame_cost_samples, 0.95), "frame_work_max_usec": percentile_int(_frame_cost_samples, 1.0), "render_samples": _snapshot_render_samples, "extrapolation_frames": _snapshot_extrapolated_frames, "extrapolation_ratio": float(_snapshot_extrapolated_frames) / maxf(float(_snapshot_render_samples), 1.0), "max_local_correction_px": _max_local_correction_px, "estimated_missing_ticks": _snapshot_tick_gaps})
+					_record_match_diag("snapshot_quality", {"room_id": MultiplayerService.get_room_id(), "samples": _snapshot_interarrival_count, "snapshot_rate_hz": SNAPSHOT_RATE, "snapshot_delay_ticks": _snapshot_delay_ticks, "mean_interarrival_ms": _snapshot_interarrival_total_msec / _snapshot_interarrival_count, "estimated_interval_ms": _snapshot_mean_interval_msec, "jitter_ewma_ms": _snapshot_jitter_msec, "latest_age_ms": latest_age_msec, "estimated_rtt_ms": _estimated_peer_rtt_msec, "buffer_samples": _snapshot_buffer.size(), "buffer_tick_span": latest_tick - int(_snapshot_buffer.front().get("tick", latest_tick)) if not _snapshot_buffer.is_empty() else 0, "render_tick": _snapshot_render_tick, "local_render_tick": _local_render_tick(), "local_prediction_tick": int(_simulation.get("tick")), "authoritative_tick": _last_authoritative_tick, "prediction_lead_ticks": int(_simulation.get("tick")) - _last_authoritative_tick, "prediction_wallclock_capped_frames": _prediction_cap_frames, "prediction_replay_limit_snapshots": _prediction_replay_limit_frames, "prediction_frames": _prediction_frames, "prediction_ticks_p95_per_frame": percentile_int(_prediction_tick_samples, 0.95), "reconcile_p95_usec": percentile_int(_reconcile_cost_samples, 0.95), "reconcile_max_usec": _max_reconcile_usec, "frame_work_p95_usec": percentile_int(_frame_cost_samples, 0.95), "frame_work_max_usec": percentile_int(_frame_cost_samples, 1.0), "render_samples": _snapshot_render_samples, "extrapolation_frames": _snapshot_extrapolated_frames, "extrapolation_ratio": float(_snapshot_extrapolated_frames) / maxf(float(_snapshot_render_samples), 1.0), "max_local_correction_px": _max_local_correction_px, "max_correction_x_px": _max_correction_x_px, "max_correction_y_px": _max_correction_y_px, "estimated_missing_ticks": _snapshot_tick_gaps})
 					_snapshot_interarrival_total_msec = 0
 					_snapshot_interarrival_count = 0
 					_snapshot_tick_gaps = 0
 					_prediction_cap_frames = 0
+					_prediction_replay_limit_frames = 0
 					_prediction_frames = 0
 					_prediction_tick_samples.clear()
 					_reconcile_cost_samples.clear()
@@ -503,6 +518,8 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 					_snapshot_extrapolated_frames = 0
 					_snapshot_render_samples = 0
 					_max_local_correction_px = 0.0
+					_max_correction_x_px = 0.0
+					_max_correction_y_px = 0.0
 				_last_snapshot_receive_msec = now_msec
 				if bool(_authoritative_snapshot.get("finished", false)):
 					_status_label.text = tr("Race finished")
@@ -834,34 +851,43 @@ func _accept_authoritative_snapshot(snapshot: Variant) -> bool:
 		return false
 	var old_render := _local_render_position()
 	var old_prediction_tick := int(_simulation.get("tick"))
-	var previous_authoritative_tick := _last_authoritative_tick
-	var previous_authoritative_snapshot := _authoritative_snapshot
-	_last_authoritative_tick = incoming_tick
-	_last_snapshot_rejection = ""
-	_authoritative_snapshot = snapshot.duplicate(true)
+	var receive_clock := _network_clock
+	var previous_anchor_clock := _last_snapshot_received_network_clock
+	var previous_anchor_age := maxf(_network_clock - previous_anchor_clock, 0.0) if previous_anchor_clock >= 0.0 else -1.0
+	var host_backlog := float(snapshot.get("backlog_seconds", 0.0))
+	var replay_target := maxi(old_prediction_tick, estimate_prediction_target_from_anchor(incoming_tick, receive_clock, receive_clock, _estimated_peer_rtt_msec, host_backlog, MAX_PREDICTION_LEAD_TICKS))
 	var local_already_terminal := _terminal_overlays.has(_local_user_id)
+	var reconciliation: Dictionary = {}
+	var correction := Vector2.ZERO
 	if not local_already_terminal:
-		var replay_target := maxi(old_prediction_tick, _prediction_target_tick())
 		var reconcile_started_usec := Time.get_ticks_usec()
-		var reconciliation: Dictionary = _local_prediction.reconcile(snapshot, replay_target)
+		reconciliation = _local_prediction.reconcile(snapshot, replay_target)
 		var reconcile_usec := Time.get_ticks_usec() - reconcile_started_usec
 		_reconcile_cost_samples.append(reconcile_usec)
 		while _reconcile_cost_samples.size() > 300:
 			_reconcile_cost_samples.pop_front()
 		_max_reconcile_usec = maxi(_max_reconcile_usec, reconcile_usec)
 		if not bool(reconciliation.get("ok", false)):
-			_last_authoritative_tick = previous_authoritative_tick
-			_authoritative_snapshot = previous_authoritative_snapshot
 			_last_snapshot_rejection = "checkpoint_or_replay_failed:%s" % str(reconciliation.get("reason", "unknown"))
 			return false
 		var replayed: Dictionary = reconciliation.get("new_player", {})
-		_visual_correction = correction_after_authority(old_render, Vector2(float(replayed.get("world_x", 0.0)), float(replayed.get("y", 0.0))), "running", str(local_state.get("state", "running")))
+		var replayed_position := Vector2(float(replayed.get("world_x", 0.0)), float(replayed.get("y", 0.0)))
+		var same_time_reference := same_time_prediction_reference(old_render, replayed_position, old_prediction_tick, int(reconciliation.get("replayed_to_tick", old_prediction_tick)), float(old_player_run_speed(local_state)))
+		correction = correction_after_authority(same_time_reference, replayed_position, "running", str(local_state.get("state", "running")))
+		_visual_correction = correction
+		_reset_local_render_history(int(reconciliation.get("replayed_to_tick", incoming_tick)))
 		for result in reconciliation.get("confirmed_inputs", []):
 			_record_match_diag("local_input_confirmed", {"sequence": int(result.get("sequence", 0)), "accepted": bool(result.get("accepted", false)), "target_tick": int(result.get("target_tick", -1)), "processed_tick": int(result.get("processed_tick", -1)), "input_ack_delay_ms": maxi(0, Time.get_ticks_msec() - int(result.get("sent_at_msec", Time.get_ticks_msec())))})
 		var replay_errors: Array = reconciliation.get("replay_errors", [])
+		if bool(reconciliation.get("replay_was_bounded", false)):
+			_prediction_replay_limit_frames += 1
 		if not replay_errors.is_empty() or bool(reconciliation.get("replay_was_bounded", false)):
 			_record_match_diag("prediction_replay_limited", {"snapshot_tick": incoming_tick, "requested_target_tick": int(reconciliation.get("target_tick", replay_target)), "replayed_to_tick": int(reconciliation.get("replayed_to_tick", -1)), "errors": replay_errors})
 		_max_local_correction_px = maxf(_max_local_correction_px, _visual_correction.length())
+		_max_correction_x_px = maxf(_max_correction_x_px, absf(_visual_correction.x))
+		_max_correction_y_px = maxf(_max_correction_y_px, absf(_visual_correction.y))
+		if _network_clock - _go_start_at <= 3.0 or absf(correction.x) >= 8.0 or absf(correction.y) >= 8.0:
+			_trace_match_event("snapshot_reconcile_clock", {"incoming_tick": incoming_tick, "previous_authoritative_tick": _last_authoritative_tick, "previous_anchor_clock": previous_anchor_clock, "previous_anchor_age_seconds": previous_anchor_age, "receive_clock": receive_clock, "snapshot_age_at_receive_seconds": 0.0, "host_backlog_seconds": host_backlog, "estimated_rtt_ms": _estimated_peer_rtt_msec, "old_prediction_tick": old_prediction_tick, "replay_target_tick": replay_target, "replayed_to_tick": int(reconciliation.get("replayed_to_tick", old_prediction_tick)), "comparison_tick": int(reconciliation.get("replayed_to_tick", old_prediction_tick)), "old_render": old_render, "same_time_reference": same_time_reference, "replayed_position": replayed_position, "correction_x": correction.x, "correction_y": correction.y, "pending_inputs": _local_prediction.pending_inputs()})
 	_remember_snapshot_terminal_states(snapshot)
 	if bool(snapshot.get("finished", false)):
 		_accepted_finish_revision = int(snapshot.get("finish_revision", 0))
@@ -871,7 +897,11 @@ func _accept_authoritative_snapshot(snapshot: Variant) -> bool:
 		_finish_reason = str(snapshot.get("finish_reason", ""))
 		_trace_match_event("finish_decision_received", {"tick": _finish_tick, "finish_revision": _finish_revision, "finish_reason": _finish_reason})
 		_dump_match_trace()
-	_last_snapshot_received_network_clock = _network_clock
+	# Publish the new authority/timing anchor only after restore and replay succeeded.
+	_last_authoritative_tick = incoming_tick
+	_authoritative_snapshot = snapshot.duplicate(true)
+	_last_snapshot_rejection = ""
+	_last_snapshot_received_network_clock = receive_clock
 	_authority_stall_elapsed = 0.0
 	_authority_stall_reported = false
 	_snapshot_buffer.append({"tick": incoming_tick, "received_at": _network_clock, "state": _authoritative_snapshot})
@@ -906,21 +936,41 @@ func _prediction_target_tick() -> int:
 		return maxi(_last_authoritative_tick, 0)
 	if _last_authoritative_tick < 0:
 		return mini(_requested_prediction_tick(), MAX_PREDICTION_LEAD_TICKS)
-	var snapshot_age := maxf(_network_clock - _last_snapshot_received_network_clock, 0.0)
 	var host_backlog := float(_authoritative_snapshot.get("backlog_seconds", 0.0))
-	return estimate_prediction_target_tick(
+	return estimate_prediction_target_from_anchor(
 		_last_authoritative_tick,
-		snapshot_age,
+		_last_snapshot_received_network_clock,
+		_network_clock,
 		_estimated_peer_rtt_msec,
 		host_backlog,
 		MAX_PREDICTION_LEAD_TICKS
 	)
+
+static func estimate_prediction_target_from_anchor(authoritative_tick: int, received_at_network_clock: float, now_network_clock: float, estimated_rtt_msec: float, host_backlog_seconds: float, max_lead_ticks: int = 24) -> int:
+	var snapshot_age := maxf(now_network_clock - received_at_network_clock, 0.0) if received_at_network_clock >= 0.0 else 0.0
+	return estimate_prediction_target_tick(authoritative_tick, snapshot_age, estimated_rtt_msec, host_backlog_seconds, max_lead_ticks)
+
+static func same_time_prediction_reference(old_render: Vector2, replayed_position: Vector2, old_tick: int, replayed_tick: int, run_speed: float) -> Vector2:
+	if replayed_tick <= old_tick:
+		return old_render
+	var elapsed_ticks := replayed_tick - old_tick
+	# Horizontal runner speed is constant during the local race simulation. Use
+	# that deterministic advance to avoid treating elapsed race time as error.
+	# Vertical motion may contain gravity/contact events, so compare Y at the
+	# replayed phase rather than turning that unknown interval into a correction.
+	return Vector2(old_render.x + maxf(run_speed, 0.0) * float(elapsed_ticks) / SIMULATION_TICK_RATE, replayed_position.y)
+
+static func old_player_run_speed(player_state: Dictionary) -> float:
+	return SimulationScript.RUN_SPEED * float(player_state.get("run_speed_percent", 10000)) / 10000.0
 
 static func estimate_prediction_target_tick(authoritative_tick: int, snapshot_age_seconds: float, estimated_rtt_msec: float, host_backlog_seconds: float, max_lead_ticks: int = 24) -> int:
 	if authoritative_tick < 0:
 		return 0
 	var age_ticks := maxf(snapshot_age_seconds, 0.0) * SIMULATION_TICK_RATE
 	var one_way_ticks := maxf(estimated_rtt_msec, 0.0) * SIMULATION_TICK_RATE / 2000.0
+	# Snapshot tick counts simulation steps already completed at send time.
+	# backlog_seconds is elapsed-but-unsimulated host time, so subtract it once
+	# from wall-clock age + estimated one-way transit when estimating host-now.
 	var backlog_ticks := maxf(host_backlog_seconds, 0.0) * SIMULATION_TICK_RATE
 	var estimated_host_tick := float(authoritative_tick) + age_ticks + one_way_ticks - backlog_ticks
 	var desired_tick := maxi(authoritative_tick, int(floor(estimated_host_tick + 2.0)))
@@ -1327,7 +1377,69 @@ static func correction_after_authority(rendered_position: Vector2, authoritative
 	return correction.clamp(Vector2(-1000.0, -1000.0), Vector2(1000.0, 1000.0))
 
 static func fade_render_correction(correction: Vector2, delta: float, speed: float) -> Vector2:
-	return correction.move_toward(Vector2.ZERO, maxf(delta, 0.0) * maxf(speed, 0.0))
+	var axis_step := maxf(delta, 0.0) * maxf(speed, 0.0)
+	return Vector2(move_toward(correction.x, 0.0, axis_step), move_toward(correction.y, 0.0, axis_step))
+
+static func interpolate_local_render_position(samples: Array, render_tick: float) -> Vector2:
+	if samples.is_empty():
+		return Vector2.ZERO
+	var valid_samples: Array[Dictionary] = []
+	for sample in samples:
+		if sample is Dictionary:
+			valid_samples.append(sample)
+	if valid_samples.is_empty():
+		return Vector2.ZERO
+	var first: Dictionary = valid_samples.front()
+	var last: Dictionary = valid_samples.back()
+	if render_tick <= float(first.get("tick", 0)):
+		return first.get("position", Vector2.ZERO)
+	if render_tick >= float(last.get("tick", 0)):
+		return last.get("position", Vector2.ZERO)
+	var earlier: Dictionary = first
+	var later: Dictionary = last
+	for index in range(1, valid_samples.size()):
+		var candidate: Dictionary = valid_samples[index]
+		if float(candidate.get("tick", 0)) >= render_tick:
+			earlier = valid_samples[index - 1]
+			later = candidate
+			break
+	var from_position: Vector2 = earlier.get("position", Vector2.ZERO)
+	var to_position: Vector2 = later.get("position", from_position)
+	var from_tick := float(earlier.get("tick", render_tick))
+	var to_tick := float(later.get("tick", from_tick))
+	var weight := clampf((render_tick - from_tick) / (to_tick - from_tick), 0.0, 1.0) if to_tick > from_tick else 1.0
+	return from_position.lerp(to_position, weight)
+
+func _reset_local_render_history(at_tick: int) -> void:
+	_local_render_history.clear()
+	_local_render_clock_tick = maxf(float(at_tick) - 0.5, 0.0)
+	var player: Dictionary = _simulation.get_player(_local_user_id) if _simulation != null else {}
+	if player.is_empty():
+		return
+	_local_render_history.append({"tick": at_tick, "position": Vector2(float(player.get("world_x", 0.0)), float(player.get("y", 0.0)))})
+
+func _record_local_render_sample() -> void:
+	if _simulation == null:
+		return
+	var at_tick := int(_simulation.get("tick"))
+	if not _local_render_history.is_empty() and int(_local_render_history.back().get("tick", -1)) == at_tick:
+		return
+	var player: Dictionary = _simulation.get_player(_local_user_id)
+	if player.is_empty():
+		return
+	_local_render_history.append({"tick": at_tick, "position": Vector2(float(player.get("world_x", 0.0)), float(player.get("y", 0.0)))})
+	while _local_render_history.size() > 8:
+		_local_render_history.pop_front()
+
+func _local_render_tick() -> float:
+	return _local_render_clock_tick
+
+func _advance_local_render_clock(delta: float) -> void:
+	if _simulation == null or _local_render_history.is_empty():
+		return
+	var history_start_tick := float(_local_render_history.front().get("tick", 0))
+	var latest_simulation_tick := float(_simulation.get("tick"))
+	_local_render_clock_tick = clampf(_local_render_clock_tick + maxf(delta, 0.0) * SIMULATION_TICK_RATE, history_start_tick, latest_simulation_tick)
 
 static func estimate_shared_start_msec(host_now_msec: int, safety_margin_seconds: float, peer_round_trip_msec: Array) -> float:
 	var average_one_way_msec := 0.0
@@ -1556,8 +1668,10 @@ func _sync_player_views() -> void:
 			_player_views[user_id] = runner
 		var view: Node2D = _player_views[user_id]
 		view.call("set_skin_id", int(state.get("skin_id", 0)))
-		var correction := _visual_correction if user_id == _local_user_id and not MultiplayerService.is_room_owner() else Vector2.ZERO
-		view.position = _visual_player_position(state, states) + correction
+		if user_id == _local_user_id and not MultiplayerService.is_room_owner():
+			view.position = _local_render_position() + Vector2(float(_visual_slot_by_user.get(user_id, 0.0)), 0.0)
+		else:
+			view.position = _visual_player_position(state, states)
 		var screen_x := float(view.position.x) - camera_left
 		view.visible = screen_x > -80.0 and screen_x < get_viewport_rect().size.x + 80.0
 		var sprite := view.get_node_or_null("AnimatedSprite2D") as AnimatedSprite2D
@@ -1714,7 +1828,10 @@ func _authoritative_result_snapshot() -> Dictionary:
 
 func _local_render_position() -> Vector2:
 	var local_state: Dictionary = _simulation.get_player(_local_user_id) if _simulation != null else {}
-	return Vector2(float(local_state.get("world_x", 180.0)), float(local_state.get("y", 0.0))) + _visual_correction
+	var current := Vector2(float(local_state.get("world_x", 180.0)), float(local_state.get("y", 0.0)))
+	if not MultiplayerService.is_room_owner() and not _local_render_history.is_empty():
+		current = interpolate_local_render_position(_local_render_history, _local_render_tick())
+	return current + _visual_correction
 
 func _on_room_changed(room: Dictionary) -> void:
 	if room.is_empty():

@@ -3,6 +3,7 @@ extends Node
 const MatchScript := preload("res://ui/multiplayer_match.gd")
 const SimulationScript := preload("res://systems/multiplayer_simulation.gd")
 const ManifestScript := preload("res://systems/multiplayer_course_manifest.gd")
+const LocalPredictionScript := preload("res://systems/multiplayer_local_prediction.gd")
 const PlayerScene := preload("res://player/player.tscn")
 
 func _ready() -> void:
@@ -57,6 +58,11 @@ func _ready() -> void:
 	spectator_view.free()
 	assert(MatchScript.estimate_prediction_target_tick(100, 0.05, 100.0, 0.0, 24) == 108, "prediction should estimate current host time from packet age and half-RTT instead of freezing at the received tick")
 	assert(MatchScript.estimate_prediction_target_tick(100, 10.0, 0.0, 0.0, 24) == 124, "prediction recovery must remain bounded to the replay limit")
+	assert(MatchScript.estimate_prediction_target_from_anchor(1, 2.55, 2.55, 19.0, 0.0, 24) == 3, "a newly received snapshot must have zero local age, even after a long lobby countdown")
+	assert(MatchScript.estimate_prediction_target_from_anchor(1, 2.55, 2.55, 19.0, 0.0, 24) == MatchScript.estimate_prediction_target_from_anchor(1, 2.55, 2.55, 19.0, 0.0, 24), "the prediction target must not fall between receive handling and the next frame at the same clock")
+	assert(MatchScript.estimate_prediction_target_from_anchor(61, 5.0, 5.0, 19.0, 0.0, 24) == 63, "a current normal snapshot should only account for half-RTT, not the previous packet age")
+	assert(MatchScript.estimate_prediction_target_from_anchor(61, 5.0, 5.0 + 1.0 / 60.0, 19.0, 0.0, 24) >= MatchScript.estimate_prediction_target_from_anchor(61, 5.0, 5.0, 19.0, 0.0, 24), "an accepted timing anchor must be monotonic as network time advances")
+	assert(MatchScript.estimate_prediction_target_tick(100, 0.2, 0.0, 0.1, 24) == 108, "backlog represents elapsed but unsimulated host time and must be subtracted exactly once")
 	assert(MatchScript.percentile_int([1, 2, 3, 4], 0.95) == 4, "network timing diagnostics should calculate a useful upper percentile")
 	var gravity_before: Dictionary = {"user_id": "remote", "world_x": 100.0, "y": 80.0, "vertical_speed": 60.0, "state": "running", "gravity_direction": -1, "grounded": false}
 	var gravity_after: Dictionary = {"user_id": "remote", "world_x": 200.0, "y": 140.0, "vertical_speed": -60.0, "state": "running", "gravity_direction": 1, "grounded": true}
@@ -137,6 +143,56 @@ func _ready() -> void:
 	assert(not rejected_finish_view.call("_accept_authoritative_snapshot", rejected_finish), "the guest snapshot path must reject finished=true with a running player")
 	assert(int(rejected_finish_view.get("_last_authoritative_tick")) == 11 and str(rejected_finish_view.get("_last_snapshot_rejection")) == "finished_snapshot_has_running_player", "rejected finish data must not mutate the guest's accepted state: %s at tick %d" % [str(rejected_finish_view.get("_last_snapshot_rejection")), int(rejected_finish_view.get("_last_authoritative_tick"))])
 	rejected_finish_view.free()
+	# Exercise the real guest snapshot receive/reconcile path for both the first
+	# packet after a long countdown and an ordinary 30 Hz packet.
+	MultiplayerService.identity_user_id = "guest"
+	MultiplayerService.room_state = {"room_id": "presentation-test", "owner_user_id": "host"}
+	var guest_simulation := SimulationScript.new()
+	assert(guest_simulation.configure(camera_manifest, [
+		{"user_id": "host", "display_name": "Host"},
+		{"user_id": "guest", "display_name": "Guest"},
+	]).is_empty())
+	guest_simulation.start()
+	guest_simulation.advance_to_tick(3, 12, ["guest"])
+	var prediction: RefCounted = LocalPredictionScript.new()
+	prediction.bind(guest_simulation, "guest")
+	var clock_view: Node2D = MatchScript.new()
+	clock_view.set("_manifest", camera_manifest)
+	clock_view.set("_simulation", guest_simulation)
+	clock_view.set("_local_prediction", prediction)
+	clock_view.set("_local_user_id", "guest")
+	clock_view.set("_owner_user_id", "host")
+	var clock_roster: Array[String] = ["guest", "host"]
+	clock_view.set("_match_roster_ids", clock_roster)
+	clock_view.set("_start_generation", "clock-test")
+	clock_view.set("_planned_local_start_msec", 1)
+	clock_view.set("_network_clock", 2.55)
+	clock_view.set("_estimated_peer_rtt_msec", 19.0)
+	clock_view.set("_last_authoritative_tick", -1)
+	clock_view.call("_reset_local_render_history", 3)
+	var host_simulation_for_clock := SimulationScript.new()
+	assert(host_simulation_for_clock.configure(camera_manifest, [
+		{"user_id": "host", "display_name": "Host"},
+		{"user_id": "guest", "display_name": "Guest"},
+	]).is_empty())
+	host_simulation_for_clock.start()
+	host_simulation_for_clock.advance_to_tick(1, 12)
+	var first_clock_snapshot: Dictionary = JSON.parse_string(JSON.stringify(host_simulation_for_clock.get_snapshot()))
+	first_clock_snapshot["match_generation"] = "clock-test"
+	assert(bool(clock_view.call("_accept_authoritative_snapshot", first_clock_snapshot)), "first post-countdown snapshot should reconcile through the complete receive path: %s players=%d roster=%d" % [str(clock_view.get("_last_snapshot_rejection")), first_clock_snapshot.get("players", []).size(), (clock_view.get("_match_roster_ids") as Array).size()])
+	assert(int(guest_simulation.get("tick")) == 3 and int(clock_view.call("_prediction_target_tick")) == 3, "the first snapshot must not use countdown time as packet age or cause a replay jump")
+	assert((clock_view.get("_visual_correction") as Vector2).length() < 0.01, "a countdown-length wait followed by an ordinary first snapshot must not create a false camera correction")
+	assert(is_equal_approx(float(clock_view.get("_last_snapshot_received_network_clock")), 2.55), "the accepted snapshot tick and receive-time anchor must be committed together")
+	host_simulation_for_clock.advance_to_tick(61, 60)
+	guest_simulation.advance_to_tick(63, 60, ["guest"])
+	clock_view.call("_reset_local_render_history", 63)
+	clock_view.set("_network_clock", 2.55 + 1.0 / 30.0)
+	var ordinary_clock_snapshot: Dictionary = JSON.parse_string(JSON.stringify(host_simulation_for_clock.get_snapshot()))
+	ordinary_clock_snapshot["match_generation"] = "clock-test"
+	assert(bool(clock_view.call("_accept_authoritative_snapshot", ordinary_clock_snapshot)), "ordinary snapshot should reconcile through the complete receive path")
+	assert(int(guest_simulation.get("tick")) == 63 and int(clock_view.call("_prediction_target_tick")) == 63, "normal receive must not replay to tick 65 and then immediately target 63")
+	assert((clock_view.get("_visual_correction") as Vector2).length() < 0.01, "constant-speed replay at the same simulation phase must not be turned into correction")
+	clock_view.free()
 	MultiplayerService.identity_user_id = service_identity
 	MultiplayerService.room_state = service_room
 	assert(is_equal_approx(MatchScript.estimate_shared_start_msec(1000, 5.0, [400, 600]), 6250.0), "host start should compensate for measured peer delivery latency")
@@ -150,6 +206,22 @@ func _ready() -> void:
 	assert(MatchScript.correction_after_authority(Vector2(100.0, 350.0), Vector2(100.0, 200.0)).is_equal_approx(Vector2(0.0, 150.0)), "large vertical errors must not erase an unrelated horizontal render anchor")
 	assert(MatchScript.correction_after_authority(Vector2(102.0, 202.0), Vector2(100.0, 200.0), "running", "dead") == Vector2.ZERO, "terminal state transitions must not be visually delayed")
 	assert(MatchScript.fade_render_correction(Vector2(50.0, 30.0), 0.1, 420.0).length() < Vector2(50.0, 30.0).length(), "a replay continuity error should fade smoothly in both axes")
+	var x_fade_without_y: float = MatchScript.fade_render_correction(Vector2(12.0, 0.0), 1.0 / 60.0, 420.0).x
+	var x_fade_with_y: float = MatchScript.fade_render_correction(Vector2(12.0, 80.0), 1.0 / 60.0, 420.0).x
+	assert(is_equal_approx(x_fade_without_y, x_fade_with_y), "vertical correction must not slow horizontal/camera correction")
+	var render_samples: Array[Dictionary] = [
+		{"tick": 0, "position": Vector2.ZERO},
+		{"tick": 1, "position": Vector2(500.0, 0.0)},
+	]
+	for fps in [60, 120, 240]:
+		var previous_x := -1.0
+		for frame in range(fps + 1):
+			var at_tick := float(frame) * 60.0 / float(fps)
+			var render_position: Vector2 = MatchScript.interpolate_local_render_position(render_samples, at_tick)
+			assert(render_position.x >= previous_x, "local interpolation must remain monotonic at %d Hz render: frame=%d x=%f previous=%f" % [fps, frame, render_position.x, previous_x])
+			previous_x = render_position.x
+		assert(is_equal_approx(previous_x, 500.0), "local interpolation must reach the simulation sample at %d Hz render" % fps)
+	assert(MatchScript.same_time_prediction_reference(Vector2(200.0, 300.0), Vector2(216.6666667, 240.0), 3, 5, 500.0).is_equal_approx(Vector2(200.0 + 500.0 * 2.0 / 60.0, 240.0)), "reconciliation should compare against the old prediction projected to the replay tick, not classify normal movement as error")
 	var ranking := [
 		{"user_id": "alpha", "state": "running", "world_x": 780.0},
 		{"user_id": "beta", "state": "running", "world_x": 780.0},
