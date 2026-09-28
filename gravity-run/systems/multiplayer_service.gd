@@ -115,7 +115,7 @@ func can_start_race() -> bool:
 	for member in get_members():
 		if member is Dictionary and bool(member.get("is_connected", true)):
 			present_members.append(member)
-	if present_members.is_empty() or present_members.size() > int(room_state.get("max_players", 4)) or str(room_state.get("manifest_hash", "")).is_empty():
+	if present_members.is_empty() or present_members.size() > int(room_state.get("max_players", 5)) or str(room_state.get("manifest_hash", "")).is_empty():
 		return false
 	var expected_peers := {}
 	for member in present_members:

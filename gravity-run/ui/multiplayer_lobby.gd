@@ -284,7 +284,7 @@ func _on_public_rooms_loaded(rooms: Array, message: String) -> void:
 			continue
 		var row := HBoxContainer.new()
 		var summary := Label.new()
-		summary.text = "%s · %d/%d" % [str(room.get("host_name", "Host")), int(room.get("player_count", 0)), int(room.get("max_players", 4))]
+		summary.text = "%s · %d/%d" % [str(room.get("host_name", "Host")), int(room.get("player_count", 0)), int(room.get("max_players", 5))]
 		summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(summary)
 		var join := Button.new()
@@ -623,7 +623,7 @@ func _update_room(room: Dictionary) -> void:
 	_room_code.text = str(room.get("room_code", ""))
 	_update_mobile_text_labels()
 	var members: Variant = room.get("members", [])
-	_room_summary.text = tr("Room %s · %d/%d players") % [str(room.get("room_code", "")), members.size() if members is Array else 0, int(room.get("max_players", 4))]
+	_room_summary.text = tr("Room %s · %d/%d players") % [str(room.get("room_code", "")), members.size() if members is Array else 0, int(room.get("max_players", 5))]
 	var own_ready := false
 	var everyone_ready := true
 	var present_count := 0

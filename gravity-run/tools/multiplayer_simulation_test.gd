@@ -25,6 +25,12 @@ func _initialize() -> void:
 	var simulation := SimulationScript.new()
 	assert(RaceRulesScript.validate_players([{"user_id": "solo"}]).is_empty(), "a one-player host run should be valid")
 	assert(not RaceRulesScript.validate_players([]).is_empty(), "an empty room must not start")
+	var five_players: Array[Dictionary] = []
+	for player_index in range(5):
+		five_players.append({"user_id": "player_%d" % player_index})
+	assert(RaceRulesScript.validate_players(five_players).is_empty(), "a five-player room should be valid")
+	five_players.append({"user_id": "player_5"})
+	assert(not RaceRulesScript.validate_players(five_players).is_empty(), "a sixth player must still be rejected")
 	var solo_simulation := SimulationScript.new()
 	assert(solo_simulation.configure(manifest, [{"user_id": "solo", "display_name": "Solo"}]).is_empty())
 	solo_simulation.start()
