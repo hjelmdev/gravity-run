@@ -29,6 +29,8 @@ var _queued_flip_inputs: Array[Dictionary] = []
 var _processed_inputs: Dictionary = {}
 var _last_queued_sequence: Dictionary = {}
 var _peak_backlog_seconds := 0.0
+var _terminal_transitions: Array[Dictionary] = []
+var match_finish_reason := ""
 
 func configure(course_manifest: Resource, players: Array) -> String:
 	var player_error := RaceRulesScript.validate_players(players)
@@ -54,6 +56,8 @@ func configure(course_manifest: Resource, players: Array) -> String:
 	_processed_inputs.clear()
 	_last_queued_sequence.clear()
 	_peak_backlog_seconds = 0.0
+	_terminal_transitions.clear()
+	match_finish_reason = ""
 	for player in players:
 		var user_id := str(player.user_id)
 		var floor_y := float(manifest.get("initial_floor_y"))
@@ -72,6 +76,8 @@ func configure(course_manifest: Resource, players: Array) -> String:
 			"state": "running",
 			"blocked": false,
 			"finish_tick": -1,
+			"terminal_reason": "",
+			"terminal_tick": -1,
 		}
 	for event in manifest.get("events"):
 		if str(event.get("kind", "")) != "barrels":
@@ -113,16 +119,34 @@ func set_player_profile(user_id: String, speed_percent: int, flip_cooldown_perce
 	_players[user_id] = player
 	return true
 
-func mark_disconnected(user_id: String) -> bool:
+func mark_disconnected(user_id: String, reason: String = "confirmed_disconnect") -> bool:
 	if not _players.has(user_id):
 		return false
 	var player: Dictionary = _players[user_id]
 	if str(player.get("state", "")) != "running":
 		return false
-	player.state = "disconnected"
-	player.blocked = false
-	_players[user_id] = player
+	_set_terminal_state(user_id, player, "disconnected", reason, {"transport_reason": reason})
 	return true
+
+func _set_terminal_state(user_id: String, player: Dictionary, next_state: String, reason: String, details: Dictionary = {}) -> void:
+	var previous_state := str(player.get("state", "running"))
+	player.state = next_state
+	player.blocked = false
+	player.terminal_reason = reason
+	player.terminal_tick = tick
+	_players[user_id] = player
+	var transition := {"user_id": user_id, "previous_state": previous_state, "next_state": next_state, "tick": tick, "reason": reason, "world_x": float(player.get("world_x", 0.0)), "y": float(player.get("y", 0.0)), "vertical_speed": float(player.get("vertical_speed", 0.0)), "gravity_direction": int(player.get("gravity_direction", 1)), "grounded": bool(player.get("grounded", false)), "cooldown": float(player.get("cooldown", 0.0))}
+	var input_history: Array = _processed_inputs.get(user_id, [])
+	if not input_history.is_empty():
+		var last_input: Dictionary = input_history.back()
+		transition["last_processed_input_sequence"] = int(last_input.get("sequence", 0))
+		transition["requested_input_tick"] = int(last_input.get("target_tick", -1))
+		transition["processed_input_tick"] = int(last_input.get("processed_tick", -1))
+	for key in details:
+		transition[key] = details[key]
+	_terminal_transitions.append(transition)
+	while _terminal_transitions.size() > 64:
+		_terminal_transitions.pop_front()
 
 func apply_authoritative_player_state(user_id: String, authoritative_state: Dictionary) -> bool:
 	if not _players.has(user_id):
@@ -146,6 +170,8 @@ func apply_authoritative_player_state(user_id: String, authoritative_state: Dict
 	player.state = state
 	player.blocked = bool(authoritative_state.get("blocked", false))
 	player.finish_tick = int(authoritative_state.get("finish_tick", -1))
+	player.terminal_reason = str(authoritative_state.get("terminal_reason", "")) if state != "running" else ""
+	player.terminal_tick = int(authoritative_state.get("terminal_tick", -1)) if state != "running" else -1
 	_players[user_id] = player
 	return true
 
@@ -233,7 +259,7 @@ func get_snapshot() -> Dictionary:
 	for user_id in _players:
 		snapshot_players.append((_players[user_id] as Dictionary).duplicate(true))
 	snapshot_players.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return str(a.user_id) < str(b.user_id))
-	return {"tick": tick, "course_identity": str(manifest.get("course_identity")) if manifest != null else "", "players": snapshot_players, "placements": _placements.duplicate(true), "finished": match_finished, "world_time": _world_elapsed, "accumulator": fmod(_accumulator, FIXED_DELTA), "world_hazards": {"barrels": _barrels.duplicate(true), "destroyed_event_ids": _destroyed_event_ids.keys()}, "processed_inputs": _processed_inputs.duplicate(true), "backlog_seconds": _accumulator, "peak_backlog_seconds": _peak_backlog_seconds}
+	return {"tick": tick, "course_identity": str(manifest.get("course_identity")) if manifest != null else "", "players": snapshot_players, "placements": _placements.duplicate(true), "finished": match_finished, "finish_reason": match_finish_reason, "world_time": _world_elapsed, "accumulator": fmod(_accumulator, FIXED_DELTA), "world_hazards": {"barrels": _barrels.duplicate(true), "destroyed_event_ids": _destroyed_event_ids.keys()}, "processed_inputs": _processed_inputs.duplicate(true), "backlog_seconds": _accumulator, "peak_backlog_seconds": _peak_backlog_seconds}
 
 func restore_checkpoint(checkpoint: Variant) -> bool:
 	if not checkpoint is Dictionary or manifest == null:
@@ -311,6 +337,7 @@ func restore_checkpoint(checkpoint: Variant) -> bool:
 		if highest_sequence > 0:
 			_last_queued_sequence[user_id] = highest_sequence
 	match_finished = bool(checkpoint.get("finished", false))
+	match_finish_reason = str(checkpoint.get("finish_reason", ""))
 	return true
 
 func apply_authoritative_world_hazards(world_hazards: Variant) -> bool:
@@ -345,6 +372,9 @@ func authoritative_world_hazard_error(world_hazards: Variant) -> String:
 
 func get_player(user_id: String) -> Dictionary:
 	return (_players[user_id] as Dictionary).duplicate(true) if _players.has(user_id) else {}
+
+func get_terminal_transitions() -> Array[Dictionary]:
+	return _terminal_transitions.duplicate(true)
 
 func _step_world_hazards() -> void:
 	_world_elapsed += FIXED_DELTA
@@ -429,7 +459,13 @@ func _step_player_states(events: Array[Dictionary], finish_when_all_inactive: bo
 				break
 		match_finished = not active
 		if match_finished:
-			events.append({"kind": "match_finished", "tick": tick, "result": RaceRulesScript.make_result(_placements)})
+			var any_finished := false
+			var any_disconnected := false
+			for player in _players.values():
+				any_finished = any_finished or str(player.get("state", "")) == "finished"
+				any_disconnected = any_disconnected or str(player.get("state", "")) == "disconnected"
+			match_finish_reason = "finish_line" if any_finished else ("confirmed_disconnect" if any_disconnected else "elimination")
+			events.append({"kind": "match_finished", "tick": tick, "reason": match_finish_reason, "terminal_transitions": get_terminal_transitions(), "result": RaceRulesScript.make_result(_placements)})
 
 func _step_player(user_id: String, player: Dictionary, events: Array[Dictionary]) -> void:
 	var movement := RunnerMotionScript.distance_for_delta(FIXED_DELTA, float(player.run_speed_percent) / 10000.0, false)
@@ -441,17 +477,18 @@ func _step_player(user_id: String, player: Dictionary, events: Array[Dictionary]
 	var ceiling_info := _surface_at(float(player.world_x), true)
 	RunnerMotionScript.advance_vertical(player, FIXED_DELTA, float(floor_info.y), float(ceiling_info.y), bool(floor_info.supported), bool(ceiling_info.supported))
 	player.blocked = blocked
-	if _hits_lethal_event(player):
-		player.state = "dead"
-		events.append({"kind": "player_died", "user_id": user_id, "tick": tick})
+	var hazard_hit := _lethal_event_hit(player)
+	if not hazard_hit.is_empty():
+		_set_terminal_state(user_id, player, "dead", "hazard_hit", hazard_hit)
+		events.append({"kind": "player_died", "user_id": user_id, "tick": tick, "reason": "hazard_hit", "details": hazard_hit})
 	elif float(player.y) < -64.0 or float(player.y) > float(manifest.get("world_height")) + 64.0:
-		player.state = "dead"
-		events.append({"kind": "player_died", "user_id": user_id, "tick": tick})
+		_set_terminal_state(user_id, player, "dead", "out_of_bounds")
+		events.append({"kind": "player_died", "user_id": user_id, "tick": tick, "reason": "out_of_bounds"})
 	elif float(player.world_x) >= float(manifest.get("finish_x")):
-		player.state = "finished"
 		player.finish_tick = tick
+		_set_terminal_state(user_id, player, "finished", "finish_line", {"finish_x": float(manifest.get("finish_x"))})
 		_placements.append({"user_id": user_id, "display_name": str(player.display_name), "finish_tick": tick, "status": "finished"})
-		events.append({"kind": "player_finished", "user_id": user_id, "tick": tick})
+		events.append({"kind": "player_finished", "user_id": user_id, "tick": tick, "reason": "finish_line", "finish_x": float(manifest.get("finish_x"))})
 
 func _surface_at(x: float, ceiling: bool) -> Dictionary:
 	var y := float(manifest.get("initial_ceiling_y")) if ceiling else float(manifest.get("initial_floor_y"))
@@ -501,7 +538,7 @@ func _blocks_at_next_x(player: Dictionary, next_x: float) -> bool:
 			return true
 	return false
 
-func _hits_lethal_event(player: Dictionary) -> bool:
+func _lethal_event_hit(player: Dictionary) -> Dictionary:
 	var rect := Rect2(Vector2(float(player.world_x) - PLAYER_WIDTH * 0.5, float(player.y) - PLAYER_HEIGHT * 0.5), Vector2(PLAYER_WIDTH, PLAYER_HEIGHT))
 	for event in manifest.get("events"):
 		var kind := str(event.get("kind", ""))
@@ -511,7 +548,7 @@ func _hits_lethal_event(player: Dictionary) -> bool:
 			var x := float(event.get("start_x", event.get("x", 0.0)))
 			var triangles: Array = HazardRules.spike_group_triangles(x, float(event.get("y", 0.0)), int(event.get("count", 1)), float(event.get("spacing", CourseGenerator.SPIKE_GROUP_SPACING)), CourseGenerator.SPIKE_WIDTH, CourseGenerator.SPIKE_HEIGHT, bool(event.get("from_ceiling", false)))
 			if HazardRules.player_impact(rect, "spikes", Rect2(), triangles) == HazardRules.PlayerImpact.LETHAL:
-				return true
+				return _hazard_hit_details(event, "spikes")
 		if kind == "step" and bool(event.get("spiked", false)):
 			var triangles := HazardRules.step_spike_triangles(
 				float(event.get("x", 0.0)),
@@ -520,7 +557,7 @@ func _hits_lethal_event(player: Dictionary) -> bool:
 				bool(event.get("from_ceiling", false))
 			)
 			if HazardRules.player_impact(rect, "spikes", Rect2(), triangles) == HazardRules.PlayerImpact.LETHAL:
-				return true
+				return _hazard_hit_details(event, "step_spikes")
 		if kind == "block":
 			var width := float(event.get("width", 48.0))
 			var height := float(event.get("height", 72.0))
@@ -528,7 +565,7 @@ func _hits_lethal_event(player: Dictionary) -> bool:
 			var block_y := edge_y - height if not bool(event.get("from_ceiling", false)) else edge_y
 			var block_rect := Rect2(Vector2(float(event.get("x", 0.0)) - width * 0.5, block_y), Vector2(width, height))
 			if HazardRules.player_impact(rect, "block", block_rect) == HazardRules.PlayerImpact.LETHAL:
-				return true
+				return _hazard_hit_details(event, "block")
 	for barrel in _barrels:
 		if not bool(barrel.get("spawned", false)) or bool(barrel.get("destroyed", false)):
 			continue
@@ -537,5 +574,8 @@ func _hits_lethal_event(player: Dictionary) -> bool:
 		var radius := HazardRules.barrel_radius(barrel_width, barrel_height)
 		var center := HazardRules.barrel_center(Vector2(float(barrel.get("x", 0.0)), float(barrel.get("y", 0.0))), barrel_width, barrel_height)
 		if HazardRules.player_impact(rect, "barrel", Rect2(), [], center, radius) == HazardRules.PlayerImpact.LETHAL:
-			return true
-	return false
+			return _hazard_hit_details({"event_id": str(barrel.get("entity_id", "")), "x": barrel.get("x", 0.0), "y": barrel.get("y", 0.0), "width": barrel.get("width", 0.0), "height": barrel.get("height", 0.0)}, "barrel")
+	return {}
+
+func _hazard_hit_details(event: Dictionary, hazard_type: String) -> Dictionary:
+	return {"hazard_event_id": str(event.get("event_id", "")), "hazard_type": hazard_type, "hazard_x": float(event.get("x", event.get("start_x", 0.0))), "hazard_y": float(event.get("y", 0.0)), "hazard_width": float(event.get("width", 0.0)), "hazard_height": float(event.get("height", 0.0))}

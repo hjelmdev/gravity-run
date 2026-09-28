@@ -191,6 +191,9 @@ func _initialize() -> void:
 	for _frame in range(90):
 		spike_simulation.advance_frame(1.0 / 60.0)
 	assert(spike_simulation.get_player("runner_a").get("state", "") == "dead", "floor spikes must be authoritative and lethal")
+	assert(spike_simulation.get_player("runner_a").get("terminal_reason", "") == "hazard_hit" and int(spike_simulation.get_player("runner_a").get("terminal_tick", -1)) > 0, "hazard deaths must expose their cause and exact simulation tick")
+	assert(spike_simulation.match_finished and spike_simulation.match_finish_reason == "elimination", "the last hazard elimination should produce an explicit elimination finish reason")
+	assert(not spike_simulation.get_terminal_transitions().is_empty() and spike_simulation.get_terminal_transitions()[0].get("hazard_type", "") == "spikes", "the terminal trace must identify the hazard that caused death")
 	var spiked_step_manifest: Resource = _make_manifest([{
 		"event_id": "spiked_floor_step",
 		"kind": "step",
@@ -229,7 +232,24 @@ func _initialize() -> void:
 	disconnect_simulation.start()
 	assert(disconnect_simulation.mark_disconnected("departed"), "the host should be able to mark a disconnected runner")
 	assert(disconnect_simulation.get_player("departed").get("state", "") == "disconnected")
+	assert(disconnect_simulation.get_player("departed").get("terminal_reason", "") == "confirmed_disconnect" and int(disconnect_simulation.get_player("departed").get("terminal_tick", -1)) == 0, "disconnects must carry an explicit reason and authoritative transition tick")
 	assert(not disconnect_simulation.mark_disconnected("unknown"), "unknown peers must not create match state")
+	var survivor_simulation := SimulationScript.new()
+	assert(survivor_simulation.configure(_make_manifest([], 10000), [
+		{"user_id": "host"},
+		{"user_id": "guest_a"},
+		{"user_id": "guest_b"},
+	]).is_empty())
+	survivor_simulation.start()
+	for user_id in ["host", "guest_a"]:
+		var terminal_player: Dictionary = survivor_simulation.get_player(user_id)
+		terminal_player.state = "dead"
+		terminal_player.terminal_reason = "hazard_hit"
+		terminal_player.terminal_tick = 0
+		assert(survivor_simulation.apply_authoritative_player_state(user_id, terminal_player))
+	for _tick in range(180):
+		survivor_simulation.advance_frame(1.0 / 60.0)
+	assert(not survivor_simulation.match_finished and survivor_simulation.get_player("guest_b").get("state", "") == "running", "two terminal players must not end the host simulation while a third is still running")
 	var prediction_simulation := SimulationScript.new()
 	assert(prediction_simulation.configure(_make_manifest([], 10000), [
 		{"user_id": "local"},

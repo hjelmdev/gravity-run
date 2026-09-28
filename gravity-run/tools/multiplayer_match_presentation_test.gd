@@ -1,6 +1,7 @@
 extends Node
 
 const MatchScript := preload("res://ui/multiplayer_match.gd")
+const SimulationScript := preload("res://systems/multiplayer_simulation.gd")
 const ManifestScript := preload("res://systems/multiplayer_course_manifest.gd")
 const PlayerScene := preload("res://player/player.tscn")
 
@@ -51,6 +52,7 @@ func _ready() -> void:
 	spectator_view.set("_snapshot", {"players": spectator_roster})
 	spectator_view.set("_authoritative_snapshot", {"finished": false, "players": spectator_roster})
 	spectator_view.set("_visual_slot_by_user", {"trailer": 0.0})
+	spectator_view.call("_refresh_camera_state")
 	assert(is_equal_approx(float(spectator_view.call("_camera_left")), 120.0), "a dead runner ahead of survivors must not pin the spectator camera at its own location")
 	spectator_view.free()
 	assert(MatchScript.estimate_prediction_target_tick(100, 0.05, 100.0, 0.0, 24) == 108, "prediction should estimate current host time from packet age and half-RTT instead of freezing at the received tick")
@@ -66,7 +68,77 @@ func _ready() -> void:
 	assert(str(terminal_flip.state) == "dead", "terminal state should be immediate even while position is interpolated")
 	assert(not MatchScript.may_show_results(false, {"finished": false}), "a guest must not show local predicted results before the host finishes")
 	assert(MatchScript.may_show_results(false, {"finished": true}), "a guest should show results once the host's authoritative snapshot is finished")
-	assert(MatchScript.may_show_results(true, {"finished": false}), "the host remains authoritative for its own results")
+	assert(not MatchScript.may_show_results(true, {"finished": false}), "the host must not show results before its simulation finishes")
+	assert(MatchScript.may_show_results(true, {}, true), "the host simulation is authoritative for its own results")
+	var valid_finished := {"tick": 12, "finished": true, "finish_revision": 1, "finish_tick": 12, "finish_reason": "elimination", "players": [
+		{"user_id": "host", "state": "dead", "terminal_reason": "hazard_hit", "terminal_tick": 5},
+		{"user_id": "guest_a", "state": "dead", "terminal_reason": "out_of_bounds", "terminal_tick": 12},
+		{"user_id": "guest_b", "state": "dead", "terminal_reason": "hazard_hit", "terminal_tick": 9},
+	]}
+	assert(MatchScript.match_state_error(valid_finished, ["host", "guest_a", "guest_b"]).is_empty(), "a complete and reasoned terminal roster should pass finish validation")
+	var contradictory_finish: Dictionary = valid_finished.duplicate(true)
+	contradictory_finish.players[2].state = "running"
+	assert(MatchScript.match_state_error(contradictory_finish, ["host", "guest_a", "guest_b"]) == "finished_snapshot_has_running_player", "a finish decision must never accept a still-running player")
+	assert(not MatchScript.match_state_error(valid_finished, ["host", "guest_a"]).is_empty(), "finish validation must require the locked complete roster")
+	var malformed_terminal: Dictionary = valid_finished.duplicate(true)
+	malformed_terminal.players[0].terminal_reason = ""
+	assert(not MatchScript.match_state_error(malformed_terminal, ["host", "guest_a", "guest_b"]).is_empty(), "terminal states must include an explicit cause")
+	var rollback_snapshot: Dictionary = {"tick": 13, "finished": false, "players": valid_finished.players}
+	assert(MatchScript.match_state_error(rollback_snapshot, ["host", "guest_a", "guest_b"], 1) == "finished_state_rolled_back", "a guest must not accept a running snapshot after an accepted finish")
+	var service_identity := MultiplayerService.identity_user_id
+	var service_room: Dictionary = MultiplayerService.room_state.duplicate(true)
+	MultiplayerService.identity_user_id = "host"
+	MultiplayerService.room_state = {"room_id": "presentation-test", "owner_user_id": "host"}
+	var camera_manifest: Resource = ManifestScript.new()
+	camera_manifest.set("generator_version", 4)
+	camera_manifest.set("course_identity", "presentation-test")
+	camera_manifest.set("seed_value", 24680)
+	camera_manifest.set("course_length_px", 10000)
+	camera_manifest.set("finish_x", 10180.0)
+	camera_manifest.set("manifest_hash", camera_manifest.call("calculate_hash"))
+	var host_simulation := SimulationScript.new()
+	assert(host_simulation.configure(camera_manifest, [
+		{"user_id": "host", "display_name": "Host"},
+		{"user_id": "guest_a", "display_name": "Guest A"},
+		{"user_id": "guest_b", "display_name": "Guest B"},
+	]).is_empty())
+	var host_dead: Dictionary = host_simulation.get_player("host")
+	host_dead.state = "dead"
+	var guest_a_dead: Dictionary = host_simulation.get_player("guest_a")
+	guest_a_dead.state = "dead"
+	var guest_b_running: Dictionary = host_simulation.get_player("guest_b")
+	guest_b_running.world_x = 1400.0
+	assert(host_simulation.apply_authoritative_player_state("host", host_dead))
+	assert(host_simulation.apply_authoritative_player_state("guest_a", guest_a_dead))
+	assert(host_simulation.apply_authoritative_player_state("guest_b", guest_b_running))
+	var host_camera_view: Node2D = MatchScript.new()
+	host_camera_view.set("_local_user_id", "host")
+	host_camera_view.set("_owner_user_id", "host")
+	host_camera_view.set("_simulation", host_simulation)
+	host_camera_view.set("_snapshot", host_simulation.get_snapshot())
+	host_camera_view.set("_authoritative_snapshot", {})
+	host_camera_view.set("_visual_slot_by_user", {"guest_b": 0.0})
+	host_camera_view.call("_refresh_camera_state")
+	assert(str(host_camera_view.call("_player_state", "host").get("state", "")) == "dead", "the host's own simulated death must be authoritative without a received snapshot")
+	assert(host_camera_view.get("_camera_mode") == "SPECTATING" and host_camera_view.get("_spectator_target_user_id") == "guest_b", "a dead host should spectate the living guest")
+	assert(is_equal_approx(float(host_camera_view.call("_camera_left")), 1220.0), "the host spectator camera should use the living guest's position")
+	host_camera_view.free()
+	var rejected_finish_view: Node2D = MatchScript.new()
+	rejected_finish_view.set("_manifest", camera_manifest)
+	rejected_finish_view.set("_start_generation", "test-generation")
+	var expected_roster: Array[String] = ["host", "guest_a", "guest_b"]
+	rejected_finish_view.set("_match_roster_ids", expected_roster)
+	rejected_finish_view.set("_last_authoritative_tick", 11)
+	var rejected_finish := valid_finished.duplicate(true)
+	rejected_finish["tick"] = 12
+	rejected_finish["course_identity"] = "presentation-test"
+	rejected_finish["match_generation"] = "test-generation"
+	rejected_finish.players[2].state = "running"
+	assert(not rejected_finish_view.call("_accept_authoritative_snapshot", rejected_finish), "the guest snapshot path must reject finished=true with a running player")
+	assert(int(rejected_finish_view.get("_last_authoritative_tick")) == 11 and str(rejected_finish_view.get("_last_snapshot_rejection")) == "finished_snapshot_has_running_player", "rejected finish data must not mutate the guest's accepted state: %s at tick %d" % [str(rejected_finish_view.get("_last_snapshot_rejection")), int(rejected_finish_view.get("_last_authoritative_tick"))])
+	rejected_finish_view.free()
+	MultiplayerService.identity_user_id = service_identity
+	MultiplayerService.room_state = service_room
 	assert(is_equal_approx(MatchScript.estimate_shared_start_msec(1000, 5.0, [400, 600]), 6250.0), "host start should compensate for measured peer delivery latency")
 	assert(is_equal_approx(MatchScript.estimate_guest_clock_offset_ms(5200, 5000, 5400), 0.0), "clock-offset estimation should use the probe round-trip midpoint")
 	assert(is_equal_approx(MatchScript.estimate_guest_clock_offset_ms(15200, 10000, 10400), 5000.0), "clock-offset estimation should translate a guest clock into host time")
@@ -158,7 +230,8 @@ func _ready() -> void:
 		{"user_id": "winner", "display_name": "Winner", "state": "finished", "finish_tick": 20, "world_x": 1200.0},
 		{"user_id": "second", "display_name": "Second", "state": "dead", "finish_tick": -1, "world_x": 900.0},
 	]})
-	match_view.set("_authoritative_snapshot", {"finished": true})
+	match_view.set("_authoritative_snapshot", {"finished": true, "finish_reason": "finish_line", "players": match_view.get("_snapshot").players})
+	match_view.set("_accepted_finish_revision", 1)
 	match_view.call("_show_results")
 	assert((match_view.get("_results_list") as VBoxContainer).get_child_count() == 2, "the results board should include finishers and eliminated players")
 	assert((match_view.get("_results_panel") as PanelContainer).visible, "the standings should have a visible results panel")
@@ -170,9 +243,10 @@ func _ready() -> void:
 		{"user_id": "alpha", "display_name": "Alpha", "state": "dead", "world_x": 900.0},
 		{"user_id": "beta", "display_name": "Beta", "state": "dead", "world_x": 900.0},
 	]})
-	tie_view.set("_authoritative_snapshot", {"finished": true})
+	tie_view.set("_authoritative_snapshot", {"finished": true, "finish_reason": "elimination", "players": tie_view.get("_snapshot").players})
+	tie_view.set("_accepted_finish_revision", 1)
 	tie_view.call("_show_results")
-	assert((tie_view.get("_result_label") as Label).text == tr("No winner"), "an exact distance tie after elimination must not arbitrarily name a winner")
+	assert((tie_view.get("_result_label") as Label).text.begins_with(tr("No winner")), "an exact distance tie after elimination must not arbitrarily name a winner")
 	var tie_rows: VBoxContainer = tie_view.get("_results_list")
 	assert((tie_rows.get_child(0).get_child(1) as Label).text == "#1" and (tie_rows.get_child(1).get_child(1) as Label).text == "#1", "players eliminated at the same distance should share a place")
 	assert(not (tie_view.get("_status_label") as Label).visible, "the in-game status text should not remain behind the results modal")
