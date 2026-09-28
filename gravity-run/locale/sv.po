@@ -1061,6 +1061,15 @@ msgstr "LOPPRESULTAT"
 msgid "No winner"
 msgstr "Ingen vinnare"
 
+msgid "Match ended: connection lost"
+msgstr "Matchen avslutades när anslutningen bröts"
+
+msgid "Match ended: everyone was eliminated"
+msgstr "Matchen avslutades när alla slogs ut"
+
+msgid "Match ended at the finish line"
+msgstr "Matchen avslutades vid mållinjen"
+
 msgid "A player"
 msgstr "En spelare"
 
