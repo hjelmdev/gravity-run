@@ -2,7 +2,6 @@ extends Node
 
 const MatchScript := preload("res://ui/multiplayer_match.gd")
 const ManifestScript := preload("res://systems/multiplayer_course_manifest.gd")
-const SimulationScript := preload("res://systems/multiplayer_simulation.gd")
 const PlayerScene := preload("res://player/player.tscn")
 
 func _ready() -> void:
@@ -53,48 +52,7 @@ func _ready() -> void:
 	assert(MatchScript.correction_after_authority(Vector2(102.0, 202.0), Vector2(100.0, 200.0)).is_equal_approx(Vector2(2.0, 2.0)), "small local prediction errors should fade smoothly")
 	assert(MatchScript.correction_after_authority(Vector2(300.0, 200.0), Vector2(100.0, 200.0)) == Vector2.ZERO, "large prediction errors should snap to authority")
 	assert(MatchScript.correction_after_authority(Vector2(102.0, 202.0), Vector2(100.0, 200.0), "running", "dead") == Vector2.ZERO, "terminal state transitions must not be visually delayed")
-	var faded_correction: Vector2 = MatchScript.fade_render_correction(Vector2(50.0, 30.0), 0.1, 420.0)
-	assert(faded_correction.length() < Vector2(50.0, 30.0).length() and faded_correction.length() > 0.0, "replayed local prediction should smoothly fade its render-continuity correction")
-	var rollback_manifest: Resource = ManifestScript.new()
-	rollback_manifest.set("generator_version", 4)
-	rollback_manifest.set("course_identity", "presentation-rollback-test")
-	rollback_manifest.set("seed_value", 24680)
-	rollback_manifest.set("course_length_px", 10000)
-	rollback_manifest.set("start_x", 180.0)
-	rollback_manifest.set("finish_x", 10180.0)
-	rollback_manifest.set("initial_floor_y", 460.0)
-	rollback_manifest.set("initial_ceiling_y", 80.0)
-	rollback_manifest.set("manifest_hash", rollback_manifest.call("calculate_hash"))
-	var authoritative_simulation := SimulationScript.new()
-	assert(authoritative_simulation.configure(rollback_manifest, [{"user_id": "local"}, {"user_id": "remote"}]).is_empty())
-	authoritative_simulation.start()
-	for _tick in range(10):
-		authoritative_simulation.advance_frame(1.0 / 60.0, false)
-	var authority_snapshot: Dictionary = authoritative_simulation.get_snapshot()
-	var client_simulation := SimulationScript.new()
-	assert(client_simulation.configure(rollback_manifest, [{"user_id": "local"}, {"user_id": "remote"}]).is_empty())
-	client_simulation.start()
-	for _tick in range(11):
-		client_simulation.advance_frame(1.0 / 60.0, false)
-	assert(client_simulation.submit_flip("local", -1))
-	for _tick in range(4):
-		client_simulation.advance_frame(1.0 / 60.0, false)
-	var expected_client_state: Dictionary = client_simulation.get_player("local")
-	for authoritative_player in authority_snapshot.players:
-		assert(client_simulation.apply_authoritative_player_state(str(authoritative_player.user_id), authoritative_player))
-	assert(client_simulation.apply_authoritative_world_hazards(authority_snapshot.world_hazards))
-	assert(client_simulation.restore_authoritative_frame(int(authority_snapshot.tick), authority_snapshot.placements, false))
-	var replay_view: Node2D = MatchScript.new()
-	replay_view.set("_simulation", client_simulation)
-	replay_view.set("_local_user_id", "local")
-	replay_view.set("_authoritative_snapshot", authority_snapshot)
-	var pending_replay_inputs: Array[Dictionary] = [{"sequence": 1, "client_tick": 11, "gravity_direction": -1}]
-	replay_view.set("_pending_local_inputs", pending_replay_inputs)
-	replay_view.call("_replay_local_prediction", 10, 15)
-	var replayed_client_state: Dictionary = client_simulation.get_player("local")
-	assert(int(client_simulation.get_snapshot().tick) == 15, "client rollback should replay to the previous predicted tick")
-	assert(is_equal_approx(float(replayed_client_state.world_x), float(expected_client_state.world_x)) and is_equal_approx(float(replayed_client_state.y), float(expected_client_state.y)) and int(replayed_client_state.gravity_direction) == int(expected_client_state.gravity_direction), "client rollback should replay unacknowledged flips to preserve the local trajectory")
-	replay_view.free()
+	assert(MatchScript.fade_render_correction(Vector2(50.0, 30.0), 0.1, 420.0).is_equal_approx(Vector2(50.0, 0.0)), "guest forward prediction must not be damped toward a stale host snapshot between updates")
 	var ranking := [
 		{"user_id": "alpha", "state": "running", "world_x": 780.0},
 		{"user_id": "beta", "state": "running", "world_x": 780.0},

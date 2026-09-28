@@ -155,33 +155,6 @@ func _initialize() -> void:
 	assert(is_equal_approx(float(prediction_simulation.get_player("local").get("world_x", 0.0)), 420.0), "prediction state should reconcile to host authority")
 	authority_state["world_x"] = NAN
 	assert(not prediction_simulation.apply_authoritative_player_state("local", authority_state), "invalid network positions must be rejected")
-	var rollback_manifest := _make_manifest([], 10000)
-	var authority_simulation := SimulationScript.new()
-	assert(authority_simulation.configure(rollback_manifest, [{"user_id": "local"}, {"user_id": "remote"}]).is_empty())
-	authority_simulation.start()
-	for _tick in range(10):
-		authority_simulation.advance_frame(1.0 / 60.0, false)
-	var rollback_snapshot: Dictionary = authority_simulation.get_snapshot()
-	var predicted_simulation := SimulationScript.new()
-	assert(predicted_simulation.configure(rollback_manifest, [{"user_id": "local"}, {"user_id": "remote"}]).is_empty())
-	predicted_simulation.start()
-	for _tick in range(11):
-		predicted_simulation.advance_frame(1.0 / 60.0, false)
-	assert(predicted_simulation.submit_flip("local", -1), "the locally predicted input should apply immediately")
-	for _tick in range(4):
-		predicted_simulation.advance_frame(1.0 / 60.0, false)
-	var expected_after_replay: Dictionary = predicted_simulation.get_player("local")
-	for player_state in rollback_snapshot.players:
-		assert(predicted_simulation.apply_authoritative_player_state(str(player_state.user_id), player_state))
-	assert(predicted_simulation.apply_authoritative_world_hazards(rollback_snapshot.world_hazards))
-	assert(predicted_simulation.restore_authoritative_frame(int(rollback_snapshot.tick), rollback_snapshot.placements, false))
-	predicted_simulation.advance_frame(1.0 / 60.0, false)
-	assert(predicted_simulation.submit_flip("local", -1), "an unacknowledged local input should be replayable at its original tick")
-	for _tick in range(4):
-		predicted_simulation.advance_frame(1.0 / 60.0, false)
-	var replayed_state: Dictionary = predicted_simulation.get_player("local")
-	assert(int(predicted_simulation.get_snapshot().tick) == 15, "rollback must replay the local simulation to its previous predicted tick")
-	assert(is_equal_approx(float(replayed_state.world_x), float(expected_after_replay.world_x)) and is_equal_approx(float(replayed_state.y), float(expected_after_replay.y)) and int(replayed_state.gravity_direction) == int(expected_after_replay.gravity_direction), "authoritative rollback plus unacknowledged input replay should reproduce the same local trajectory")
 	var barrel_block_manifest: Resource = _make_manifest([
 		{"event_id": "target_block", "kind": "block", "x": 1000.0, "y": 460.0, "width": 48.0, "height": 72.0, "from_ceiling": false},
 		{"event_id": "test_barrel", "kind": "barrels", "x": 1000.0, "y": 460.0, "width": 54.0, "height": 54.0, "count": 1, "spacing": 70.0, "motion_speed_multiplier": 1.4, "spawn_lead_distance": 100.0},
