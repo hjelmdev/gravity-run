@@ -179,12 +179,16 @@ func begin_match(metadata: Dictionary) -> void:
 		"events": [],
 		"incidents": [],
 		"browser_samples": [],
-		"totals": {"process_frames": 0, "snapshot_received": 0, "snapshot_accepted": 0, "snapshot_rejected": 0, "transport_polls": 0, "transport_packets": 0},
+		"totals": {"process_frames": 0, "snapshot_received": 0, "snapshot_accepted": 0, "snapshot_rejected": 0, "transport_polls": 0, "transport_packets": 0, "transport_packets_control": 0, "transport_packets_snapshot": 0},
 		"loss": {"detail_samples_dropped": 0, "start_samples_dropped": 0, "events_dropped": 0, "windows_dropped": 0, "incidents_dropped": 0, "report_reduced_for_upload": false},
 	}
 	_capture.test_layout = _test_layout_preference
 	_js_probe_installed = false
 	_install_browser_probe()
+	if OS.has_feature("web"):
+		# PerformanceObserver can deliver buffered tasks from before this race.
+		# Anchor and clear it at capture start so reports describe this match only.
+		JavaScriptBridge.eval("(()=>{const p=window.__gravityRunMpProbe;if(p){p.captureStart=performance.now();p.last=p.captureStart;p.long=[];p.gaps=[];p.events=[]}})()", true)
 	_add_event("capture_started", metadata, true)
 	report_changed.emit("Local multiplayer diagnostics recording started.")
 
@@ -585,7 +589,7 @@ func _add_event(event_name: String, details: Dictionary, important: bool) -> voi
 			_capture.events.pop_front()
 		_capture.loss.events_dropped = int(_capture.loss.get("events_dropped", 0)) + 1
 
-func _sanitize(value: Variant, depth: int = 0) -> Variant:
+func _sanitize(value: Variant, depth: int = 0, parent_key: String = "") -> Variant:
 	if depth > 8:
 		return "[depth_limit]"
 	if value is Dictionary:
@@ -594,21 +598,27 @@ func _sanitize(value: Variant, depth: int = 0) -> Variant:
 			var name := str(key).to_lower()
 			if name in ["token", "access_token", "refresh_token", "email", "sdp", "ice", "candidate", "ip", "url", "signaling_topic", "password", "authorization", "display_name"]:
 				continue
-			if name in ["user_id", "peer_id", "owner_user_id", "uploaded_by"]:
-				result[str(key).left(80)] = str(_id_to_label.get(str(value[key]), "unknown_player"))
+			if name in ["user_id", "peer_id", "owner_user_id", "uploaded_by", "player_id", "spectator_target", "spectator_target_user_id"]:
+				result[str(key).left(80)] = _safe_player_label(str(value[key]))
 			else:
-				result[str(key).left(80)] = _sanitize(value[key], depth + 1)
+				result[str(key).left(80)] = _sanitize(value[key], depth + 1, name)
 		return result
 	if value is Array:
 		var result: Array = []
 		for item in value:
 			if result.size() >= 200:
 				break
-			result.append(_sanitize(item, depth + 1))
+			if parent_key in ["before", "after"] and item is String:
+				result.append(_safe_player_label(str(item)))
+			else:
+				result.append(_sanitize(item, depth + 1, parent_key))
 		return result
 	if value is String:
 		return value.left(512)
 	return value
+
+func _safe_player_label(identity: String) -> String:
+	return str(_id_to_label.get(identity, "unknown_player"))
 
 func _queue_upload(report: Dictionary) -> void:
 	var queued_ids: Array[String] = []
@@ -868,10 +878,10 @@ func _install_browser_probe() -> void:
 		return
 	var js := """
 	if(!window.__gravityRunMpProbe){
-	 const p=window.__gravityRunMpProbe={start:performance.now(),last:null,gaps:[],events:[],long:[],status:'ok',observer:false};
+	 const p=window.__gravityRunMpProbe={start:performance.now(),captureStart:performance.now(),last:null,gaps:[],events:[],long:[],status:'ok',observer:false};
 	 const ev=(type)=>{p.events.push({type,t:performance.now()});if(p.events.length>80)p.events.shift()};
 	 ['visibilitychange','focus','blur','pagehide','pageshow','freeze','resume'].forEach(n=>addEventListener(n,()=>ev(n),true));
-	 try{if(window.PerformanceObserver){const o=new PerformanceObserver(l=>{for(const e of l.getEntries()){p.long.push({d:e.duration,c:e.attribution&&e.attribution.length?String(e.attribution[0].containerType||'unknown'):'unknown'});if(p.long.length>120)p.long.shift()}});o.observe({type:'longtask',buffered:true});p.observer=true}}catch(e){p.status='longtask_unsupported'}
+	 try{if(window.PerformanceObserver){const o=new PerformanceObserver(l=>{for(const e of l.getEntries()){p.long.push({s:e.startTime,d:e.duration,c:e.attribution&&e.attribution.length?String(e.attribution[0].containerType||'unknown'):'unknown'});if(p.long.length>120)p.long.shift()}});o.observe({type:'longtask',buffered:true});p.observer=true}}catch(e){p.status='longtask_unsupported'}
 	 const frame=(t)=>{if(p.last!==null){p.gaps.push(t-p.last);if(p.gaps.length>240)p.gaps.shift()}p.last=t;requestAnimationFrame(frame)};requestAnimationFrame(frame);
 	}
 	"""
@@ -882,7 +892,7 @@ func _read_browser_probe() -> void:
 	if not OS.has_feature("web") or _capture.is_empty():
 		return
 	var before := Time.get_ticks_usec()
-	var raw: Variant = JavaScriptBridge.eval("(()=>{const p=window.__gravityRunMpProbe;if(!p)return JSON.stringify({status:'missing'});const s=[...p.gaps].sort((a,b)=>a-b),l=[...p.long].map(x=>x.d).sort((a,b)=>a-b);const q=(a,x)=>a.length?a[Math.min(a.length-1,Math.floor((a.length-1)*x))]:null;let parent=null;try{const d=window.parent.document;parent={visibility:d.visibilityState,hidden:d.hidden,focused:d.hasFocus(),context:'same_origin_parent'}}catch(e){parent={status:'cross_origin_or_unavailable'}}const v={status:p.status,js_performance_now_ms:performance.now(),visibility:document.visibilityState,hidden:document.hidden,focused:document.hasFocus(),document:'game_iframe_or_top',parent:parent,user_agent:navigator.userAgent,cross_origin_isolated:crossOriginIsolated,raf_samples:s.length,raf_gap_p50_ms:q(s,.5),raf_gap_p95_ms:q(s,.95),raf_gap_max_ms:s.length?s[s.length-1]:null,longtask_supported:p.observer,longtask_count:p.long.length,longtask_p95_ms:q(l,.95),longtask_max_ms:l.length?l[l.length-1]:null,viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio},events:p.events.slice(-20)};p.gaps=[];p.long=[];return JSON.stringify(v)})()", true)
+	var raw: Variant = JavaScriptBridge.eval("(()=>{const p=window.__gravityRunMpProbe;if(!p)return JSON.stringify({status:'missing'});const now=performance.now(),s=[...p.gaps].sort((a,b)=>a-b),entries=p.long.filter(x=>x.s>=p.captureStart&&x.s<=now),l=entries.map(x=>x.d).sort((a,b)=>a-b);const q=(a,x)=>a.length?a[Math.min(a.length-1,Math.floor((a.length-1)*x))]:null;let parent=null;try{const d=window.parent.document;parent={visibility:d.visibilityState,hidden:d.hidden,focused:d.hasFocus(),context:'same_origin_parent'}}catch(e){parent={status:'cross_origin_or_unavailable'}}const v={status:p.status,js_performance_now_ms:now,visibility:document.visibilityState,hidden:document.hidden,focused:document.hasFocus(),document:'game_iframe_or_top',parent:parent,user_agent:navigator.userAgent,cross_origin_isolated:crossOriginIsolated,raf_samples:s.length,raf_gap_p50_ms:q(s,.5),raf_gap_p95_ms:q(s,.95),raf_gap_max_ms:s.length?s[s.length-1]:null,longtask_supported:p.observer,longtask_count:entries.length,longtask_p95_ms:q(l,.95),longtask_max_ms:l.length?l[l.length-1]:null,longtask_samples:entries.map(x=>({start_ms:x.s-p.captureStart,duration_ms:x.d,container:x.c})),viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio},events:p.events.slice(-20)};p.gaps=[];p.long=[];return JSON.stringify(v)})()", true)
 	var after := Time.get_ticks_usec()
 	var parsed: Variant = JSON.parse_string(str(raw))
 	if parsed is Dictionary:

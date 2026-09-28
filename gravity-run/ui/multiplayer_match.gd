@@ -548,17 +548,7 @@ func _send_reliable_player_terminal(user_id: String) -> void:
 	var player_state: Dictionary = _simulation.get_player(user_id) if _simulation != null else {}
 	if player_state.is_empty():
 		return
-	var payload := {
-		"kind": "player_terminal",
-		"room_id": MultiplayerService.get_room_id(),
-		"match_generation": _start_generation,
-		"course_identity": str(_manifest.get("course_identity")),
-		"event_tick": int(player_state.get("terminal_tick", -1)),
-		"sent_host_tick": int(_simulation.get("tick")),
-		"terminal_reason": str(player_state.get("terminal_reason", "")),
-		"terminal_tick": int(player_state.get("terminal_tick", -1)),
-		"player": player_state,
-	}
+	var payload := TerminalEventRules.build_payload(MultiplayerService.get_room_id(), _start_generation, str(_manifest.get("course_identity")), player_state, int(_simulation.get("tick")))
 	_record_match_diag("player_terminal_send", {"player_id": user_id, "state": str(player_state.get("state", "")), "event_tick": int(payload.event_tick), "sent_host_tick": int(payload.sent_host_tick), "terminal_tick": int(payload.terminal_tick), "reason": str(payload.terminal_reason)})
 	for member in MultiplayerService.get_members():
 		if not member is Dictionary:

@@ -4,6 +4,7 @@ const MatchScript := preload("res://ui/multiplayer_match.gd")
 const SimulationScript := preload("res://systems/multiplayer_simulation.gd")
 const ManifestScript := preload("res://systems/multiplayer_course_manifest.gd")
 const LocalPredictionScript := preload("res://systems/multiplayer_local_prediction.gd")
+const TerminalEventRules := preload("res://systems/multiplayer_terminal_event.gd")
 const PlayerScene := preload("res://player/player.tscn")
 
 func _ready() -> void:
@@ -192,7 +193,62 @@ func _ready() -> void:
 	assert(bool(clock_view.call("_accept_authoritative_snapshot", ordinary_clock_snapshot)), "ordinary snapshot should reconcile through the complete receive path")
 	assert(int(guest_simulation.get("tick")) == 63 and int(clock_view.call("_prediction_target_tick")) == 63, "normal receive must not replay to tick 65 and then immediately target 63")
 	assert((clock_view.get("_visual_correction") as Vector2).length() < 0.01, "constant-speed replay at the same simulation phase must not be turned into correction")
+	var before_bad_snapshot: Dictionary = guest_simulation.get_snapshot()
+	var before_bad_anchor := float(clock_view.get("_last_snapshot_received_network_clock"))
+	var before_bad_buffer_size := (clock_view.get("_snapshot_buffer") as Array).size()
+	var malformed_clock_snapshot: Dictionary = ordinary_clock_snapshot.duplicate(true)
+	malformed_clock_snapshot["tick"] = 62
+	assert(not clock_view.call("_accept_authoritative_snapshot", malformed_clock_snapshot), "a JSON checkpoint with mismatched world time must be rejected")
+	assert(guest_simulation.get_snapshot() == before_bad_snapshot, "rejected network state must not move the guest or mutate its world")
+	assert(int(clock_view.get("_last_authoritative_tick")) == 61 and is_equal_approx(float(clock_view.get("_last_snapshot_received_network_clock")), before_bad_anchor) and (clock_view.get("_snapshot_buffer") as Array).size() == before_bad_buffer_size, "rejection must preserve accepted tick, timing anchor, and render history")
 	clock_view.free()
+	# Reproduce the three-player case: host and guest A are already terminal,
+	# guest B is still alive, and guest A learns its death over the reliable path.
+	MultiplayerService.identity_user_id = "guest_a"
+	MultiplayerService.room_state = {"room_id": "presentation-test", "owner_user_id": "host"}
+	var spectator_simulation := SimulationScript.new()
+	assert(spectator_simulation.configure(camera_manifest, [
+		{"user_id": "host", "display_name": "Host"},
+		{"user_id": "guest_a", "display_name": "Guest A"},
+		{"user_id": "guest_b", "display_name": "Guest B"},
+	]).is_empty())
+	spectator_simulation.start()
+	spectator_simulation.advance_to_tick(1, 1)
+	for dead_id in ["host", "guest_a"]:
+		var dead_player: Dictionary = spectator_simulation.get_player(dead_id)
+		dead_player.state = "dead"
+		dead_player.terminal_tick = 1
+		dead_player.terminal_reason = "hazard_hit"
+		assert(spectator_simulation.apply_authoritative_player_state(dead_id, dead_player))
+	var survivor_state: Dictionary = spectator_simulation.get_player("guest_b")
+	survivor_state.world_x = 1400.0
+	assert(spectator_simulation.apply_authoritative_player_state("guest_b", survivor_state))
+	spectator_simulation.advance_to_tick(2, 1)
+	var guest_spectator_view: Node2D = MatchScript.new()
+	guest_spectator_view.set("_manifest", camera_manifest)
+	guest_spectator_view.set("_simulation", spectator_simulation)
+	guest_spectator_view.set("_local_user_id", "guest_a")
+	guest_spectator_view.set("_owner_user_id", "host")
+	guest_spectator_view.set("_start_generation", "spectator-test")
+	var spectator_roster_ids: Array[String] = ["host", "guest_a", "guest_b"]
+	guest_spectator_view.set("_match_roster_ids", spectator_roster_ids)
+	guest_spectator_view.set("_snapshot", spectator_simulation.get_snapshot())
+	guest_spectator_view.set("_authoritative_snapshot", spectator_simulation.get_snapshot())
+	guest_spectator_view.set("_last_authoritative_tick", 1)
+	guest_spectator_view.set("_visual_slot_by_user", {"guest_b": 0.0})
+	var guest_a_prediction: RefCounted = LocalPredictionScript.new()
+	guest_a_prediction.bind(spectator_simulation, "guest_a")
+	guest_spectator_view.set("_local_prediction", guest_a_prediction)
+	var guest_a_terminal: Dictionary = spectator_simulation.get_player("guest_a")
+	var guest_a_terminal_packet: Dictionary = TerminalEventRules.build_payload("presentation-test", "spectator-test", "presentation-test", guest_a_terminal, 2)
+	guest_spectator_view.call("_accept_reliable_player_terminal", guest_a_terminal_packet)
+	guest_spectator_view.call("_refresh_camera_state")
+	assert(guest_spectator_view.get("_camera_mode") == "SPECTATING" and guest_spectator_view.get("_spectator_target_user_id") == "guest_b", "a dead guest must spectate the surviving guest after receiving its reliable terminal event")
+	assert(float(guest_spectator_view.call("_camera_left")) > 1200.0, "the dead guest camera must follow the still-running third player, not remain near the dead local runner")
+	guest_spectator_view.call("_accept_reliable_player_terminal", guest_a_terminal_packet)
+	guest_spectator_view.call("_refresh_camera_state")
+	assert((guest_spectator_view.get("_terminal_overlays") as Dictionary).size() == 1 and guest_spectator_view.get("_spectator_target_user_id") == "guest_b", "a duplicate terminal retry must be idempotent and keep spectator camera ownership")
+	guest_spectator_view.free()
 	MultiplayerService.identity_user_id = service_identity
 	MultiplayerService.room_state = service_room
 	assert(is_equal_approx(MatchScript.estimate_shared_start_msec(1000, 5.0, [400, 600]), 6250.0), "host start should compensate for measured peer delivery latency")

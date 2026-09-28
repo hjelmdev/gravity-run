@@ -1,6 +1,20 @@
 extends RefCounted
 class_name MultiplayerTerminalEvent
 
+static func build_payload(room_id: String, match_generation: String, course_identity: String, player: Dictionary, sent_host_tick: int) -> Dictionary:
+	var event_tick := int(player.get("terminal_tick", -1))
+	return {
+		"kind": "player_terminal",
+		"room_id": room_id,
+		"match_generation": match_generation,
+		"course_identity": course_identity,
+		"event_tick": event_tick,
+		"sent_host_tick": sent_host_tick,
+		"terminal_reason": str(player.get("terminal_reason", "")),
+		"terminal_tick": event_tick,
+		"player": player.duplicate(true),
+	}
+
 static func validation_error(payload: Variant) -> String:
 	if not payload is Dictionary:
 		return "terminal_payload_not_dictionary"

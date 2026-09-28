@@ -51,7 +51,13 @@ func _ready() -> void:
 	assert(upload.fits, "an oversized completed report is reduced below the server hard limit")
 	assert(upload.bytes <= DiagnosticsScript.MAX_UPLOAD_TARGET_BYTES, "upload payload remains below the 120 KiB target")
 	assert(upload.report.loss.get("report_reduced_for_upload", false), "upload reduction is explicitly marked")
-	assert(recorder._sanitize({"email": "private@example.com", "access_token": "secret", "position": 2}) == {"position": 2}, "sensitive fields are removed")
+	recorder._id_to_label = {"host-uuid": "p0", "guest-uuid": "p1"}
+	var sanitized_identities: Dictionary = recorder._sanitize({"email": "private@example.com", "access_token": "secret", "player_id": "guest-uuid", "spectator_target": "host-uuid", "before": ["host-uuid", "guest-uuid"], "after": ["guest-uuid", "host-uuid"], "position": 2})
+	assert(sanitized_identities == {"player_id": "p1", "spectator_target": "p0", "before": ["p0", "p1"], "after": ["p1", "p0"], "position": 2}, "diagnostics must redact player/spectator IDs and visual-order ID arrays")
+	recorder._capture = {"totals": {"transport_packets": 0, "transport_packets_control": 0, "transport_packets_snapshot": 0}}
+	recorder.increment_total("transport_packets")
+	recorder.increment_total("transport_packets_snapshot")
+	assert(recorder._capture.totals.transport_packets == 1 and recorder._capture.totals.transport_packets_snapshot == 1 and recorder._capture.totals.transport_packets_control == 0, "packet totals distinguish decoded packets from polling and split channels")
 	recorder._capture = {"detail_samples": [], "start_samples": [], "incidents": [], "browser_samples": [], "events": [], "windows": [], "loss": {}, "totals": {}}
 	for index in 500:
 		recorder._capture.detail_samples.append({"padding": "m".repeat(5000)})

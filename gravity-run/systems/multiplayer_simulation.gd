@@ -281,14 +281,18 @@ func restore_checkpoint(checkpoint: Variant) -> bool:
 	var raw_finish_reason: Variant = checkpoint.get("finish_reason", "")
 	if typeof(raw_finished) != TYPE_BOOL or typeof(raw_finish_reason) != TYPE_STRING:
 		return _reject_checkpoint("finish_fields_wrong_type")
+	if not _is_integer_number(checkpoint.get("tick")):
+		return _reject_checkpoint("tick_wrong_type")
 	if checkpoint_tick < 0:
 		return _reject_checkpoint("invalid_tick")
-	if not is_finite(world_time) or world_time < 0.0 or absf(world_time - float(checkpoint_tick) * FIXED_DELTA) > 0.001:
+	if not _is_finite_number(checkpoint.get("world_time")) or world_time < 0.0 or absf(world_time - float(checkpoint_tick) * FIXED_DELTA) > 0.001:
 		return _reject_checkpoint("world_time_tick_mismatch")
-	if not is_finite(accumulator) or accumulator < 0.0 or accumulator >= FIXED_DELTA:
+	if not _is_finite_number(checkpoint.get("accumulator")) or accumulator < 0.0 or accumulator >= FIXED_DELTA:
 		return _reject_checkpoint("invalid_accumulator")
 	if not raw_players is Array or not raw_placements is Array or not raw_results is Dictionary:
 		return _reject_checkpoint("players_placements_or_inputs_wrong_type")
+	if not raw_hazards is Dictionary:
+		return _reject_checkpoint("hazards_not_dictionary")
 	var hazard_error := authoritative_world_hazard_error(raw_hazards)
 	if not hazard_error.is_empty():
 		return _reject_checkpoint(hazard_error)
@@ -307,12 +311,20 @@ func restore_checkpoint(checkpoint: Variant) -> bool:
 		var user_id := str(state.get("user_id", ""))
 		if not _players.has(user_id) or restored_players.has(user_id):
 			return _reject_checkpoint("unknown_or_duplicate_player:%s" % user_id)
-		var x := float(state.get("world_x", NAN))
-		var y := float(state.get("y", NAN))
-		var vertical_speed := float(state.get("vertical_speed", NAN))
-		var cooldown := float(state.get("cooldown", NAN))
-		var gravity_direction := int(state.get("gravity_direction", 0))
-		if not is_finite(x) or not is_finite(y) or not is_finite(vertical_speed) or not is_finite(cooldown) or gravity_direction not in [-1, 1] or str(state.get("state", "")) not in ["running", "dead", "finished", "disconnected"]:
+		var x_value: Variant = state.get("world_x", null)
+		var y_value: Variant = state.get("y", null)
+		var vertical_speed_value: Variant = state.get("vertical_speed", null)
+		var cooldown_value: Variant = state.get("cooldown", null)
+		var gravity_value: Variant = state.get("gravity_direction", null)
+		var state_value: Variant = state.get("state", null)
+		if not _is_finite_number(x_value) or not _is_finite_number(y_value) or not _is_finite_number(vertical_speed_value) or not _is_finite_number(cooldown_value) or not _is_integer_number(gravity_value) or typeof(state_value) != TYPE_STRING:
+			return _reject_checkpoint("player_fields_wrong_type:%s" % user_id)
+		var x := float(x_value)
+		var y := float(y_value)
+		var vertical_speed := float(vertical_speed_value)
+		var cooldown := float(cooldown_value)
+		var gravity_direction := int(gravity_value)
+		if gravity_direction not in [-1, 1] or str(state_value) not in ["running", "dead", "finished", "disconnected"]:
 			return _reject_checkpoint("invalid_player_state:%s" % user_id)
 		restored_players[user_id] = state.duplicate(true)
 	if restored_players.size() != _players.size():
@@ -332,7 +344,7 @@ func restore_checkpoint(checkpoint: Variant) -> bool:
 			return _reject_checkpoint("unknown_destroyed_event:%s" % str(destroyed_id))
 	for barrel in candidate_barrels:
 		for key in ["x", "y", "width", "height", "motion_speed_multiplier", "spawn_time", "fall_velocity", "roll_angle", "rotation"]:
-			if not is_finite(float(barrel.get(key, NAN))):
+			if not _is_finite_number(barrel.get(key, null)):
 				return _reject_checkpoint("invalid_barrel_field:%s" % key)
 	var expected_user_ids := {}
 	for user_id in _players:
@@ -342,7 +354,7 @@ func restore_checkpoint(checkpoint: Variant) -> bool:
 		if not expected_user_ids.has(str(user_id)) or not user_results is Array or user_results.size() > MAX_INPUT_RESULTS:
 			return _reject_checkpoint("invalid_input_results:%s" % str(user_id))
 		for result in user_results:
-			if not result is Dictionary or int(result.get("sequence", 0)) <= 0 or int(result.get("processed_tick", -1)) < 0 or int(result.get("processed_tick", -1)) > checkpoint_tick or typeof(result.get("accepted")) != TYPE_BOOL:
+			if not result is Dictionary or not _is_integer_number(result.get("sequence")) or not _is_integer_number(result.get("processed_tick")) or int(result.get("sequence", 0)) <= 0 or int(result.get("processed_tick", -1)) < 0 or int(result.get("processed_tick", -1)) > checkpoint_tick or typeof(result.get("accepted")) != TYPE_BOOL:
 				return _reject_checkpoint("invalid_input_result:%s" % str(user_id))
 	var candidate_destroyed := {}
 	for event_id in candidate_hazards.get("destroyed_event_ids", []):
@@ -375,14 +387,29 @@ func _reject_checkpoint(reason: String) -> bool:
 	last_restore_error = reason
 	return false
 
+static func _is_finite_number(value: Variant) -> bool:
+	return typeof(value) in [TYPE_INT, TYPE_FLOAT] and is_finite(float(value))
+
+static func _is_integer_number(value: Variant) -> bool:
+	return _is_finite_number(value) and is_equal_approx(float(value), roundf(float(value)))
+
 func apply_authoritative_world_hazards(world_hazards: Variant) -> bool:
-	if not authoritative_world_hazard_error(world_hazards).is_empty():
+	var validation_error := authoritative_world_hazard_error(world_hazards)
+	if not validation_error.is_empty():
 		return false
-	var authoritative_barrels: Array = world_hazards.barrels
-	_barrels = authoritative_barrels.duplicate(true)
-	_destroyed_event_ids.clear()
+	# JSON parsing produces untyped Arrays. Normalize into typed, fully staged
+	# candidates before touching the live hazard world.
+	var authoritative_barrels: Array[Dictionary] = []
+	for index in range(world_hazards.barrels.size()):
+		var barrel: Variant = world_hazards.barrels[index]
+		if not barrel is Dictionary:
+			return false
+		authoritative_barrels.append(barrel.duplicate(true))
+	var authoritative_destroyed := {}
 	for event_id in world_hazards.destroyed_event_ids:
-		_destroyed_event_ids[str(event_id)] = true
+		authoritative_destroyed[str(event_id)] = true
+	_barrels = authoritative_barrels
+	_destroyed_event_ids = authoritative_destroyed
 	return true
 
 func authoritative_world_hazard_error(world_hazards: Variant) -> String:
@@ -403,6 +430,18 @@ func authoritative_world_hazard_error(world_hazards: Variant) -> String:
 		var entity_id := str(barrel.get("entity_id", ""))
 		if not expected_ids.has(entity_id):
 			return "unknown_barrel_id:%s" % entity_id
+		for key in ["x", "y", "width", "height", "motion_speed_multiplier", "spawn_time", "fall_velocity", "roll_angle", "rotation"]:
+			if not _is_finite_number(barrel.get(key, null)):
+				return "invalid_barrel_field:%s" % key
+		for key in ["spawned", "falling", "destroyed"]:
+			if typeof(barrel.get(key)) != TYPE_BOOL:
+				return "invalid_barrel_flag:%s" % key
+	var expected_events := {}
+	for event in manifest.get("events"):
+		expected_events[str(event.get("event_id", ""))] = true
+	for event_id in destroyed_ids:
+		if not expected_events.has(str(event_id)):
+			return "unknown_destroyed_event:%s" % str(event_id)
 	return ""
 
 func get_player(user_id: String) -> Dictionary:

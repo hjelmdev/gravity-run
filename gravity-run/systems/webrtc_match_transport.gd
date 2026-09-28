@@ -217,6 +217,12 @@ func _process(_delta: float) -> void:
 					continue
 				var parsed: Variant = JSON.parse_string(packet.get_string_from_utf8())
 				if parsed is Dictionary:
+					# Count only decoded application packets delivered to the match
+					# callback (not WebRTC polls, bytes, or malformed datagrams).
+					var diagnostics := get_node_or_null("/root/MultiplayerDiagnostics")
+					if diagnostics != null:
+						diagnostics.increment_total("transport_packets")
+						diagnostics.increment_total("transport_packets_%s" % channel_name)
 					peer_data_received.emit(str(peer_user_id), channel_name, parsed)
 		if channels_open and not bool(entry.get("channels_open_notified", false)):
 			entry.channels_open_notified = true

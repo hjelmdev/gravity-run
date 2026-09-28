@@ -91,6 +91,11 @@ func _initialize() -> void:
 	assert(int(wire_restore.get_snapshot().get("tick", -1)) == int(checkpoint.tick))
 	assert(wire_restore.get_snapshot().get("placements", []).size() == 1)
 	var atomic_before_wire_reject: Dictionary = wire_restore.get_snapshot()
+	var invalid_wire_player: Dictionary = wire_checkpoint.duplicate(true)
+	invalid_wire_player.players[0]["world_x"] = "not-a-number"
+	assert(not wire_restore.restore_checkpoint(invalid_wire_player), "wire checkpoints must reject values with the wrong JSON scalar type")
+	assert(wire_restore.last_restore_error.begins_with("player_fields_wrong_type:"), "wrong player scalar types should have a specific restore reason")
+	assert(wire_restore.get_snapshot() == atomic_before_wire_reject, "wrong-type checkpoint rejection must preserve the entire visible simulation checkpoint")
 	var invalid_wire_checkpoint: Dictionary = wire_checkpoint.duplicate(true)
 	invalid_wire_checkpoint["placements"] = ["not a placement dictionary"]
 	assert(not wire_restore.restore_checkpoint(invalid_wire_checkpoint), "malformed JSON placement elements must be rejected")
@@ -115,8 +120,26 @@ func _initialize() -> void:
 	barrel_wire_target.start()
 	assert(barrel_wire_target.restore_checkpoint(barrel_wire_checkpoint), "JSON-decoded barrel arrays must restore as typed candidates: %s" % barrel_wire_target.last_restore_error)
 	assert(barrel_wire_target.get_snapshot().get("world_hazards", {}).get("barrels", []).size() == 2)
-	var terminal_packet := {"event_tick": 1, "sent_host_tick": 2, "terminal_tick": 1, "terminal_reason": "out_of_bounds", "player": {"user_id": "local", "state": "dead", "terminal_tick": 1, "terminal_reason": "out_of_bounds"}}
+	var wire_hazards: Dictionary = JSON.parse_string(JSON.stringify(barrel_wire_source.get_snapshot().get("world_hazards", {})))
+	assert(barrel_wire_target.apply_authoritative_world_hazards(wire_hazards), "standalone hazard updates must normalize JSON arrays before committing")
+	var hazards_before_reject: Dictionary = barrel_wire_target.get_snapshot().get("world_hazards", {})
+	var malformed_hazards: Dictionary = wire_hazards.duplicate(true)
+	malformed_hazards["destroyed_event_ids"] = ["not_in_manifest"]
+	assert(not barrel_wire_target.apply_authoritative_world_hazards(malformed_hazards), "unknown destroyed hazard IDs must be rejected")
+	assert(barrel_wire_target.get_snapshot().get("world_hazards", {}) == hazards_before_reject, "a rejected hazard update must not partially change the live world")
+	var terminal_simulation := SimulationScript.new()
+	assert(terminal_simulation.configure(_make_manifest([], 10000), [{"user_id": "local"}, {"user_id": "host"}]).is_empty())
+	terminal_simulation.start()
+	terminal_simulation.advance_to_tick(1, 1)
+	var terminal_state_at_event := terminal_simulation.get_player("local")
+	terminal_state_at_event.state = "dead"
+	terminal_state_at_event.terminal_tick = 1
+	terminal_state_at_event.terminal_reason = "out_of_bounds"
+	assert(terminal_simulation.apply_authoritative_player_state("local", terminal_state_at_event))
+	terminal_simulation.advance_to_tick(2, 1)
+	var terminal_packet: Dictionary = TerminalEventRules.build_payload("room", "generation", "sim-test", terminal_simulation.get_player("local"), int(terminal_simulation.get("tick")))
 	assert(TerminalEventRules.validation_error(terminal_packet).is_empty(), "a real death on tick 1 must remain valid when queued at host tick 2")
+	assert(int(terminal_packet.event_tick) == 1 and int(terminal_packet.sent_host_tick) == 2, "reliable terminal messages must keep transition tick separate from send tick")
 	terminal_packet["terminal_tick"] = 2
 	assert(TerminalEventRules.validation_error(terminal_packet) == "invalid_terminal_tick", "terminal payload tick mismatches must be rejected explicitly")
 	assert(bool(replay_a.queue_flip("local", 1, -1, 10).get("queued", false)))
