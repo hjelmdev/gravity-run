@@ -94,6 +94,16 @@ func start() -> void:
 	if manifest != null and not _players.is_empty():
 		started = true
 
+func restore_authoritative_frame(authoritative_tick: int, placements: Array = [], finished: bool = false) -> bool:
+	if not started or authoritative_tick < 0:
+		return false
+	tick = authoritative_tick
+	_accumulator = 0.0
+	_world_elapsed = float(authoritative_tick) * FIXED_DELTA
+	_placements = placements.duplicate(true)
+	match_finished = finished
+	return true
+
 func set_player_profile(user_id: String, speed_percent: int, flip_cooldown_percent: int = 10000) -> bool:
 	if started or not _players.has(user_id):
 		return false

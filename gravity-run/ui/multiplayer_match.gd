@@ -33,7 +33,7 @@ var _last_authoritative_tick := -1
 var _visual_correction := Vector2.ZERO
 var _visual_slot_by_user: Dictionary = {}
 var _input_sequence := 0
-var _pending_input_sequences: Array[int] = []
+var _pending_local_inputs: Array[Dictionary] = []
 var _last_input_sequence: Dictionary = {}
 var _start_generation := ""
 var _start_probe_sent_at: Dictionary = {}
@@ -177,7 +177,7 @@ func _process(delta: float) -> void:
 			simulation_delta = maxf(_network_clock - _go_start_at, 0.0)
 		var events: Array[Dictionary] = _simulation.advance_frame(simulation_delta, MultiplayerService.is_room_owner())
 		if str(_simulation.get_player(_local_user_id).get("state", "running")) in ["dead", "finished", "disconnected"]:
-			_pending_input_sequences.clear()
+			_pending_local_inputs.clear()
 		if MultiplayerService.is_room_owner():
 			for event in events:
 				var event_kind := str(event.get("kind", ""))
@@ -249,18 +249,19 @@ func _request_flip(direction: int) -> void:
 		return
 	if not MultiplayerService.is_room_owner():
 		_input_sequence += 1
+		var input_tick := int(_simulation.get("tick"))
 		var input_payload := {
 			"kind": "flip",
 			"gravity_direction": direction,
 			"input_sequence": _input_sequence,
-			"client_tick": int(_simulation.tick),
+			"client_tick": input_tick,
 		}
 		if MultiplayerService.send_peer_message(_owner_user_id, "control", input_payload):
-			_pending_input_sequences.append(_input_sequence)
-			_record_match_diag("flip_input_sent", {"sequence": _input_sequence, "client_tick": int(_simulation.tick)})
+			_pending_local_inputs.append({"sequence": _input_sequence, "client_tick": input_tick, "gravity_direction": direction})
+			_record_match_diag("flip_input_sent", {"sequence": _input_sequence, "client_tick": input_tick})
 		else:
 			_simulation.apply_authoritative_player_state(_local_user_id, previous_state)
-			_record_match_diag("flip_input_send_failed", {"sequence": _input_sequence, "client_tick": int(_simulation.tick)})
+			_record_match_diag("flip_input_send_failed", {"sequence": _input_sequence, "client_tick": input_tick})
 
 func _on_peer_data_received(peer_user_id: String, channel_name: String, payload: Dictionary) -> void:
 	if MultiplayerService.is_room_owner() and channel_name == "control":
@@ -323,8 +324,7 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 		elif channel_name == "snapshot" and str(payload.get("kind", "")) == "snapshot":
 			var new_snapshot: Variant = payload.get("state", {})
 			var previous_tick := _last_authoritative_tick
-			if _accept_authoritative_snapshot(new_snapshot):
-				_acknowledge_local_inputs(payload.get("ack_input_sequences", {}))
+			if _accept_authoritative_snapshot(new_snapshot, payload.get("ack_input_sequences", {})):
 				if previous_tick < 0:
 					_record_match_diag("snapshot_stream_started", {"tick": int(new_snapshot.get("tick", -1))})
 				if bool(_authoritative_snapshot.get("finished", false)):
@@ -507,14 +507,14 @@ func _accept_reliable_match_finished(payload: Dictionary) -> void:
 	}
 	_authoritative_snapshot = terminal.duplicate(true)
 	_snapshot = terminal.duplicate(true)
-	_pending_input_sequences.clear()
+	_pending_local_inputs.clear()
 	_visual_correction = Vector2.ZERO
 	_last_authoritative_tick = maxi(_last_authoritative_tick, incoming_tick)
 	_snapshot_buffer.clear()
 	_log_terminal_snapshot("guest_received_reliable_finish", terminal)
 	MultiplayerService.queue_reliable_peer_message(_owner_user_id, {"kind": "match_finished_ack", "room_id": MultiplayerService.get_room_id(), "tick": incoming_tick})
 
-func _accept_authoritative_snapshot(snapshot: Variant) -> bool:
+func _accept_authoritative_snapshot(snapshot: Variant, input_acknowledgements: Variant = {}) -> bool:
 	if not snapshot is Dictionary:
 		_last_snapshot_rejection = "snapshot_not_dictionary"
 		return false
@@ -559,18 +559,24 @@ func _accept_authoritative_snapshot(snapshot: Variant) -> bool:
 		_record_match_diag("snapshot_hazards_rejected", {"reason": hazard_error, "tick": incoming_tick})
 	var predicted: Dictionary = _simulation.get_player(_local_user_id)
 	var predicted_render := Vector2(float(predicted.get("world_x", 0.0)), float(predicted.get("y", 0.0))) + _visual_correction
-	var authoritative_position := Vector2(float(local_state.get("world_x", 0.0)), float(local_state.get("y", 0.0)))
-	# Full rollback/replay needs per-tick collision and input history. Until that
-	# exists, authority controls simulation while runner and camera share a
-	# bounded render-only correction.
-	_visual_correction = correction_after_authority(predicted_render, authoritative_position, str(predicted.get("state", "running")), str(local_state.get("state", "running")))
-	_max_local_correction_px = maxf(_max_local_correction_px, _visual_correction.length())
-	if not _simulation.apply_authoritative_player_state(_local_user_id, local_state):
-		_last_snapshot_rejection = "local_player_state_invalid"
-		return false
+	var previous_simulation_tick := int(_simulation.get("tick"))
+	_acknowledge_local_inputs(input_acknowledgements)
+	for state in states:
+		if not _simulation.apply_authoritative_player_state(str(state.get("user_id", "")), state):
+			_last_snapshot_rejection = "player_state_invalid:%s" % str(state.get("user_id", ""))
+			return false
 	_last_authoritative_tick = incoming_tick
 	_last_snapshot_rejection = ""
 	_authoritative_snapshot = snapshot.duplicate(true)
+	if not _simulation.restore_authoritative_frame(incoming_tick, snapshot.get("placements", []), bool(snapshot.get("finished", false))):
+		_last_snapshot_rejection = "authoritative_tick_restore_failed"
+		return false
+	var prediction_target_tick := maxi(previous_simulation_tick, incoming_tick)
+	_replay_local_prediction(incoming_tick, prediction_target_tick)
+	var reconciled: Dictionary = _simulation.get_player(_local_user_id)
+	var reconciled_position := Vector2(float(reconciled.get("world_x", 0.0)), float(reconciled.get("y", 0.0)))
+	_visual_correction = correction_after_authority(predicted_render, reconciled_position, str(predicted.get("state", "running")), str(local_state.get("state", "running")))
+	_max_local_correction_px = maxf(_max_local_correction_px, _visual_correction.length())
 	_snapshot_buffer.append({"tick": incoming_tick, "received_at": _network_clock, "state": _authoritative_snapshot})
 	while _snapshot_buffer.size() > 32:
 		_snapshot_buffer.pop_front()
@@ -582,11 +588,35 @@ func _acknowledge_local_inputs(acknowledgements: Variant) -> void:
 	var acknowledged_sequence := int(acknowledgements.get(_local_user_id, 0))
 	if acknowledged_sequence <= 0:
 		return
-	var remaining: Array[int] = []
-	for sequence in _pending_input_sequences:
-		if sequence > acknowledged_sequence:
-			remaining.append(sequence)
-	_pending_input_sequences = remaining
+	var remaining: Array[Dictionary] = []
+	for input in _pending_local_inputs:
+		if int(input.get("sequence", 0)) > acknowledged_sequence:
+			remaining.append(input)
+	_pending_local_inputs = remaining
+
+func _replay_local_prediction(authoritative_tick: int, target_tick: int) -> void:
+	if bool(_authoritative_snapshot.get("finished", false)):
+		return
+	var replayed_sequences := {}
+	# Any unacknowledged input whose local tick is now behind authority is
+	# replayed at the first possible authoritative boundary, never discarded.
+	for input in _pending_local_inputs:
+		if int(input.get("client_tick", authoritative_tick + 1)) <= authoritative_tick:
+			var accepted_past_input: bool = _simulation.submit_flip(_local_user_id, int(input.get("gravity_direction", 0)))
+			_record_match_diag("local_input_replayed", {"sequence": int(input.get("sequence", 0)), "input_tick": int(input.get("client_tick", -1)), "replay_tick": authoritative_tick, "accepted": accepted_past_input})
+			if accepted_past_input:
+				replayed_sequences[int(input.get("sequence", 0))] = true
+	while int(_simulation.get("tick")) < target_tick:
+		_simulation.advance_frame(1.0 / SIMULATION_TICK_RATE, false)
+		var replay_tick := int(_simulation.get("tick"))
+		for input in _pending_local_inputs:
+			var sequence := int(input.get("sequence", 0))
+			if replayed_sequences.has(sequence) or int(input.get("client_tick", -1)) > replay_tick:
+				continue
+			var accepted_input: bool = _simulation.submit_flip(_local_user_id, int(input.get("gravity_direction", 0)))
+			_record_match_diag("local_input_replayed", {"sequence": sequence, "input_tick": int(input.get("client_tick", -1)), "replay_tick": replay_tick, "accepted": accepted_input})
+			if accepted_input:
+				replayed_sequences[sequence] = true
 
 func _log_terminal_snapshot(reason: String, snapshot: Dictionary) -> void:
 	var player_summary: Array[Dictionary] = []
@@ -843,7 +873,7 @@ func _receive_start_commit(payload: Dictionary) -> void:
 		return
 	_go_start_at = _network_clock + maxf(float(_planned_local_start_msec - Time.get_ticks_msec()) / 1000.0, 0.0)
 	_start_committed = true
-	_pending_input_sequences.clear()
+	_pending_local_inputs.clear()
 	_visual_correction = Vector2.ZERO
 	MultiplayerService.queue_reliable_peer_message(_owner_user_id, {"kind": "race_start_commit_ack", "room_id": MultiplayerService.get_room_id(), "generation": _start_generation, "start_tick": 0})
 	_record_match_diag("race_start_commit_received", {"generation": _start_generation, "planned_host_start_msec": _planned_host_start_msec, "planned_local_start_msec": _planned_local_start_msec, "remaining_ms": int(maxf(_go_start_at - _network_clock, 0.0) * 1000.0), "start_tick": 0})
@@ -904,10 +934,9 @@ static func correction_after_authority(rendered_position: Vector2, authoritative
 	return correction.clamp(Vector2(-160.0, -160.0), Vector2(160.0, 160.0))
 
 static func fade_render_correction(correction: Vector2, delta: float, speed: float) -> Vector2:
-	# Horizontal correction is the local guest's prediction lead over the delayed
-	# host snapshot. Fading it every frame counteracts forward movement and feels
-	# like input lag; retain it between snapshots and recompute at the next one.
-	return Vector2(correction.x, move_toward(correction.y, 0.0, maxf(delta, 0.0) * maxf(speed, 0.0)))
+	# With rollback/replay, this is now only the small continuity offset between
+	# two valid predictions, not the guest's standing lead over stale authority.
+	return correction.move_toward(Vector2.ZERO, maxf(delta, 0.0) * maxf(speed, 0.0))
 
 static func estimate_shared_start_msec(host_now_msec: int, safety_margin_seconds: float, peer_round_trip_msec: Array) -> float:
 	var average_one_way_msec := 0.0
