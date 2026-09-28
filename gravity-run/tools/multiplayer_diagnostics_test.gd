@@ -47,10 +47,9 @@ func _ready() -> void:
 	assert(parsed is Dictionary, "reduced clipboard report remains valid JSON")
 	assert(parsed.report.loss.get("clipboard_reduced", false), "reduction is explicitly marked")
 	assert(parsed.report.loss.get("clipboard_metadata_only", false), "extreme reduction records omitted sections")
-	var upload := recorder._build_bounded_upload(large_report)
-	assert(upload.fits, "an oversized completed report is reduced below the server hard limit")
-	assert(upload.bytes <= DiagnosticsScript.MAX_UPLOAD_TARGET_BYTES, "upload payload remains below the 120 KiB target")
-	assert(upload.report.loss.get("report_reduced_for_upload", false), "upload reduction is explicitly marked")
+	recorder._capture = {"match_generation": "room-test:1234", "match_id": "room-test:1234", "diagnostic_session_id": ""}
+	recorder.set_match_generation("room-test:1234")
+	assert(recorder._capture.diagnostic_session_id == "room-test:1234" and recorder._capture.match_id == "room-test:1234", "local reports from every client use the shared match generation as their debug ID, without a server session")
 	recorder._id_to_label = {"host-uuid": "p0", "guest-uuid": "p1"}
 	var sanitized_identities: Dictionary = recorder._sanitize({"email": "private@example.com", "access_token": "secret", "player_id": "guest-uuid", "spectator_target": "host-uuid", "before": ["host-uuid", "guest-uuid"], "after": ["guest-uuid", "host-uuid"], "position": 2})
 	assert(sanitized_identities == {"player_id": "p1", "spectator_target": "p0", "before": ["p0", "p1"], "after": ["p1", "p0"], "position": 2}, "diagnostics must redact player/spectator IDs and visual-order ID arrays")

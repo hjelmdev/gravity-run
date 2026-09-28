@@ -96,6 +96,11 @@ func begin_peer_connection() -> void:
 		_webrtc_transport.configure(room_state, identity_user_id)
 		_webrtc_transport.begin_connection()
 
+func reconnect_host_peer() -> void:
+	if has_room() and not is_room_owner():
+		_webrtc_transport.configure(room_state, identity_user_id)
+		_webrtc_transport.reconnect_host()
+
 func send_peer_message(peer_user_id: String, channel_name: String, payload: Dictionary) -> bool:
 	return _webrtc_transport.send_to_peer(peer_user_id, channel_name, payload) if _webrtc_transport != null else false
 
@@ -109,18 +114,31 @@ func get_peer_link_state(peer_user_id: String) -> String:
 	return _webrtc_transport.peer_link_state(peer_user_id) if _webrtc_transport != null else "unavailable"
 
 func can_start_race() -> bool:
-	if not has_room() or not is_room_owner() or str(room_state.get("phase", "")) != "OPEN":
-		return false
+	return get_start_blockers().is_empty()
+
+func get_start_blockers() -> Array[Dictionary]:
+	var blockers: Array[Dictionary] = []
+	if not has_room():
+		return [{"code": "room_missing"}]
+	if not is_room_owner():
+		return [{"code": "not_host"}]
+	if str(room_state.get("phase", "")) != "OPEN":
+		blockers.append({"code": "room_phase", "phase": str(room_state.get("phase", ""))})
 	var present_members: Array[Dictionary] = []
 	for member in get_members():
 		if member is Dictionary and bool(member.get("is_connected", true)):
 			present_members.append(member)
-	if present_members.is_empty() or present_members.size() > int(room_state.get("max_players", 5)) or str(room_state.get("manifest_hash", "")).is_empty():
-		return false
+	if present_members.is_empty() or present_members.size() > int(room_state.get("max_players", 5)):
+		blockers.append({"code": "player_count", "present": present_members.size(), "maximum": int(room_state.get("max_players", 5))})
+	var expected_hash := str(room_state.get("manifest_hash", ""))
+	if expected_hash.is_empty():
+		blockers.append({"code": "manifest_missing"})
 	var expected_peers := {}
 	for member in present_members:
-		if not member is Dictionary or not bool(member.get("is_ready", false)) or str(member.get("loaded_manifest_hash", "")) != str(room_state.get("manifest_hash", "")):
-			return false
+		if not bool(member.get("is_ready", false)):
+			blockers.append({"code": "not_ready", "display_name": str(member.get("display_name", "Runner"))})
+		if expected_hash.is_empty() or str(member.get("loaded_manifest_hash", "")) != expected_hash:
+			blockers.append({"code": "manifest_mismatch", "display_name": str(member.get("display_name", "Runner"))})
 		var member_id := str(member.get("user_id", ""))
 		if member_id != identity_user_id:
 			expected_peers[member_id] = true
@@ -129,8 +147,14 @@ func can_start_race() -> bool:
 		connected[peer_id] = true
 	for peer_id in expected_peers:
 		if not connected.has(peer_id):
-			return false
-	return true
+			blockers.append({"code": "host_link_missing", "display_name": _member_display_name(peer_id), "link_state": get_peer_link_state(peer_id)})
+	return blockers
+
+func _member_display_name(user_id: String) -> String:
+	for member in get_members():
+		if member is Dictionary and str(member.get("user_id", "")) == user_id:
+			return str(member.get("display_name", "Runner"))
+	return "Runner"
 
 func queue_reliable_peer_message(peer_user_id: String, payload: Dictionary) -> bool:
 	return _webrtc_transport.queue_reliable_to_peer(peer_user_id, payload) if _webrtc_transport != null else false

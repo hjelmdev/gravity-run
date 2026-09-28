@@ -77,6 +77,7 @@ func reconcile(checkpoint: Variant, requested_target_tick: int) -> Dictionary:
 	_pending_inputs = remaining
 
 	var replay_errors: Array[Dictionary] = []
+	var render_history: Array[Dictionary] = [{"tick": checkpoint_tick, "position": _player_position(simulation.get_player(local_user_id))}]
 	for input in _pending_inputs:
 		var target := int(input.get("target_tick", checkpoint_tick + 1))
 		if target <= checkpoint_tick:
@@ -89,8 +90,15 @@ func reconcile(checkpoint: Variant, requested_target_tick: int) -> Dictionary:
 		)
 		if not bool(queued.get("queued", false)):
 			replay_errors.append({"sequence": int(input.get("sequence", 0)), "reason": str(queued.get("reason", "queue_failed"))})
-	if replay_end > checkpoint_tick:
-		simulation.advance_to_tick(replay_end, MAX_REPLAY_TICKS, [local_user_id])
+	var replayed_ticks := 0
+	while int(simulation.get("tick")) < replay_end and replayed_ticks < MAX_REPLAY_TICKS:
+		var tick_before := int(simulation.get("tick"))
+		simulation.advance_to_tick(tick_before + 1, 1, [local_user_id])
+		if int(simulation.get("tick")) <= tick_before:
+			break
+		replayed_ticks += 1
+		var replay_tick := int(simulation.get("tick"))
+		render_history.append({"tick": replay_tick, "position": _player_position(simulation.get_player(local_user_id))})
 	var new_player: Dictionary = simulation.get_player(local_user_id)
 	return {
 		"ok": true,
@@ -101,6 +109,10 @@ func reconcile(checkpoint: Variant, requested_target_tick: int) -> Dictionary:
 		"replay_was_bounded": replay_end < target_tick,
 		"old_player": old_player,
 		"new_player": new_player,
+		"render_history": render_history,
 		"confirmed_inputs": confirmed_results,
 		"replay_errors": replay_errors,
 	}
+
+static func _player_position(player: Dictionary) -> Vector2:
+	return Vector2(float(player.get("world_x", 0.0)), float(player.get("y", 0.0)))

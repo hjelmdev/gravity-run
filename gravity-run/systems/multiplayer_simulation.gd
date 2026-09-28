@@ -260,7 +260,9 @@ func get_snapshot() -> Dictionary:
 	for user_id in _players:
 		snapshot_players.append((_players[user_id] as Dictionary).duplicate(true))
 	snapshot_players.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return str(a.user_id) < str(b.user_id))
-	return {"tick": tick, "course_identity": str(manifest.get("course_identity")) if manifest != null else "", "players": snapshot_players, "placements": _placements.duplicate(true), "finished": match_finished, "finish_reason": match_finish_reason, "world_time": _world_elapsed, "accumulator": fmod(_accumulator, FIXED_DELTA), "world_hazards": {"barrels": _barrels.duplicate(true), "destroyed_event_ids": _destroyed_event_ids.keys()}, "processed_inputs": _processed_inputs.duplicate(true), "backlog_seconds": _accumulator, "peak_backlog_seconds": _peak_backlog_seconds}
+	var fractional_phase := fmod(_accumulator, FIXED_DELTA)
+	var whole_step_backlog := maxf(_accumulator - fractional_phase, 0.0)
+	return {"tick": tick, "course_identity": str(manifest.get("course_identity")) if manifest != null else "", "players": snapshot_players, "placements": _placements.duplicate(true), "finished": match_finished, "finish_reason": match_finish_reason, "world_time": _world_elapsed, "accumulator": fractional_phase, "world_hazards": {"barrels": _barrels.duplicate(true), "destroyed_event_ids": _destroyed_event_ids.keys()}, "processed_inputs": _processed_inputs.duplicate(true), "backlog_seconds": whole_step_backlog, "peak_backlog_seconds": _peak_backlog_seconds}
 
 func restore_checkpoint(checkpoint: Variant) -> bool:
 	last_restore_error = ""

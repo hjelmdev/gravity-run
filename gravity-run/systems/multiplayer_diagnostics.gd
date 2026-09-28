@@ -1,16 +1,10 @@
 extends Node
 
 signal report_changed(message: String)
-signal session_created(session: Dictionary)
 
-const ProviderScript := preload("res://systems/supabase_diagnostics_provider.gd")
 const SCHEMA_VERSION := 1
-const MAX_REPORT_BYTES := 128 * 1024
-const MAX_UPLOAD_TARGET_BYTES := 120 * 1024
 const MAX_CLIPBOARD_BYTES := 80 * 1024
 const MAX_LOCAL_BYTES := 2 * 1024 * 1024
-const MAX_PENDING_REPORTS := 2
-const MAX_RETRIES := 3
 const MAX_WINDOWS := 180
 const MAX_DETAIL_SAMPLES := 600
 const MAX_START_SAMPLES := 720
@@ -20,11 +14,8 @@ const DETAIL_INTERVAL_USEC := 50000
 const WINDOW_USEC := 1000000
 const LOCAL_FILE := "user://multiplayer_diagnostics.json"
 
-var _provider: Node
 var _capture: Dictionary = {}
 var _reports: Array[Dictionary] = []
-var _pending: Array[Dictionary] = []
-var _session: Dictionary = {}
 var _window_gap_ms: Array[float] = []
 var _window_started_usec := 0
 var _last_process_usec := 0
@@ -39,36 +30,21 @@ var _process_gaps_by_phase: Dictionary = {}
 var _last_metrics: Dictionary = {}
 var _ordinary_event_last_msec: Dictionary = {}
 var _incident_capture: Dictionary = {}
-var _upload_status := ""
-var _operation_context := ""
 var _started_usec := 0
 var _js_probe_installed := false
 var _id_to_label: Dictionary = {}
-var _upload_timer: Timer
 var _last_start_sample_usec := 0
 var _race_started_usec := 0
-var _fetched_session_report: Dictionary = {}
 var _test_layout_preference := "unknown"
 var _instances_preference: Variant = null
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
-	_provider = ProviderScript.new()
-	_provider.name = "SupabaseDiagnosticsProvider"
-	_provider.request_finished.connect(_on_provider_finished)
-	add_child(_provider)
-	_upload_timer = Timer.new()
-	_upload_timer.wait_time = 0.25
-	_upload_timer.process_mode = Node.PROCESS_MODE_ALWAYS
-	_upload_timer.timeout.connect(_process_upload_retry)
-	add_child(_upload_timer)
-	_upload_timer.start()
 	_load_local()
 	_load_test_context()
 	set_process(true)
 
 func _process(delta: float) -> void:
-	_process_upload_retry()
 	if _capture.is_empty():
 		return
 	var now := Time.get_ticks_usec()
@@ -121,8 +97,6 @@ func _process(delta: float) -> void:
 func begin_match(metadata: Dictionary) -> void:
 	if not _capture.is_empty():
 		finish_match("superseded")
-	if str(_session.get("room_id", "")) != str(MultiplayerService.get_room_id()):
-		_session.clear()
 	_started_usec = Time.get_ticks_usec()
 	_race_started_usec = 0
 	_last_start_sample_usec = 0
@@ -157,8 +131,8 @@ func begin_match(metadata: Dictionary) -> void:
 		"platform": OS.get_name(),
 		"client_instance_id": _get_client_instance_id(),
 		"report_id": _new_uuid(),
-		"match_id": str(_session.get("match_id", "")),
-		"diagnostic_session_id": str(_session.get("session_id", "")),
+		"match_id": str(metadata.get("match_generation", "")),
+		"diagnostic_session_id": str(metadata.get("match_generation", "")),
 		"match_generation": str(metadata.get("match_generation", "")),
 		"course_identity": str(metadata.get("course_identity", "")),
 		"role": str(metadata.get("role", "unknown")),
@@ -180,7 +154,7 @@ func begin_match(metadata: Dictionary) -> void:
 		"incidents": [],
 		"browser_samples": [],
 		"totals": {"process_frames": 0, "snapshot_received": 0, "snapshot_accepted": 0, "snapshot_rejected": 0, "transport_polls": 0, "transport_packets": 0, "transport_packets_control": 0, "transport_packets_snapshot": 0},
-		"loss": {"detail_samples_dropped": 0, "start_samples_dropped": 0, "events_dropped": 0, "windows_dropped": 0, "incidents_dropped": 0, "report_reduced_for_upload": false},
+		"loss": {"detail_samples_dropped": 0, "start_samples_dropped": 0, "events_dropped": 0, "windows_dropped": 0, "incidents_dropped": 0},
 	}
 	_capture.test_layout = _test_layout_preference
 	_js_probe_installed = false
@@ -199,6 +173,8 @@ func set_phase(phase: String) -> void:
 func set_match_generation(generation: String) -> void:
 	if not _capture.is_empty():
 		_capture.match_generation = generation.left(96)
+		_capture.match_id = generation.left(96)
+		_capture.diagnostic_session_id = generation.left(96)
 
 func set_metrics(metrics: Dictionary) -> void:
 	if not _capture.is_empty():
@@ -326,62 +302,12 @@ func finish_match(state: String) -> void:
 		completed = _reduce_local_report(completed)
 		_reports[_reports.size() - 1] = completed
 	_save_local()
-	if not str(completed.get("diagnostic_session_id", "")).is_empty():
-		_queue_upload(completed)
-	else:
-		_upload_status = "Saved locally; shared upload was not enabled for this round."
-	report_changed.emit(_upload_status)
-	_session.clear()
-
-func opt_in(enabled: bool) -> void:
-	_operation_context = "opt_in:%d:%d" % [Time.get_ticks_msec(), int(enabled)]
-	_provider.set_opt_in(enabled, MultiplayerService.get_access_token_for_network(), _operation_context)
-
-func start_shared_session(match_generation: String) -> void:
-	if not MultiplayerService.has_room() or not MultiplayerService.is_room_owner():
-		_upload_status = "Only the room host can start shared collection."
-		report_changed.emit(_upload_status)
-		return
-	if not _session.is_empty():
-		_upload_status = "Shared diagnostic session already active: " + str(_session.get("session_id", ""))
-		report_changed.emit(_upload_status)
-		return
-	var match_id := _new_uuid()
-	_operation_context = "create_session:%d" % Time.get_ticks_msec()
-	_session["pending_match_id"] = match_id
-	_session["pending_generation"] = match_generation
-	_provider.create_session(MultiplayerService.get_room_id(), match_id, MultiplayerService.get_access_token_for_network(), _operation_context)
-	_upload_status = "Requesting opt-in session from Supabase…"
-	report_changed.emit(_upload_status)
-
-func accept_shared_session(payload: Dictionary, sender_id: String) -> bool:
-	if MultiplayerService.is_room_owner() or sender_id != str(MultiplayerService.room_state.get("owner_user_id", "")):
-		return false
-	if str(payload.get("room_id", "")) != MultiplayerService.get_room_id():
-		return false
-	var session_id := str(payload.get("session_id", ""))
-	var match_id := str(payload.get("match_id", ""))
-	var generation := str(payload.get("match_generation", ""))
-	if not _valid_uuid(session_id) or not _valid_uuid(match_id) or generation.length() > 96:
-		return false
-	_session = {"session_id": session_id, "match_id": match_id, "match_generation": generation, "room_id": MultiplayerService.get_room_id()}
-	return true
-
-func attach_session_to_capture() -> void:
-	if _capture.is_empty() or _session.is_empty():
-		return
-	_capture.diagnostic_session_id = str(_session.get("session_id", ""))
-	_capture.match_id = str(_session.get("match_id", ""))
-	var generation := str(_session.get("match_generation", ""))
-	if not generation.is_empty():
-		_capture.match_generation = generation
+	report_changed.emit("Multiplayer report saved locally.")
 
 func get_status() -> String:
-	if not _upload_status.is_empty():
-		return _upload_status
 	if _capture.is_empty():
 		return "No active multiplayer diagnostic capture."
-	return "Recording locally; session %s" % (str(_session.get("session_id", "not enabled")))
+	return "Recording multiplayer diagnostics locally."
 
 func get_latest_report() -> Dictionary:
 	return _reports.back().duplicate(true) if not _reports.is_empty() else {}
@@ -395,7 +321,7 @@ func get_export_text(compact: bool = true) -> String:
 	return JSON.stringify(report, "\t")
 
 func _build_clipboard_text(report: Dictionary) -> String:
-	var candidate := _reduce_for_upload(report)
+	var candidate := _reduce_for_export(report)
 	var json_text := JSON.stringify(candidate)
 	var reductions := 0
 	while json_text.to_utf8_buffer().size() > MAX_CLIPBOARD_BYTES - 32 and reductions < 64:
@@ -460,23 +386,6 @@ func save_latest_report() -> String:
 		return ""
 	file.store_string(JSON.stringify(report, "\t"))
 	return file_path
-
-func save_fetched_session() -> String:
-	if _fetched_session_report.is_empty():
-		return ""
-	var session_id := str(_fetched_session_report.get("session_id", "unknown"))
-	var file_path := "user://multiplayer-session-%s.json" % session_id
-	var json_text := JSON.stringify(_fetched_session_report, "\t")
-	if json_text.to_utf8_buffer().size() > 1024 * 1024:
-		return ""
-	var file := FileAccess.open(file_path, FileAccess.WRITE)
-	if file == null:
-		return ""
-	file.store_string(json_text)
-	return file_path
-
-func get_fetched_session_text() -> String:
-	return JSON.stringify(_fetched_session_report, "\t") if not _fetched_session_report.is_empty() else ""
 
 func _flush_window(now_usec: int, final_window: bool = false) -> void:
 	if _capture.is_empty() or (_window_frames == 0 and not final_window):
@@ -620,184 +529,14 @@ func _sanitize(value: Variant, depth: int = 0, parent_key: String = "") -> Varia
 func _safe_player_label(identity: String) -> String:
 	return str(_id_to_label.get(identity, "unknown_player"))
 
-func _queue_upload(report: Dictionary) -> void:
-	var queued_ids: Array[String] = []
-	for item in _pending:
-		queued_ids.append(str(item.get("report_id", "")))
-	if queued_ids.has(str(report.get("report_id", ""))):
-		return
-	if _pending.size() >= MAX_PENDING_REPORTS:
-		_pending.pop_front()
-		_upload_status = "Local upload queue full; oldest pending report was dropped."
-	var bounded := _build_bounded_upload(report)
-	if not bool(bounded.get("fits", false)):
-		_upload_status = "Report exceeds the 128 KiB server limit after reduction; it remains saved locally."
-		report_changed.emit(_upload_status)
-		return
-	var compact_report: Dictionary = bounded.report
-	var summary: Dictionary = bounded.summary
-	_pending.append({"report_id": str(report.get("report_id", "")), "session_id": str(report.get("diagnostic_session_id", "")), "match_id": str(report.get("match_id", "")), "schema_version": SCHEMA_VERSION, "build_id": str(report.get("build_id", "")), "summary": summary, "report": compact_report, "attempt": 0, "not_before_msec": 0})
-	_save_local()
-	_attempt_next_upload()
-
-func _build_bounded_upload(report: Dictionary) -> Dictionary:
-	var compact := _reduce_for_upload(report)
-	var summary := _summary_for(compact.report)
-	var bytes := JSON.stringify({"summary": summary, "report": compact.report}).to_utf8_buffer().size()
-	var reduction_pass := 0
-	while bytes > MAX_UPLOAD_TARGET_BYTES and reduction_pass < 64:
-		reduction_pass += 1
-		if not compact.report.detail_samples.is_empty():
-			compact.report.detail_samples = compact.report.detail_samples.slice(maxi(0, compact.report.detail_samples.size() / 2))
-		elif not compact.report.start_samples.is_empty():
-			compact.report.start_samples = compact.report.start_samples.slice(0, compact.report.start_samples.size() / 2)
-		elif not compact.report.incidents.is_empty():
-			if not _halve_incident_samples(compact.report.incidents):
-				compact.report.incidents.pop_back()
-		elif not compact.report.browser_samples.is_empty():
-			compact.report.browser_samples = compact.report.browser_samples.slice(maxi(0, compact.report.browser_samples.size() / 2))
-		elif compact.report.events.size() > 8:
-			compact.report.events = _prioritize_events(compact.report.events).slice(0, maxi(8, compact.report.events.size() / 2))
-		elif compact.report.windows.size() > 4:
-			compact.report.windows = compact.report.windows.slice(maxi(0, compact.report.windows.size() / 2))
-		else:
-			compact.report.loss.upload_metadata_only = true
-			compact.report.detail_samples.clear()
-			compact.report.start_samples.clear()
-			compact.report.incidents.clear()
-			compact.report.browser_samples.clear()
-			compact.report.events = _prioritize_events(compact.report.events).slice(0, 8)
-			compact.report.windows.clear()
-		compact.report.loss.report_reduced_for_upload = true
-		summary = _summary_for(compact.report)
-		bytes = JSON.stringify({"summary": summary, "report": compact.report}).to_utf8_buffer().size()
-	if bytes > MAX_UPLOAD_TARGET_BYTES:
-		compact.report = _minimal_report_for_export(compact.report, "upload")
-		summary = _summary_for(compact.report)
-		bytes = JSON.stringify({"summary": summary, "report": compact.report}).to_utf8_buffer().size()
-	return {"summary": summary, "report": compact.report, "bytes": bytes, "fits": bytes <= MAX_UPLOAD_TARGET_BYTES and bytes <= MAX_REPORT_BYTES}
-
-func _attempt_next_upload() -> void:
-	if _pending.is_empty() or not _active_upload_request.is_empty():
-		return
-	var item: Dictionary = _pending[0]
-	if int(item.get("attempt", 0)) >= MAX_RETRIES:
-		_upload_status = "Upload failed after three attempts; report is still saved locally."
-		report_changed.emit(_upload_status)
-		_save_local()
-		return
-	var token := MultiplayerService.get_access_token_for_network()
-	if token.is_empty():
-		_upload_status = "Waiting for a valid multiplayer session before uploading."
-		report_changed.emit(_upload_status)
-		return
-	_operation_context = "upload:%s:%d" % [str(item.report_id), int(item.attempt)]
-	_active_upload_request = _operation_context
-	_provider.upload_report(str(item.session_id), str(item.match_id), str(item.report_id), int(item.schema_version), str(item.build_id), item.summary, item.report, token, _operation_context)
-	_upload_status = "Uploading completed report…"
-	report_changed.emit(_upload_status)
-
-var _active_upload_request := ""
-
-func _on_provider_finished(action: String, success: bool, data: Variant, message: String, context: String) -> void:
-	if context.begins_with("opt_in:"):
-		_upload_status = "Diagnostic account opt-in enabled." if success else message
-		report_changed.emit(_upload_status)
-		return
-	if context.begins_with("create_session:"):
-		if not success:
-			_session.clear()
-			_upload_status = message
-			report_changed.emit(_upload_status)
-			return
-		var result: Dictionary = data if data is Dictionary else {}
-		var session_id := str(result.get("session_id", result.get("id", "")))
-		var match_id := str(_session.get("pending_match_id", ""))
-		var generation := str(_session.get("pending_generation", ""))
-		if not _valid_uuid(session_id):
-			_session.clear()
-			_upload_status = "Supabase returned an invalid diagnostic session ID."
-			report_changed.emit(_upload_status)
-			return
-		_session = {"session_id": session_id, "match_id": match_id, "match_generation": generation, "room_id": MultiplayerService.get_room_id()}
-		var envelope := {"kind": "diagnostic_session", "room_id": MultiplayerService.get_room_id(), "session_id": session_id, "match_id": match_id, "match_generation": generation}
-		for member in MultiplayerService.get_members():
-			if member is Dictionary:
-				var peer_id := str(member.get("user_id", ""))
-				if not peer_id.is_empty() and peer_id != MultiplayerService.identity_user_id:
-					MultiplayerService.queue_reliable_peer_message(peer_id, envelope)
-		attach_session_to_capture()
-		_upload_status = "Shared diagnostic ID: " + session_id
-		session_created.emit(_session.duplicate(true))
-		report_changed.emit(_upload_status)
-		return
-	if context.begins_with("upload:"):
-		_active_upload_request = ""
-		if _pending.is_empty():
-			return
-		var item: Dictionary = _pending[0]
-		if success:
-			_pending.pop_front()
-			_upload_status = "Uploaded report %s (%d reports returned by server)." % [str(item.report_id), int(data.get("received_count", 0)) if data is Dictionary else 0]
-		else:
-			item.attempt = int(item.get("attempt", 0)) + 1
-			item.not_before_msec = Time.get_ticks_msec() + (500 * (1 << (int(item.attempt) - 1)))
-			_pending[0] = item
-			_upload_status = "Upload failed after three attempts; the report remains saved locally." if int(item.attempt) >= MAX_RETRIES else message
-		_save_local()
-		report_changed.emit(_upload_status)
-		if success:
-			call_deferred("_attempt_next_upload")
-		return
-	if action in ["list_sessions", "fetch_session"]:
-		if not success:
-			report_changed.emit(message)
-			return
-		if action == "fetch_session" and data is Dictionary:
-			_fetched_session_report = data
-			var reports: Array = data.get("reports", [])
-			var expected := int(data.get("expected_count", 0))
-			var missing := maxi(0, expected - reports.size())
-			_upload_status = "Fetched %d/%d reports for debug ID %s%s." % [reports.size(), expected, str(data.get("session_id", "")), " · %d missing" % missing if missing > 0 else ""]
-			report_changed.emit(_upload_status)
-		else:
-			var sessions: Array = data if data is Array else []
-			var entries: PackedStringArray = []
-			for session in sessions:
-				if session is Dictionary:
-					entries.append("%s (%d/%d)" % [str(session.get("session_id", "")), int(session.get("received_count", 0)), int(session.get("expected_count", 0))])
-			_upload_status = "Recent diagnostic sessions: " + ("; ".join(entries) if not entries.is_empty() else "none")
-			report_changed.emit(_upload_status)
-
-func request_sessions() -> void:
-	_operation_context = "list:%d" % Time.get_ticks_msec()
-	_provider.list_sessions(MultiplayerService.get_access_token_for_network(), 10, _operation_context)
-
-func fetch_shared_session(session_id: String) -> void:
-	_operation_context = "fetch:%d" % Time.get_ticks_msec()
-	_provider.fetch_session(session_id, MultiplayerService.get_access_token_for_network(), _operation_context)
-
-func _process_upload_retry() -> void:
-	if not _pending.is_empty() and int(_pending[0].get("attempt", 0)) < MAX_RETRIES and _active_upload_request.is_empty() and Time.get_ticks_msec() >= int(_pending[0].get("not_before_msec", 0)):
-		_attempt_next_upload()
-
-func _summary_for(report: Dictionary) -> Dictionary:
-	var windows: Array = report.get("windows", [])
-	var worst_gap := 0.0
-	var total_snapshots := int(report.get("totals", {}).get("snapshot_accepted", 0))
-	for window in windows:
-		if window is Dictionary:
-			worst_gap = maxf(worst_gap, float(window.get("process_gap_max_ms", 0.0)))
-	return {"role": report.get("role", "unknown"), "player_label": report.get("player_label", "unknown"), "terminal_state": report.get("terminal_state", "unknown"), "duration_ms": maxi(0, int(report.get("capture_end_monotonic_usec", 0)) - int(report.get("capture_start_monotonic_usec", 0))) / 1000, "windows": windows.size(), "worst_process_gap_ms": worst_gap, "accepted_snapshots": total_snapshots, "events": report.get("events", []).size(), "test_layout": report.get("test_layout", "unknown")}
-
-func _reduce_for_upload(report: Dictionary) -> Dictionary:
+func _reduce_for_export(report: Dictionary) -> Dictionary:
 	var copy := report.duplicate(true)
 	for key in ["detail_samples", "start_samples", "incidents", "browser_samples", "timings"]:
 		if not copy.has(key):
 			copy[key] = [] if key != "timings" else {}
 	copy["detail_samples"] = copy.detail_samples.slice(maxi(0, copy.detail_samples.size() - 120))
-	copy["start_samples"] = copy.start_samples.slice(0, 120)
-	copy["events"] = _prioritize_events(copy.get("events", [])).slice(0, 240)
+	copy["start_samples"] = copy.start_samples.slice(maxi(0, copy.start_samples.size() - 120))
+	copy["events"] = _prioritize_events(copy.get("events", [])).slice(maxi(0, copy.get("events", []).size() - 240))
 	copy["windows"] = copy.get("windows", []).slice(maxi(0, copy.get("windows", []).size() - 120))
 	copy["incidents"] = copy.incidents.slice(0, MAX_INCIDENTS)
 	copy["browser_samples"] = copy.browser_samples.slice(maxi(0, copy.browser_samples.size() - 60))
@@ -833,7 +572,7 @@ func _prioritize_events(events: Array) -> Array:
 	return important
 
 func _save_local() -> void:
-	var local := {"reports": _reports, "pending": _pending, "session": _session, "saved_at": Time.get_datetime_string_from_system(true)}
+	var local := {"reports": _reports, "saved_at": Time.get_datetime_string_from_system(true)}
 	var serialized := JSON.stringify(local)
 	var reductions := 0
 	while serialized.to_utf8_buffer().size() > MAX_LOCAL_BYTES and reductions < 4:
@@ -864,10 +603,6 @@ func _load_local() -> void:
 		for report in parsed.get("reports", []):
 			if report is Dictionary:
 				_reports.append(report)
-		for item in parsed.get("pending", []):
-			if item is Dictionary and _pending.size() < MAX_PENDING_REPORTS:
-				_pending.append(item)
-		_session = parsed.get("session", {}) if parsed.get("session", {}) is Dictionary else {}
 
 func _save_loss_marker() -> void:
 	if not _reports.is_empty():

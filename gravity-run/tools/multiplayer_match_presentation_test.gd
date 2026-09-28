@@ -64,6 +64,7 @@ func _ready() -> void:
 	assert(MatchScript.estimate_prediction_target_from_anchor(61, 5.0, 5.0, 19.0, 0.0, 24) == 63, "a current normal snapshot should only account for half-RTT, not the previous packet age")
 	assert(MatchScript.estimate_prediction_target_from_anchor(61, 5.0, 5.0 + 1.0 / 60.0, 19.0, 0.0, 24) >= MatchScript.estimate_prediction_target_from_anchor(61, 5.0, 5.0, 19.0, 0.0, 24), "an accepted timing anchor must be monotonic as network time advances")
 	assert(MatchScript.estimate_prediction_target_tick(100, 0.2, 0.0, 0.1, 24) == 108, "backlog represents elapsed but unsimulated host time and must be subtracted exactly once")
+	assert(MatchScript.estimate_prediction_target_tick(100, 0.0, 0.0, 0.0, 24, 1.0 / 60.0) >= MatchScript.estimate_prediction_target_tick(100, 0.0, 0.0, 0.0, 24, 0.0), "normal host accumulator phase must never move the prediction target backwards")
 	assert(MatchScript.percentile_int([1, 2, 3, 4], 0.95) == 4, "network timing diagnostics should calculate a useful upper percentile")
 	var gravity_before: Dictionary = {"user_id": "remote", "world_x": 100.0, "y": 80.0, "vertical_speed": 60.0, "state": "running", "gravity_direction": -1, "grounded": false}
 	var gravity_after: Dictionary = {"user_id": "remote", "world_x": 200.0, "y": 140.0, "vertical_speed": -60.0, "state": "running", "gravity_direction": 1, "grounded": true}
@@ -154,7 +155,10 @@ func _ready() -> void:
 		{"user_id": "guest", "display_name": "Guest"},
 	]).is_empty())
 	guest_simulation.start()
+	guest_simulation.advance_to_tick(2, 12, ["guest"])
+	var guest_tick_two: Dictionary = guest_simulation.get_player("guest")
 	guest_simulation.advance_to_tick(3, 12, ["guest"])
+	var guest_tick_three: Dictionary = guest_simulation.get_player("guest")
 	var prediction: RefCounted = LocalPredictionScript.new()
 	prediction.bind(guest_simulation, "guest")
 	var clock_view: Node2D = MatchScript.new()
@@ -170,7 +174,12 @@ func _ready() -> void:
 	clock_view.set("_network_clock", 2.55)
 	clock_view.set("_estimated_peer_rtt_msec", 19.0)
 	clock_view.set("_last_authoritative_tick", -1)
-	clock_view.call("_reset_local_render_history", 3)
+	var first_render_history: Array[Dictionary] = [
+		{"tick": 2, "position": Vector2(float(guest_tick_two.world_x), float(guest_tick_two.y))},
+		{"tick": 3, "position": Vector2(float(guest_tick_three.world_x), float(guest_tick_three.y))},
+	]
+	clock_view.set("_local_render_history", first_render_history)
+	clock_view.set("_local_render_clock_tick", 2.5)
 	var host_simulation_for_clock := SimulationScript.new()
 	assert(host_simulation_for_clock.configure(camera_manifest, [
 		{"user_id": "host", "display_name": "Host"},
@@ -185,8 +194,10 @@ func _ready() -> void:
 	assert((clock_view.get("_visual_correction") as Vector2).length() < 0.01, "a countdown-length wait followed by an ordinary first snapshot must not create a false camera correction")
 	assert(is_equal_approx(float(clock_view.get("_last_snapshot_received_network_clock")), 2.55), "the accepted snapshot tick and receive-time anchor must be committed together")
 	host_simulation_for_clock.advance_to_tick(61, 60)
-	guest_simulation.advance_to_tick(63, 60, ["guest"])
-	clock_view.call("_reset_local_render_history", 63)
+	while int(guest_simulation.get("tick")) < 63:
+		guest_simulation.advance_to_tick(int(guest_simulation.get("tick")) + 1, 1, ["guest"])
+		clock_view.call("_record_local_render_sample")
+	clock_view.set("_local_render_clock_tick", 62.5)
 	clock_view.set("_network_clock", 2.55 + 1.0 / 30.0)
 	var ordinary_clock_snapshot: Dictionary = JSON.parse_string(JSON.stringify(host_simulation_for_clock.get_snapshot()))
 	ordinary_clock_snapshot["match_generation"] = "clock-test"
@@ -277,7 +288,19 @@ func _ready() -> void:
 			assert(render_position.x >= previous_x, "local interpolation must remain monotonic at %d Hz render: frame=%d x=%f previous=%f" % [fps, frame, render_position.x, previous_x])
 			previous_x = render_position.x
 		assert(is_equal_approx(previous_x, 500.0), "local interpolation must reach the simulation sample at %d Hz render" % fps)
-	assert(MatchScript.same_time_prediction_reference(Vector2(200.0, 300.0), Vector2(216.6666667, 240.0), 3, 5, 500.0).is_equal_approx(Vector2(200.0 + 500.0 * 2.0 / 60.0, 240.0)), "reconciliation should compare against the old prediction projected to the replay tick, not classify normal movement as error")
+	var old_render_path: Array[Dictionary] = [
+		{"tick": 62, "position": Vector2(700.0, 300.0)},
+		{"tick": 63, "position": Vector2(705.0, 300.0)},
+	]
+	var corrected_render_path: Array[Dictionary] = [
+		{"tick": 61, "position": Vector2(695.0, 300.0)},
+		{"tick": 62, "position": Vector2(700.0, 300.0)},
+		{"tick": 63, "position": Vector2(705.0, 300.0)},
+	]
+	assert(is_zero_approx(MatchScript.interpolate_local_render_position(old_render_path, 62.5).distance_to(MatchScript.interpolate_local_render_position(corrected_render_path, 62.5))), "snapshot reconcile must compare actual old and replayed motion at the same fractional render phase")
+	var blocked_path_before := MatchScript.interpolate_local_render_position([{"tick": 62, "position": Vector2(380.0, 250.0)}, {"tick": 63, "position": Vector2(380.0, 240.0)}], 62.5)
+	var blocked_path_after := MatchScript.interpolate_local_render_position([{"tick": 61, "position": Vector2(380.0, 270.0)}, {"tick": 62, "position": Vector2(380.0, 250.0)}, {"tick": 63, "position": Vector2(380.0, 240.0)}], 62.5)
+	assert(is_zero_approx(blocked_path_before.distance_to(blocked_path_after)), "a correct blocked X and vertical motion must not get a fabricated constant-speed correction")
 	var ranking := [
 		{"user_id": "alpha", "state": "running", "world_x": 780.0},
 		{"user_id": "beta", "state": "running", "world_x": 780.0},

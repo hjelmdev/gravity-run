@@ -16,6 +16,8 @@ var _owner_user_id := ""
 var _is_owner := false
 var _entries: Dictionary = {}
 var _attempt_by_peer: Dictionary = {}
+var _last_attempt_by_peer: Dictionary = {}
+var _retired_attempts_by_peer: Dictionary = {}
 var _retry_count_by_peer: Dictionary = {}
 var _started := false
 var _last_diagnostic_buffer_sample_by_peer: Dictionary = {}
@@ -45,7 +47,14 @@ func begin_connection() -> void:
 	if _entries.has(_owner_user_id):
 		return
 	var attempt_id := Crypto.new().generate_random_bytes(16).hex_encode()
+	var previous_attempt_id := str(_last_attempt_by_peer.get(_owner_user_id, ""))
 	_attempt_by_peer[_owner_user_id] = attempt_id
+	if not previous_attempt_id.is_empty():
+		var service: Node = get_node_or_null("/root/MultiplayerService")
+		if service != null:
+			var restart_envelope: Dictionary = service.create_signal_envelope(_owner_user_id, "restart", {"previous_attempt_id": previous_attempt_id, "next_attempt_id": attempt_id}, attempt_id)
+			if not restart_envelope.is_empty():
+				service.publish_signal(restart_envelope)
 	var entry := _create_peer_entry(_owner_user_id, attempt_id, true)
 	if entry.is_empty():
 		return
@@ -67,8 +76,32 @@ func handle_signal(envelope: Dictionary) -> void:
 		return
 	if not _is_owner and sender != _owner_user_id:
 		return
-	if _attempt_by_peer.has(sender) and str(_attempt_by_peer[sender]) != attempt_id:
+	if _retired_attempts_by_peer.get(sender, []).has(attempt_id):
 		return
+	if kind == "restart" and _is_owner:
+		var previous_attempt := str(body.get("previous_attempt_id", ""))
+		if previous_attempt.is_empty() or str(body.get("next_attempt_id", "")) != attempt_id or previous_attempt in _retired_attempts_by_peer.get(sender, []):
+			return
+		var current_attempt := str(_attempt_by_peer.get(sender, ""))
+		if not current_attempt.is_empty() and current_attempt != previous_attempt:
+			return
+		_retire_attempt(sender, previous_attempt)
+		if _entries.has(sender):
+			_close_entry(_entries[sender])
+			_entries.erase(sender)
+		_attempt_by_peer[sender] = attempt_id
+		peer_state_changed.emit(sender, "retrying", "A new authenticated connection attempt is starting.")
+		return
+	if _attempt_by_peer.has(sender) and str(_attempt_by_peer[sender]) != attempt_id:
+		# Only the host may adopt a fresh offer generation, and only after the
+		# previous direct link is no longer healthy. ICE/SDP from retired
+		# generations remains ignored.
+		if not _is_owner or kind != "offer" or not _entries.has(sender) or _channels_are_open(_entries[sender]):
+			return
+		_retire_attempt(sender, str(_attempt_by_peer[sender]))
+		_close_entry(_entries[sender])
+		_entries.erase(sender)
+		_attempt_by_peer.erase(sender)
 	if kind in ["offer", "ice"] and _is_owner and not _entries.has(sender):
 		_attempt_by_peer[sender] = attempt_id
 		_entries[sender] = _create_peer_entry(sender, attempt_id, false)
@@ -172,6 +205,8 @@ func close_all() -> void:
 		_close_entry(_entries[peer_user_id])
 	_entries.clear()
 	_attempt_by_peer.clear()
+	_last_attempt_by_peer.clear()
+	_retired_attempts_by_peer.clear()
 	_room_id = ""
 	_room_phase = ""
 	_owner_user_id = ""
@@ -192,7 +227,15 @@ func _process(_delta: float) -> void:
 			and control.get_ready_state() == WebRTCDataChannel.STATE_OPEN
 			and snapshot.get_ready_state() == WebRTCDataChannel.STATE_OPEN
 		)
-		if not channels_open and float(Time.get_ticks_msec() - int(entry.get("created_at_msec", 0))) / 1000.0 > CONNECTION_TIMEOUT_SECONDS:
+		if channels_open:
+			entry["degraded_since_msec"] = 0
+		elif int(entry.get("channels_opened_at_msec", 0)) > 0:
+			if int(entry.get("degraded_since_msec", 0)) <= 0:
+				entry["degraded_since_msec"] = Time.get_ticks_msec()
+			elif float(Time.get_ticks_msec() - int(entry.degraded_since_msec)) / 1000.0 > CONNECTION_TIMEOUT_SECONDS:
+				_fail_peer(str(peer_user_id), "The direct connection stopped responding. Reconnect or try another host.")
+				continue
+		elif float(Time.get_ticks_msec() - int(entry.get("created_at_msec", 0))) / 1000.0 > CONNECTION_TIMEOUT_SECONDS:
 			_fail_peer(str(peer_user_id), "Direct connection timed out. Try another network or host.")
 			continue
 		var state := connection.get_connection_state()
@@ -226,6 +269,7 @@ func _process(_delta: float) -> void:
 					peer_data_received.emit(str(peer_user_id), channel_name, parsed)
 		if channels_open and not bool(entry.get("channels_open_notified", false)):
 			entry.channels_open_notified = true
+			entry.channels_opened_at_msec = Time.get_ticks_msec()
 			peer_state_changed.emit(str(peer_user_id), "connected", "Both direct peer channels opened.")
 			_retry_count_by_peer.erase(str(peer_user_id))
 		var poll_usec := Time.get_ticks_usec() - poll_started_usec
@@ -344,6 +388,8 @@ func _fail_peer(peer_user_id: String, message: String) -> void:
 	if _entries.has(peer_user_id):
 		_close_entry(_entries[peer_user_id])
 		_entries.erase(peer_user_id)
+	if _attempt_by_peer.has(peer_user_id):
+		_last_attempt_by_peer[peer_user_id] = str(_attempt_by_peer[peer_user_id])
 	_attempt_by_peer.erase(peer_user_id)
 	var retries := int(_retry_count_by_peer.get(peer_user_id, 0))
 	if not _is_owner and not _room_id.is_empty() and retries < MAX_CONNECTION_RETRIES:
@@ -352,7 +398,40 @@ func _fail_peer(peer_user_id: String, message: String) -> void:
 		peer_state_changed.emit(peer_user_id, "retrying", message)
 		call_deferred("_retry_host_connection", peer_user_id)
 	else:
+		if not _is_owner:
+			# Do not leave begin_connection permanently blocked after retries run out.
+			_started = false
 		peer_state_changed.emit(peer_user_id, "failed", message)
+
+func reconnect_host() -> void:
+	if _is_owner or _room_id.is_empty() or _owner_user_id.is_empty():
+		return
+	var peer_id := _owner_user_id
+	if _entries.has(peer_id):
+		_last_attempt_by_peer[peer_id] = str(_entries[peer_id].get("attempt_id", ""))
+		_close_entry(_entries[peer_id])
+		_entries.erase(peer_id)
+	if _attempt_by_peer.has(peer_id):
+		_last_attempt_by_peer[peer_id] = str(_attempt_by_peer[peer_id])
+	_attempt_by_peer.erase(peer_id)
+	_retry_count_by_peer.erase(peer_id)
+	_started = false
+	begin_connection()
+
+func _retire_attempt(peer_user_id: String, attempt_id: String) -> void:
+	if attempt_id.is_empty():
+		return
+	var retired: Array = _retired_attempts_by_peer.get(peer_user_id, [])
+	if not retired.has(attempt_id):
+		retired.append(attempt_id)
+	while retired.size() > 8:
+		retired.pop_front()
+	_retired_attempts_by_peer[peer_user_id] = retired
+
+func _channels_are_open(entry: Dictionary) -> bool:
+	var control: WebRTCDataChannel = entry.get("control")
+	var snapshot: WebRTCDataChannel = entry.get("snapshot")
+	return control != null and snapshot != null and control.get_ready_state() == WebRTCDataChannel.STATE_OPEN and snapshot.get_ready_state() == WebRTCDataChannel.STATE_OPEN
 
 func _retry_host_connection(peer_user_id: String) -> void:
 	if _is_owner or _room_id.is_empty() or peer_user_id != _owner_user_id:
