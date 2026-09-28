@@ -175,21 +175,21 @@ func advance_frame(delta: float, finish_when_all_inactive: bool = true) -> Array
 		steps += 1
 	return events
 
-func advance_to_tick(target_tick: int, max_steps: int = MAX_CATCHUP_TICKS) -> Array[Dictionary]:
+func advance_to_tick(target_tick: int, max_steps: int = MAX_CATCHUP_TICKS, simulated_user_ids: Array = []) -> Array[Dictionary]:
 	var events: Array[Dictionary] = []
 	if not started or match_finished:
 		return events
 	var steps := 0
 	while tick < target_tick and steps < maxi(max_steps, 0) and not match_finished:
-		_step_one_tick(events, false)
+		_step_one_tick(events, false, simulated_user_ids)
 		steps += 1
 	return events
 
-func _step_one_tick(events: Array[Dictionary], finish_when_all_inactive: bool) -> void:
+func _step_one_tick(events: Array[Dictionary], finish_when_all_inactive: bool, simulated_user_ids: Array = []) -> void:
 	tick += 1
 	_apply_queued_flip_inputs(tick)
 	_step_world_hazards()
-	_step_player_states(events, finish_when_all_inactive)
+	_step_player_states(events, finish_when_all_inactive, simulated_user_ids)
 
 func queue_flip(user_id: String, sequence: int, desired_gravity: int, target_tick: int) -> Dictionary:
 	if not started or match_finished or not _players.has(user_id):
@@ -412,8 +412,10 @@ func _surface_angle_at(x: float, ceiling: bool) -> float:
 			return atan2(float(event.get("end_y", 0.0)) - float(event.get("start_y", 0.0)), end_x - start_x)
 	return 0.0
 
-func _step_player_states(events: Array[Dictionary], finish_when_all_inactive: bool) -> void:
+func _step_player_states(events: Array[Dictionary], finish_when_all_inactive: bool, simulated_user_ids: Array = []) -> void:
 	for user_id in _players.keys():
+		if not simulated_user_ids.is_empty() and not simulated_user_ids.has(user_id):
+			continue
 		var player: Dictionary = _players[user_id]
 		if str(player.state) != "running":
 			continue

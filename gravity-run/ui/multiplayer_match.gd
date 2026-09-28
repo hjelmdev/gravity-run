@@ -16,13 +16,17 @@ const ResultMedalScript := preload("res://ui/result_medal.gd")
 
 const WORLD_HEIGHT := 540.0
 const CAMERA_LEAD := 180.0
-const SNAPSHOT_RATE := 15.0
+const SNAPSHOT_RATE := 30.0
 const SNAPSHOT_INTERVAL_SECONDS := 1.0 / SNAPSHOT_RATE
 const SNAPSHOT_EXTRAPOLATION_LIMIT_TICKS := 3.0
 const SIMULATION_TICK_RATE := 60.0
 const LOCAL_CORRECTION_SPEED := 720.0
-const MAX_PREDICTION_LEAD_TICKS := 6
+const MAX_PREDICTION_LEAD_TICKS := 24
+const BASE_SNAPSHOT_DELAY_TICKS := 2.0
 const VISUAL_PLAYER_SLOT_SPACING := 28.0
+const CAMERA_MODE_LOCAL := "LOCAL_PLAYER"
+const CAMERA_MODE_SPECTATING := "SPECTATING"
+const CAMERA_MODE_FINISHED := "FINISHED"
 
 var _manifest: Resource
 var _simulation: RefCounted
@@ -30,8 +34,19 @@ var _local_prediction: RefCounted
 var _snapshot: Dictionary = {}
 var _authoritative_snapshot: Dictionary = {}
 var _snapshot_buffer: Array[Dictionary] = []
+var _terminal_overlays: Dictionary = {}
+var _camera_mode := CAMERA_MODE_LOCAL
+var _spectator_target_user_id := ""
 var _network_clock := 0.0
 var _last_authoritative_tick := -1
+var _last_snapshot_received_network_clock := -1.0
+var _estimated_peer_rtt_msec := 0.0
+var _prediction_cap_frames := 0
+var _prediction_frames := 0
+var _prediction_tick_samples: Array[int] = []
+var _frame_cost_samples: Array[int] = []
+var _reconcile_cost_samples: Array[int] = []
+var _max_reconcile_usec := 0
 var _visual_correction := Vector2.ZERO
 var _visual_slot_by_user: Dictionary = {}
 var _input_sequence := 0
@@ -58,7 +73,7 @@ var _snapshot_elapsed := 0.0
 var _snapshot_send_metrics_elapsed := 0.0
 var _snapshot_jitter_msec := 0.0
 var _snapshot_mean_interval_msec := 0.0
-var _snapshot_delay_ticks := 5.0
+var _snapshot_delay_ticks := BASE_SNAPSHOT_DELAY_TICKS
 var _snapshot_render_tick := -1.0
 var _snapshot_extrapolated_frames := 0
 var _snapshot_render_samples := 0
@@ -152,6 +167,7 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if _simulation == null:
 		return
+	var frame_work_started_usec := Time.get_ticks_usec()
 	_network_clock += delta
 	var just_started := false
 	if _return_requested and not MultiplayerService.is_room_owner() and _return_request_started_at > 0.0 and _network_clock - _return_request_started_at >= 10.0:
@@ -183,7 +199,17 @@ func _process(delta: float) -> void:
 		if MultiplayerService.is_room_owner():
 			events = _simulation.advance_frame(simulation_delta, true)
 		else:
-			events = _simulation.advance_to_tick(_prediction_target_tick(), SimulationScript.MAX_CATCHUP_TICKS)
+			if not _terminal_overlays.has(_local_user_id):
+				var tick_before_prediction := int(_simulation.get("tick"))
+				var requested_tick := _requested_prediction_tick()
+				var target_tick := _prediction_target_tick()
+				_prediction_frames += 1
+				if target_tick < requested_tick:
+					_prediction_cap_frames += 1
+				events = _simulation.advance_to_tick(target_tick, SimulationScript.MAX_CATCHUP_TICKS, [_local_user_id])
+				_prediction_tick_samples.append(int(_simulation.get("tick")) - tick_before_prediction)
+				while _prediction_tick_samples.size() > 300:
+					_prediction_tick_samples.pop_front()
 		if MultiplayerService.is_room_owner():
 			for event in events:
 				var event_kind := str(event.get("kind", ""))
@@ -221,6 +247,9 @@ func _process(delta: float) -> void:
 	_update_hud()
 	_sync_player_views()
 	queue_redraw()
+	_frame_cost_samples.append(Time.get_ticks_usec() - frame_work_started_usec)
+	while _frame_cost_samples.size() > 300:
+		_frame_cost_samples.pop_front()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if _simulation == null or not _simulation.started or _player_state(_local_user_id).get("state", "") != "running":
@@ -355,22 +384,30 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 				if interarrival_msec > 0:
 					_snapshot_interarrival_total_msec += interarrival_msec
 					_snapshot_interarrival_count += 1
-					var interval_error := absf(float(interarrival_msec) - SNAPSHOT_INTERVAL_SECONDS * 1000.0)
+					var expected_interval_msec := SNAPSHOT_INTERVAL_SECONDS * 1000.0
+					var interval_error := absf(float(interarrival_msec) - expected_interval_msec)
 					_snapshot_jitter_msec = lerpf(_snapshot_jitter_msec, interval_error, 0.1)
 					_snapshot_mean_interval_msec = lerpf(_snapshot_mean_interval_msec, float(interarrival_msec), 0.1) if _snapshot_mean_interval_msec > 0.0 else float(interarrival_msec)
-					var desired_delay_ticks := clampf(4.0 + ceilf(_snapshot_jitter_msec / (1000.0 / SIMULATION_TICK_RATE)), 4.0, 12.0)
+					var desired_delay_ticks := clampf(BASE_SNAPSHOT_DELAY_TICKS + ceilf(_snapshot_jitter_msec / (1000.0 / SIMULATION_TICK_RATE)), BASE_SNAPSHOT_DELAY_TICKS, 12.0)
 					_snapshot_delay_ticks = move_toward(_snapshot_delay_ticks, desired_delay_ticks, 0.25)
 				var tick_gap := int(new_snapshot.get("tick", -1)) - previous_tick
-				if previous_tick >= 0 and tick_gap > 5:
-					_snapshot_tick_gaps += tick_gap - 4
+				var expected_interval_ticks := maxi(1, int(round(SIMULATION_TICK_RATE / SNAPSHOT_RATE)))
+				if previous_tick >= 0 and tick_gap > expected_interval_ticks + 1:
+					_snapshot_tick_gaps += tick_gap - expected_interval_ticks
 				if _snapshot_interarrival_count >= 150:
 					var latest_sample: Dictionary = _snapshot_buffer.back() if not _snapshot_buffer.is_empty() else {}
 					var latest_age_msec := (Time.get_ticks_msec() - _last_snapshot_receive_msec) if _last_snapshot_receive_msec > 0 else -1
 					var latest_tick := int(latest_sample.get("tick", -1))
-					_record_match_diag("snapshot_quality", {"room_id": MultiplayerService.get_room_id(), "samples": _snapshot_interarrival_count, "mean_interarrival_ms": _snapshot_interarrival_total_msec / _snapshot_interarrival_count, "estimated_interval_ms": _snapshot_mean_interval_msec, "jitter_ewma_ms": _snapshot_jitter_msec, "latest_age_ms": latest_age_msec, "buffer_samples": _snapshot_buffer.size(), "buffer_tick_span": latest_tick - int(_snapshot_buffer.front().get("tick", latest_tick)) if not _snapshot_buffer.is_empty() else 0, "render_tick": _snapshot_render_tick, "local_prediction_tick": int(_simulation.get("tick")), "authoritative_tick": _last_authoritative_tick, "prediction_lead_ticks": int(_simulation.get("tick")) - _last_authoritative_tick, "render_samples": _snapshot_render_samples, "extrapolation_frames": _snapshot_extrapolated_frames, "extrapolation_ratio": float(_snapshot_extrapolated_frames) / maxf(float(_snapshot_render_samples), 1.0), "max_local_correction_px": _max_local_correction_px, "estimated_missing_ticks": _snapshot_tick_gaps})
+					_record_match_diag("snapshot_quality", {"room_id": MultiplayerService.get_room_id(), "samples": _snapshot_interarrival_count, "snapshot_rate_hz": SNAPSHOT_RATE, "snapshot_delay_ticks": _snapshot_delay_ticks, "mean_interarrival_ms": _snapshot_interarrival_total_msec / _snapshot_interarrival_count, "estimated_interval_ms": _snapshot_mean_interval_msec, "jitter_ewma_ms": _snapshot_jitter_msec, "latest_age_ms": latest_age_msec, "estimated_rtt_ms": _estimated_peer_rtt_msec, "buffer_samples": _snapshot_buffer.size(), "buffer_tick_span": latest_tick - int(_snapshot_buffer.front().get("tick", latest_tick)) if not _snapshot_buffer.is_empty() else 0, "render_tick": _snapshot_render_tick, "local_prediction_tick": int(_simulation.get("tick")), "authoritative_tick": _last_authoritative_tick, "prediction_lead_ticks": int(_simulation.get("tick")) - _last_authoritative_tick, "prediction_capped_frames": _prediction_cap_frames, "prediction_frames": _prediction_frames, "prediction_ticks_p95_per_frame": percentile_int(_prediction_tick_samples, 0.95), "reconcile_p95_usec": percentile_int(_reconcile_cost_samples, 0.95), "reconcile_max_usec": _max_reconcile_usec, "frame_work_p95_usec": percentile_int(_frame_cost_samples, 0.95), "frame_work_max_usec": percentile_int(_frame_cost_samples, 1.0), "render_samples": _snapshot_render_samples, "extrapolation_frames": _snapshot_extrapolated_frames, "extrapolation_ratio": float(_snapshot_extrapolated_frames) / maxf(float(_snapshot_render_samples), 1.0), "max_local_correction_px": _max_local_correction_px, "estimated_missing_ticks": _snapshot_tick_gaps})
 					_snapshot_interarrival_total_msec = 0
 					_snapshot_interarrival_count = 0
 					_snapshot_tick_gaps = 0
+					_prediction_cap_frames = 0
+					_prediction_frames = 0
+					_prediction_tick_samples.clear()
+					_reconcile_cost_samples.clear()
+					_frame_cost_samples.clear()
+					_max_reconcile_usec = 0
 					_snapshot_extrapolated_frames = 0
 					_snapshot_render_samples = 0
 					_max_local_correction_px = 0.0
@@ -455,6 +492,10 @@ func _accept_reliable_player_terminal(payload: Dictionary) -> void:
 	if not player is Dictionary or str(player.get("state", "")) not in ["dead", "finished", "disconnected"]:
 		_record_match_diag("player_terminal_rejected", {"reason": "invalid_terminal_player"})
 		return
+	var event_tick := int(payload.get("tick", -1))
+	if event_tick < 0:
+		_record_match_diag("player_terminal_rejected", {"reason": "invalid_terminal_tick"})
+		return
 	var user_id := str(player.get("user_id", ""))
 	var known_member := false
 	for member in MultiplayerService.get_members():
@@ -464,34 +505,56 @@ func _accept_reliable_player_terminal(payload: Dictionary) -> void:
 	if not known_member:
 		_record_match_diag("player_terminal_rejected", {"reason": "unknown_player", "player_id": user_id})
 		return
-	var base: Dictionary = _authoritative_snapshot.duplicate(true) if not _authoritative_snapshot.is_empty() else _simulation.get_snapshot()
-	var states: Variant = base.get("players", [])
+	if not _store_terminal_overlay(user_id, player, event_tick):
+		return
+	if user_id == _local_user_id:
+		if _local_prediction != null:
+			_local_prediction.clear()
+			_camera_mode = CAMERA_MODE_SPECTATING
+			_spectator_target_user_id = ""
+	_record_match_diag("player_terminal_received", {"player_id": user_id, "state": str(player.get("state", "")), "tick": event_tick, "full_snapshot_tick_unchanged": _last_authoritative_tick})
+
+func _store_terminal_overlay(user_id: String, player: Dictionary, event_tick: int) -> bool:
+	var existing: Variant = _terminal_overlays.get(user_id, {})
+	if existing is Dictionary and not existing.is_empty():
+		if int(existing.get("tick", -1)) > event_tick:
+			return false
+		if str(existing.get("state", "")) in ["dead", "finished", "disconnected"] and str(player.get("state", "")) == "running":
+			return false
+	var terminal_player := player.duplicate(true)
+	terminal_player["state"] = str(player.get("state", "dead"))
+	_terminal_overlays[user_id] = {"tick": event_tick, "state": terminal_player.state, "player": terminal_player}
+	_apply_terminal_overlays(_snapshot)
+	return true
+
+func _remember_snapshot_terminal_states(snapshot: Dictionary) -> void:
+	var states: Variant = snapshot.get("players", [])
 	if not states is Array:
 		return
-	var updated_states: Array[Dictionary] = []
-	var found := false
-	for existing in states:
-		if not existing is Dictionary:
+	var tick_value := int(snapshot.get("tick", -1))
+	for player in states:
+		if not player is Dictionary or str(player.get("state", "")) not in ["dead", "finished", "disconnected"]:
 			continue
-		var next_state: Dictionary = existing.duplicate(true)
-		if str(next_state.get("user_id", "")) == user_id:
-			if str(next_state.get("state", "")) not in ["dead", "finished", "disconnected"]:
-				next_state = player.duplicate(true)
-			found = true
-		updated_states.append(next_state)
-	if not found:
+		_store_terminal_overlay(str(player.get("user_id", "")), player, tick_value)
+
+func _apply_terminal_overlays(snapshot: Dictionary) -> void:
+	var states: Variant = snapshot.get("players", [])
+	if not states is Array or _terminal_overlays.is_empty():
 		return
-	base["players"] = updated_states
-	base["tick"] = maxi(int(base.get("tick", -1)), int(payload.get("tick", -1)))
-	_authoritative_snapshot = base.duplicate(true)
-	_snapshot = base.duplicate(true)
-	_last_authoritative_tick = maxi(_last_authoritative_tick, int(base.get("tick", -1)))
-	_snapshot_buffer.append({"tick": int(base.get("tick", -1)), "received_at": _network_clock, "state": _authoritative_snapshot})
-	while _snapshot_buffer.size() > 32:
-		_snapshot_buffer.pop_front()
-	if user_id == _local_user_id:
-		_simulation.apply_authoritative_player_state(user_id, player)
-	_record_match_diag("player_terminal_received", {"player_id": user_id, "state": str(player.get("state", "")), "tick": int(payload.get("tick", -1))})
+	var updated_states: Array[Dictionary] = []
+	for player in states:
+		if not player is Dictionary:
+			continue
+		var updated: Dictionary = player.duplicate(true)
+		var overlay: Variant = _terminal_overlays.get(str(updated.get("user_id", "")), {})
+		if overlay is Dictionary and not overlay.is_empty():
+			var terminal_player: Dictionary = overlay.get("player", {})
+			updated["state"] = str(overlay.get("state", terminal_player.get("state", "dead")))
+			for key in ["world_x", "y", "gravity_direction", "grounded", "blocked", "vertical_speed"]:
+				if terminal_player.has(key):
+					updated[key] = terminal_player[key]
+		updated_states.append(updated)
+	snapshot["players"] = updated_states
 
 func _accept_reliable_match_finished(payload: Dictionary) -> void:
 	if str(payload.get("room_id", "")) != MultiplayerService.get_room_id() or str(payload.get("course_identity", "")) != str(_manifest.get("course_identity")):
@@ -530,6 +593,7 @@ func _accept_reliable_match_finished(payload: Dictionary) -> void:
 		"placements": [],
 		"world_hazards": _authoritative_snapshot.get("world_hazards", _simulation.get_snapshot().get("world_hazards", {})),
 	}
+	_remember_snapshot_terminal_states(terminal)
 	_authoritative_snapshot = terminal.duplicate(true)
 	_authoritative_snapshot["match_generation"] = _start_generation
 	_snapshot = terminal.duplicate(true)
@@ -586,21 +650,31 @@ func _accept_authoritative_snapshot(snapshot: Variant) -> bool:
 	_last_authoritative_tick = incoming_tick
 	_last_snapshot_rejection = ""
 	_authoritative_snapshot = snapshot.duplicate(true)
-	var replay_target := maxi(old_prediction_tick, _prediction_target_tick())
-	var reconciliation: Dictionary = _local_prediction.reconcile(snapshot, replay_target)
-	if not bool(reconciliation.get("ok", false)):
-		_last_authoritative_tick = previous_authoritative_tick
-		_authoritative_snapshot = previous_authoritative_snapshot
-		_last_snapshot_rejection = "checkpoint_or_replay_failed:%s" % str(reconciliation.get("reason", "unknown"))
-		return false
-	var replayed: Dictionary = reconciliation.get("new_player", {})
-	_visual_correction = correction_after_authority(old_render, Vector2(float(replayed.get("world_x", 0.0)), float(replayed.get("y", 0.0))), "running", str(local_state.get("state", "running")))
-	for result in reconciliation.get("confirmed_inputs", []):
-		_record_match_diag("local_input_confirmed", {"sequence": int(result.get("sequence", 0)), "accepted": bool(result.get("accepted", false)), "target_tick": int(result.get("target_tick", -1)), "processed_tick": int(result.get("processed_tick", -1)), "input_ack_delay_ms": maxi(0, Time.get_ticks_msec() - int(result.get("sent_at_msec", Time.get_ticks_msec())))})
-	var replay_errors: Array = reconciliation.get("replay_errors", [])
-	if not replay_errors.is_empty() or bool(reconciliation.get("replay_was_bounded", false)):
-		_record_match_diag("prediction_replay_limited", {"snapshot_tick": incoming_tick, "requested_target_tick": int(reconciliation.get("target_tick", replay_target)), "replayed_to_tick": int(reconciliation.get("replayed_to_tick", -1)), "errors": replay_errors})
-	_max_local_correction_px = maxf(_max_local_correction_px, _visual_correction.length())
+	var local_already_terminal := _terminal_overlays.has(_local_user_id)
+	if not local_already_terminal:
+		var replay_target := maxi(old_prediction_tick, _prediction_target_tick())
+		var reconcile_started_usec := Time.get_ticks_usec()
+		var reconciliation: Dictionary = _local_prediction.reconcile(snapshot, replay_target)
+		var reconcile_usec := Time.get_ticks_usec() - reconcile_started_usec
+		_reconcile_cost_samples.append(reconcile_usec)
+		while _reconcile_cost_samples.size() > 300:
+			_reconcile_cost_samples.pop_front()
+		_max_reconcile_usec = maxi(_max_reconcile_usec, reconcile_usec)
+		if not bool(reconciliation.get("ok", false)):
+			_last_authoritative_tick = previous_authoritative_tick
+			_authoritative_snapshot = previous_authoritative_snapshot
+			_last_snapshot_rejection = "checkpoint_or_replay_failed:%s" % str(reconciliation.get("reason", "unknown"))
+			return false
+		var replayed: Dictionary = reconciliation.get("new_player", {})
+		_visual_correction = correction_after_authority(old_render, Vector2(float(replayed.get("world_x", 0.0)), float(replayed.get("y", 0.0))), "running", str(local_state.get("state", "running")))
+		for result in reconciliation.get("confirmed_inputs", []):
+			_record_match_diag("local_input_confirmed", {"sequence": int(result.get("sequence", 0)), "accepted": bool(result.get("accepted", false)), "target_tick": int(result.get("target_tick", -1)), "processed_tick": int(result.get("processed_tick", -1)), "input_ack_delay_ms": maxi(0, Time.get_ticks_msec() - int(result.get("sent_at_msec", Time.get_ticks_msec())))})
+		var replay_errors: Array = reconciliation.get("replay_errors", [])
+		if not replay_errors.is_empty() or bool(reconciliation.get("replay_was_bounded", false)):
+			_record_match_diag("prediction_replay_limited", {"snapshot_tick": incoming_tick, "requested_target_tick": int(reconciliation.get("target_tick", replay_target)), "replayed_to_tick": int(reconciliation.get("replayed_to_tick", -1)), "errors": replay_errors})
+		_max_local_correction_px = maxf(_max_local_correction_px, _visual_correction.length())
+	_remember_snapshot_terminal_states(snapshot)
+	_last_snapshot_received_network_clock = _network_clock
 	_snapshot_buffer.append({"tick": incoming_tick, "received_at": _network_clock, "state": _authoritative_snapshot})
 	while _snapshot_buffer.size() > 32:
 		_snapshot_buffer.pop_front()
@@ -611,6 +685,8 @@ func _accept_flip_result(payload: Dictionary) -> void:
 		return
 	var sequence := int(payload.get("sequence", 0))
 	if sequence <= 0:
+		return
+	if _terminal_overlays.has(_local_user_id):
 		return
 	if bool(payload.get("accepted", false)):
 		return # Accepted commands are retired only by a checkpoint containing their applied tick.
@@ -629,12 +705,64 @@ func _accept_flip_result(payload: Dictionary) -> void:
 func _prediction_target_tick() -> int:
 	if _planned_local_start_msec <= 0:
 		return maxi(_last_authoritative_tick, 0)
+	if _last_authoritative_tick < 0:
+		return mini(_requested_prediction_tick(), MAX_PREDICTION_LEAD_TICKS)
+	var snapshot_age := maxf(_network_clock - _last_snapshot_received_network_clock, 0.0)
+	var host_backlog := float(_authoritative_snapshot.get("backlog_seconds", 0.0))
+	return estimate_prediction_target_tick(
+		_last_authoritative_tick,
+		snapshot_age,
+		_estimated_peer_rtt_msec,
+		host_backlog,
+		MAX_PREDICTION_LEAD_TICKS
+	)
+
+static func estimate_prediction_target_tick(authoritative_tick: int, snapshot_age_seconds: float, estimated_rtt_msec: float, host_backlog_seconds: float, max_lead_ticks: int = 24) -> int:
+	if authoritative_tick < 0:
+		return 0
+	var age_ticks := maxf(snapshot_age_seconds, 0.0) * SIMULATION_TICK_RATE
+	var one_way_ticks := maxf(estimated_rtt_msec, 0.0) * SIMULATION_TICK_RATE / 2000.0
+	var backlog_ticks := maxf(host_backlog_seconds, 0.0) * SIMULATION_TICK_RATE
+	var estimated_host_tick := float(authoritative_tick) + age_ticks + one_way_ticks - backlog_ticks
+	var desired_tick := maxi(authoritative_tick, int(floor(estimated_host_tick + 2.0)))
+	return mini(desired_tick, authoritative_tick + maxi(max_lead_ticks, 0))
+
+func _requested_prediction_tick() -> int:
+	if _planned_local_start_msec <= 0:
+		return maxi(_last_authoritative_tick, 0)
 	var elapsed_msec := maxi(Time.get_ticks_msec() - _planned_local_start_msec, 0)
-	var wall_clock_tick := int(floor(float(elapsed_msec) * SIMULATION_TICK_RATE / 1000.0))
-	var target := wall_clock_tick + 2
-	var prediction_ceiling := MAX_PREDICTION_LEAD_TICKS if _last_authoritative_tick < 0 else _last_authoritative_tick + MAX_PREDICTION_LEAD_TICKS
-	target = mini(target, prediction_ceiling)
-	return maxi(target, 0)
+	return maxi(int(floor(float(elapsed_msec) * SIMULATION_TICK_RATE / 1000.0)) + 2, 0)
+
+static func percentile_int(samples: Array, fraction: float) -> int:
+	if samples.is_empty():
+		return 0
+	var ordered: Array = samples.duplicate()
+	ordered.sort()
+	var index := clampi(int(ceil(clampf(fraction, 0.0, 1.0) * ordered.size())) - 1, 0, ordered.size() - 1)
+	return int(ordered[index])
+
+static func effective_player_state(render_state: String, authoritative_state: String, allow_local_prediction_mask: bool = false) -> String:
+	const TERMINAL_STATES := ["dead", "finished", "disconnected"]
+	if authoritative_state in TERMINAL_STATES:
+		return authoritative_state
+	if allow_local_prediction_mask and render_state in TERMINAL_STATES and authoritative_state in ["", "running"]:
+		return "running"
+	return authoritative_state if not authoritative_state.is_empty() else render_state
+
+static func choose_spectator_target(players: Array, current_target: String = "") -> String:
+	for player in players:
+		if player is Dictionary and str(player.get("user_id", "")) == current_target and str(player.get("state", "")) == "running":
+			return current_target
+	var candidates: Array[Dictionary] = []
+	for player in players:
+		if player is Dictionary and str(player.get("state", "")) == "running":
+			candidates.append(player)
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var ax := float(a.get("world_x", 0.0))
+		var bx := float(b.get("world_x", 0.0))
+		return ax > bx if not is_equal_approx(ax, bx) else str(a.get("user_id", "")) < str(b.get("user_id", ""))
+	)
+	return str(candidates[0].get("user_id", "")) if not candidates.is_empty() else ""
 
 func _log_terminal_snapshot(reason: String, snapshot: Dictionary) -> void:
 	var player_summary: Array[Dictionary] = []
@@ -691,10 +819,11 @@ func _compose_client_snapshot() -> void:
 		if user_id == _local_user_id:
 			var local: Dictionary = _simulation.get_player(user_id)
 			if not local.is_empty():
-				var authoritative_local := _player_state(user_id)
-				if str(local.get("state", "running")) in ["dead", "finished", "disconnected"] and str(authoritative_local.get("state", "running")) == "running":
-					local["state"] = "running"
-					local["blocked"] = bool(authoritative_local.get("blocked", false))
+				var authoritative_local := _authoritative_player_state(user_id)
+				var effective_state := effective_player_state(str(local.get("state", "running")), str(authoritative_local.get("state", "")), true)
+				local["state"] = effective_state
+				if effective_state == "running":
+					local["blocked"] = bool(authoritative_local.get("blocked", local.get("blocked", false)))
 				displayed.append(local)
 			continue
 		var from: Dictionary = earlier_players.get(user_id, {})
@@ -710,6 +839,7 @@ func _compose_client_snapshot() -> void:
 	if bool(_authoritative_snapshot.get("finished", false)):
 		return
 	_snapshot.players = displayed
+	_apply_terminal_overlays(_snapshot)
 	var earlier_hazards: Variant = earlier_state.get("world_hazards", {})
 	var later_hazards: Variant = later_state.get("world_hazards", {})
 	if earlier_hazards is Dictionary and later_hazards is Dictionary:
@@ -860,6 +990,7 @@ func _commit_synchronized_start() -> void:
 	var committed_peers: Array[String] = []
 	for peer_id in _start_probe_sent_at:
 		var offset := float((_start_peer_offsets.get(peer_id, {}) as Dictionary).get("offset_msec", 0.0))
+		var peer_rtt := int((_start_peer_offsets.get(peer_id, {}) as Dictionary).get("rtt_msec", 0))
 		var local_target_msec := _planned_host_start_msec + int(round(offset))
 		var queued := MultiplayerService.queue_reliable_peer_message(str(peer_id), {
 			"kind": "race_start_commit",
@@ -867,6 +998,7 @@ func _commit_synchronized_start() -> void:
 			"generation": _start_generation,
 			"host_start_msec": _planned_host_start_msec,
 			"local_start_msec": local_target_msec,
+			"estimated_rtt_msec": peer_rtt,
 			"start_tick": 0,
 		})
 		if not queued:
@@ -888,6 +1020,7 @@ func _receive_start_commit(payload: Dictionary) -> void:
 		return
 	_planned_host_start_msec = int(payload.get("host_start_msec", -1))
 	_planned_local_start_msec = int(payload.get("local_start_msec", -1))
+	_estimated_peer_rtt_msec = clampf(float(payload.get("estimated_rtt_msec", 0)), 0.0, 3000.0)
 	if _planned_host_start_msec <= 0 or _planned_local_start_msec <= 0 or int(payload.get("start_tick", -1)) != 0:
 		_record_match_diag("race_start_commit_rejected", {"generation": _start_generation, "host_start_msec": _planned_host_start_msec, "local_start_msec": _planned_local_start_msec})
 		return
@@ -1027,7 +1160,21 @@ func _player_state(user_id: String) -> Dictionary:
 	if players is Array:
 		for state in players:
 			if state is Dictionary and str(state.get("user_id", "")) == user_id:
-				return state
+				var result: Dictionary = state.duplicate(true)
+				var authoritative := _authoritative_player_state(user_id)
+				result["state"] = effective_player_state(str(result.get("state", "")), str(authoritative.get("state", "")), user_id == _local_user_id)
+				return result
+	return _authoritative_player_state(user_id)
+
+func _authoritative_player_state(user_id: String) -> Dictionary:
+	var overlay: Variant = _terminal_overlays.get(user_id, {})
+	if overlay is Dictionary and not overlay.is_empty():
+		return (overlay.get("player", {}) as Dictionary).duplicate(true)
+	var players: Variant = _authoritative_snapshot.get("players", [])
+	if players is Array:
+		for player in players:
+			if player is Dictionary and str(player.get("user_id", "")) == user_id:
+				return player.duplicate(true)
 	return {}
 
 func _build_course_view() -> void:
@@ -1265,14 +1412,22 @@ static func _player_precedes(left: Dictionary, right: Dictionary) -> bool:
 func _camera_left() -> float:
 	var local_state: Dictionary = _player_state(_local_user_id)
 	var local_render := _local_render_position()
+	if bool(_authoritative_snapshot.get("finished", false)):
+		_camera_mode = CAMERA_MODE_FINISHED
+	elif str(local_state.get("state", "running")) == "running":
+		_camera_mode = CAMERA_MODE_LOCAL
+		_spectator_target_user_id = ""
+	else:
+		_camera_mode = CAMERA_MODE_SPECTATING
 	var followed_x := local_render.x + float(_visual_slot_by_user.get(_local_user_id, 0.0))
-	if str(local_state.get("state", "running")) != "running":
+	if _camera_mode == CAMERA_MODE_SPECTATING:
 		var players: Variant = _snapshot.get("players", [])
 		if players is Array:
+			_spectator_target_user_id = choose_spectator_target(players, _spectator_target_user_id)
 			for player in players:
-				if player is Dictionary and str(player.get("state", "")) == "running":
-					var render_position := _visual_player_position(player, players)
-					followed_x = maxf(followed_x, render_position.x)
+				if player is Dictionary and str(player.get("user_id", "")) == _spectator_target_user_id:
+					followed_x = _visual_player_position(player, players).x
+					break
 	return maxf(followed_x - CAMERA_LEAD, 0.0)
 
 func _local_render_position() -> Vector2:

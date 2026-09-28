@@ -32,6 +32,30 @@ func _ready() -> void:
 	assert(MatchScript.interpolated_player_state("running", "dead", 0.0) == "dead", "an authoritative death should display immediately even while position is interpolated")
 	assert(MatchScript.interpolated_player_state("dead", "running", 1.0) == "dead", "an older/out-of-order running state must not resurrect a dead remote runner")
 	assert(MatchScript.interpolated_player_state("running", "running", 0.25) == "running", "running state should remain unchanged during position interpolation")
+	assert(MatchScript.effective_player_state("running", "dead") == "dead", "authoritative terminal status must override a stale rendered running state")
+	assert(MatchScript.effective_player_state("dead", "running", true) == "running", "only local predicted terminal status may be masked by an authoritative running state")
+	assert(MatchScript.effective_player_state("dead", "", true) == "running", "a predicted local death must wait for an authoritative status before becoming final")
+	assert(MatchScript.effective_player_state("dead", "running") == "running", "remote presentation must use the latest authoritative running status")
+	var spectator_roster: Array = [
+		{"user_id": "dead_local", "state": "dead", "world_x": 900.0},
+		{"user_id": "leader", "state": "running", "world_x": 600.0},
+		{"user_id": "trailer", "state": "running", "world_x": 300.0},
+	]
+	assert(MatchScript.choose_spectator_target(spectator_roster) == "leader", "spectator should choose the furthest living player rather than the dead local player")
+	spectator_roster[1]["world_x"] = 100.0
+	assert(MatchScript.choose_spectator_target(spectator_roster, "leader") == "leader", "spectator target should remain stable while that runner is alive")
+	spectator_roster[1]["state"] = "dead"
+	assert(MatchScript.choose_spectator_target(spectator_roster, "leader") == "trailer", "spectator target should change when its current runner is terminal")
+	var spectator_view: Node2D = MatchScript.new()
+	spectator_view.set("_local_user_id", "dead_local")
+	spectator_view.set("_snapshot", {"players": spectator_roster})
+	spectator_view.set("_authoritative_snapshot", {"finished": false, "players": spectator_roster})
+	spectator_view.set("_visual_slot_by_user", {"trailer": 0.0})
+	assert(is_equal_approx(float(spectator_view.call("_camera_left")), 120.0), "a dead runner ahead of survivors must not pin the spectator camera at its own location")
+	spectator_view.free()
+	assert(MatchScript.estimate_prediction_target_tick(100, 0.05, 100.0, 0.0, 24) == 108, "prediction should estimate current host time from packet age and half-RTT instead of freezing at the received tick")
+	assert(MatchScript.estimate_prediction_target_tick(100, 10.0, 0.0, 0.0, 24) == 124, "prediction recovery must remain bounded to the replay limit")
+	assert(MatchScript.percentile_int([1, 2, 3, 4], 0.95) == 4, "network timing diagnostics should calculate a useful upper percentile")
 	var gravity_before: Dictionary = {"user_id": "remote", "world_x": 100.0, "y": 80.0, "vertical_speed": 60.0, "state": "running", "gravity_direction": -1, "grounded": false}
 	var gravity_after: Dictionary = {"user_id": "remote", "world_x": 200.0, "y": 140.0, "vertical_speed": -60.0, "state": "running", "gravity_direction": 1, "grounded": true}
 	var mid_flip: Dictionary = MatchScript.interpolate_player_sample(gravity_before, gravity_after, 0.5)
@@ -64,6 +88,17 @@ func _ready() -> void:
 	assert(MatchScript.calculate_player_place(ranking, "beta") == 1, "the remaining runner should lead while another player is eliminated")
 	var match_view: Node2D = MatchScript.new()
 	match_view.set("_manifest", manifest)
+	match_view.set("_snapshot", {"tick": 100, "players": [{"user_id": "runner", "state": "running", "world_x": 500.0}]})
+	match_view.set("_authoritative_snapshot", {"tick": 100, "world_time": 100.0 / 60.0, "players": [{"user_id": "runner", "state": "running", "world_x": 500.0}], "world_hazards": {}})
+	match_view.set("_last_authoritative_tick", 100)
+	match_view.call("_store_terminal_overlay", "runner", {"user_id": "runner", "state": "dead", "world_x": 510.0}, 104)
+	assert(int(match_view.get("_authoritative_snapshot").get("tick", -1)) == 100, "a reliable terminal event must not relabel an older full checkpoint with a newer tick")
+	assert(int(match_view.get("_last_authoritative_tick")) == 100, "terminal events must not advance the full-snapshot tick watermark")
+	assert(str(match_view.call("_authoritative_player_state", "runner").get("state", "")) == "dead", "the terminal overlay must immediately provide authoritative player state")
+	var still_older_checkpoint: Dictionary = match_view.get("_authoritative_snapshot")
+	match_view.call("_apply_terminal_overlays", still_older_checkpoint)
+	assert(str(still_older_checkpoint.players[0].state) == "dead", "terminal overlays must survive later stale running checkpoints in presentation")
+	assert(not match_view.call("_store_terminal_overlay", "runner", {"user_id": "runner", "state": "dead", "world_x": 505.0}, 103), "an older terminal event must not replace a newer one")
 	var draw_order_view: Node2D = MatchScript.new()
 	var draw_order_root := Node2D.new()
 	draw_order_view.add_child(draw_order_root)

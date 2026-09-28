@@ -90,7 +90,7 @@ func reconcile(checkpoint: Variant, requested_target_tick: int) -> Dictionary:
 		if not bool(queued.get("queued", false)):
 			replay_errors.append({"sequence": int(input.get("sequence", 0)), "reason": str(queued.get("reason", "queue_failed"))})
 	if replay_end > checkpoint_tick:
-		simulation.advance_to_tick(replay_end, MAX_REPLAY_TICKS)
+		simulation.advance_to_tick(replay_end, MAX_REPLAY_TICKS, [local_user_id])
 	var new_player: Dictionary = simulation.get_player(local_user_id)
 	return {
 		"ok": true,
