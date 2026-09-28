@@ -22,11 +22,10 @@ const SNAPSHOT_INTERVAL_SECONDS := 1.0 / SNAPSHOT_RATE
 const SIMULATION_TICK_RATE := 60.0
 const LOCAL_CORRECTION_SPEED := 720.0
 const MAX_PREDICTION_LEAD_TICKS := 24
-const BASE_SNAPSHOT_DELAY_TICKS := 3.0
+const BASE_SNAPSHOT_DELAY_TICKS := 5.0
 const REMOTE_CLOCK_RATE_GAIN := 0.06
 const REMOTE_CLOCK_MAX_RATE_ADJUSTMENT := 0.08
 const REMOTE_CLOCK_RESYNC_LIMIT_TICKS := 12.0
-const VISUAL_PLAYER_SLOT_SPACING := 28.0
 const CAMERA_MODE_LOCAL := "LOCAL_PLAYER"
 const CAMERA_MODE_SPECTATING := "SPECTATING"
 const CAMERA_MODE_FINISHED := "FINISHED"
@@ -65,7 +64,6 @@ var _frame_cost_samples: Array[int] = []
 var _reconcile_cost_samples: Array[int] = []
 var _max_reconcile_usec := 0
 var _visual_correction := Vector2.ZERO
-var _visual_slot_by_user: Dictionary = {}
 var _input_sequence := 0
 var _last_input_sequence: Dictionary = {}
 var _start_generation := ""
@@ -100,6 +98,12 @@ var _remote_position_sample_state := "uninitialized"
 var _remote_position_sample_from_tick := -1.0
 var _remote_position_sample_to_tick := -1.0
 var _remote_position_sample_tick := -1.0
+var _remote_position_hold_started_usec := 0
+var _remote_position_hold_reported := false
+var _remote_position_hold_duration_msec := 0.0
+var _snapshot_position_hold_episodes := 0
+var _snapshot_position_hold_total_msec := 0.0
+var _snapshot_position_hold_max_msec := 0.0
 var _remote_render_hold_frames := 0
 var _remote_render_resync_count := 0
 var _remote_render_last_diagnostic_bucket := ""
@@ -193,8 +197,6 @@ func _ready() -> void:
 			})
 	stable_user_ids.sort()
 	_match_roster_ids = stable_user_ids.duplicate()
-	for index in range(stable_user_ids.size()):
-		_visual_slot_by_user[stable_user_ids[index]] = (float(index) - float(stable_user_ids.size() - 1) * 0.5) * VISUAL_PLAYER_SLOT_SPACING
 	_simulation = SimulationScript.new()
 	var configuration_error := str(_simulation.configure(_manifest, simulation_players))
 	if not configuration_error.is_empty():
@@ -337,9 +339,13 @@ func _process(delta: float) -> void:
 			_max_correction_x_px = maxf(_max_correction_x_px, absf(_visual_correction.x))
 			_max_correction_y_px = maxf(_max_correction_y_px, absf(_visual_correction.y))
 			_record_local_render_sample()
+			var resyncs_before := _local_render_resync_count
 			_advance_local_render_clock(delta)
+			if _local_render_resync_count > resyncs_before:
+				MultiplayerDiagnostics.mark_problem("local_render_resync")
 			_advance_remote_render_clock(delta)
 			_compose_client_snapshot()
+			_track_remote_position_hold()
 	_update_hud()
 	_update_authority_health(delta)
 	_camera_left_before_frame = _camera_left_cached
@@ -529,7 +535,7 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 					var latest_sample: Dictionary = _snapshot_buffer.back() if not _snapshot_buffer.is_empty() else {}
 					var latest_age_msec := (Time.get_ticks_msec() - _last_snapshot_receive_msec) if _last_snapshot_receive_msec > 0 else -1
 					var latest_tick := int(latest_sample.get("tick", -1))
-					_record_match_diag("snapshot_quality", {"room_id": MultiplayerService.get_room_id(), "samples": _snapshot_interarrival_count, "snapshot_rate_hz": SNAPSHOT_RATE, "snapshot_delay_ticks": _snapshot_delay_ticks, "mean_interarrival_ms": _snapshot_interarrival_total_msec / _snapshot_interarrival_count, "estimated_interval_ms": _snapshot_mean_interval_msec, "jitter_ewma_ms": _snapshot_jitter_msec, "latest_age_ms": latest_age_msec, "estimated_rtt_ms": _estimated_peer_rtt_msec, "buffer_samples": _snapshot_buffer.size(), "buffer_tick_span": latest_tick - int(_snapshot_buffer.front().get("tick", latest_tick)) if not _snapshot_buffer.is_empty() else 0, "render_tick": _snapshot_render_tick, "local_render_tick": _local_render_tick(), "local_prediction_tick": int(_simulation.get("tick")), "authoritative_tick": _last_authoritative_tick, "prediction_lead_ticks": int(_simulation.get("tick")) - _last_authoritative_tick, "prediction_wallclock_capped_frames": _prediction_cap_frames, "prediction_replay_limit_snapshots": _prediction_replay_limit_frames, "prediction_frames": _prediction_frames, "prediction_ticks_p95_per_frame": percentile_int(_prediction_tick_samples, 0.95), "reconcile_p95_usec": percentile_int(_reconcile_cost_samples, 0.95), "reconcile_max_usec": _max_reconcile_usec, "frame_work_p95_usec": percentile_int(_frame_cost_samples, 0.95), "frame_work_max_usec": percentile_int(_frame_cost_samples, 1.0), "render_samples": _snapshot_render_samples, "clock_ahead_frames": _snapshot_clock_ahead_frames, "position_hold_frames": _snapshot_position_hold_frames, "position_hold_ratio": float(_snapshot_position_hold_frames) / maxf(float(_snapshot_render_samples), 1.0), "max_local_correction_px": _max_local_correction_px, "max_correction_x_px": _max_correction_x_px, "max_correction_y_px": _max_correction_y_px, "estimated_missing_ticks": _snapshot_tick_gaps})
+					_record_match_diag("snapshot_quality", {"room_id": MultiplayerService.get_room_id(), "samples": _snapshot_interarrival_count, "snapshot_rate_hz": SNAPSHOT_RATE, "snapshot_delay_ticks": _snapshot_delay_ticks, "mean_interarrival_ms": _snapshot_interarrival_total_msec / _snapshot_interarrival_count, "estimated_interval_ms": _snapshot_mean_interval_msec, "jitter_ewma_ms": _snapshot_jitter_msec, "latest_age_ms": latest_age_msec, "estimated_rtt_ms": _estimated_peer_rtt_msec, "buffer_samples": _snapshot_buffer.size(), "buffer_tick_span": latest_tick - int(_snapshot_buffer.front().get("tick", latest_tick)) if not _snapshot_buffer.is_empty() else 0, "render_tick": _snapshot_render_tick, "local_render_tick": _local_render_tick(), "local_prediction_tick": int(_simulation.get("tick")), "authoritative_tick": _last_authoritative_tick, "prediction_lead_ticks": int(_simulation.get("tick")) - _last_authoritative_tick, "prediction_wallclock_capped_frames": _prediction_cap_frames, "prediction_replay_limit_snapshots": _prediction_replay_limit_frames, "prediction_frames": _prediction_frames, "prediction_ticks_p95_per_frame": percentile_int(_prediction_tick_samples, 0.95), "reconcile_p95_usec": percentile_int(_reconcile_cost_samples, 0.95), "reconcile_max_usec": _max_reconcile_usec, "frame_work_p95_usec": percentile_int(_frame_cost_samples, 0.95), "frame_work_max_usec": percentile_int(_frame_cost_samples, 1.0), "render_samples": _snapshot_render_samples, "clock_ahead_frames": _snapshot_clock_ahead_frames, "position_hold_frames": _snapshot_position_hold_frames, "position_hold_ratio": float(_snapshot_position_hold_frames) / maxf(float(_snapshot_render_samples), 1.0), "position_hold_episodes": _snapshot_position_hold_episodes, "position_hold_total_ms": _snapshot_position_hold_total_msec + _remote_position_hold_duration_msec, "position_hold_max_ms": maxf(_snapshot_position_hold_max_msec, _remote_position_hold_duration_msec), "max_local_correction_px": _max_local_correction_px, "max_correction_x_px": _max_correction_x_px, "max_correction_y_px": _max_correction_y_px, "estimated_missing_ticks": _snapshot_tick_gaps})
 					_snapshot_interarrival_total_msec = 0
 					_snapshot_interarrival_count = 0
 					_snapshot_tick_gaps = 0
@@ -542,6 +548,9 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 					_max_reconcile_usec = 0
 					_snapshot_clock_ahead_frames = 0
 					_snapshot_position_hold_frames = 0
+					_snapshot_position_hold_episodes = 0
+					_snapshot_position_hold_total_msec = 0.0
+					_snapshot_position_hold_max_msec = 0.0
 					_snapshot_render_samples = 0
 					_max_local_correction_px = 0.0
 					_max_correction_x_px = 0.0
@@ -1168,6 +1177,29 @@ func _compose_client_snapshot() -> void:
 		displayed_hazards.barrels = interpolated_barrels
 		_snapshot.world_hazards = displayed_hazards
 
+func _track_remote_position_hold() -> void:
+	var held := _remote_position_sample_state in ["buffer_exhausted_hold", "single_sample"]
+	if not held:
+		if _remote_position_hold_started_usec > 0:
+			var ended_duration := float(Time.get_ticks_usec() - _remote_position_hold_started_usec) / 1000.0
+			_snapshot_position_hold_total_msec += ended_duration
+			_snapshot_position_hold_max_msec = maxf(_snapshot_position_hold_max_msec, ended_duration)
+		_remote_position_hold_started_usec = 0
+		_remote_position_hold_reported = false
+		_remote_position_hold_duration_msec = 0.0
+		return
+	var now := Time.get_ticks_usec()
+	if _remote_position_hold_started_usec == 0:
+		_remote_position_hold_started_usec = now
+		_snapshot_position_hold_episodes += 1
+		_remote_position_hold_duration_msec = 0.0
+	elif not _remote_position_hold_reported and now - _remote_position_hold_started_usec >= 120000:
+		_remote_position_hold_reported = true
+		MultiplayerDiagnostics.mark_problem("remote_position_hold")
+	if _remote_position_hold_started_usec > 0:
+		_remote_position_hold_duration_msec = float(now - _remote_position_hold_started_usec) / 1000.0
+		_snapshot_position_hold_max_msec = maxf(_snapshot_position_hold_max_msec, _remote_position_hold_duration_msec)
+
 func _advance_remote_render_clock(delta: float) -> void:
 	if MultiplayerService.is_room_owner() or _snapshot_buffer.is_empty() or not _simulation.started:
 		return
@@ -1649,16 +1681,6 @@ static func estimate_shared_start_msec(host_now_msec: int, safety_margin_seconds
 		average_one_way_msec /= float(peer_round_trip_msec.size())
 	return float(host_now_msec) + maxf(safety_margin_seconds, 0.0) * 1000.0 + average_one_way_msec
 
-static func stable_visual_offset(user_id: String, user_ids: Array, spacing: float = VISUAL_PLAYER_SLOT_SPACING) -> float:
-	var stable_ids: Array[String] = []
-	for value in user_ids:
-		stable_ids.append(str(value))
-	stable_ids.sort()
-	var index := stable_ids.find(user_id)
-	if index < 0 or stable_ids.size() < 2:
-		return 0.0
-	return (float(index) - float(stable_ids.size() - 1) * 0.5) * spacing
-
 func _queue_match_setup() -> bool:
 	var profile := _local_runner_profile()
 	var profile_queued := MultiplayerService.queue_reliable_peer_message(_owner_user_id, {
@@ -1869,7 +1891,7 @@ func _sync_player_views() -> void:
 		var view: Node2D = _player_views[user_id]
 		view.call("set_skin_id", int(state.get("skin_id", 0)))
 		if user_id == _local_user_id and not MultiplayerService.is_room_owner():
-			view.position = _local_render_position() + Vector2(float(_visual_slot_by_user.get(user_id, 0.0)), 0.0)
+			view.position = _local_render_position()
 		else:
 			view.position = _visual_player_position(state, states)
 		var screen_x := float(view.position.x) - camera_left
@@ -1897,7 +1919,7 @@ func _sync_player_views() -> void:
 			var final_position := view.position if is_instance_valid(view) else _visual_player_position(state, states)
 			ordered.append({"user_id": user_id, "world_x": final_position.x, "state": str(state.get("state", "unknown"))})
 			var sprite := view.get_node_or_null("AnimatedSprite2D") as AnimatedSprite2D if is_instance_valid(view) else null
-			sample_players.append({"user_id": user_id, "simulated": Vector2(float(state.get("world_x", 0.0)), float(state.get("y", 0.0))), "rendered_local": final_position, "screen_position": final_position - Vector2(camera_left, 0.0), "visual_offset_x": float(_visual_slot_by_user.get(user_id, 0.0)), "gravity_direction": int(state.get("gravity_direction", 1)), "grounded": bool(state.get("grounded", false)), "blocked": bool(state.get("blocked", false)), "state": str(state.get("state", "unknown")), "z_index": view.z_index if is_instance_valid(view) else 0, "sibling_index": view.get_index() if is_instance_valid(view) else -1, "visible": view.visible if is_instance_valid(view) else false, "flip_v": sprite.flip_v if sprite != null else false})
+			sample_players.append({"user_id": user_id, "simulated": Vector2(float(state.get("world_x", 0.0)), float(state.get("y", 0.0))), "rendered_local": final_position, "screen_position": final_position - Vector2(camera_left, 0.0), "visual_offset_x": 0.0, "gravity_direction": int(state.get("gravity_direction", 1)), "grounded": bool(state.get("grounded", false)), "blocked": bool(state.get("blocked", false)), "state": str(state.get("state", "unknown")), "z_index": view.z_index if is_instance_valid(view) else 0, "sibling_index": view.get_index() if is_instance_valid(view) else -1, "visible": view.visible if is_instance_valid(view) else false, "flip_v": sprite.flip_v if sprite != null else false})
 		ordered.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 			if not is_equal_approx(float(a.world_x), float(b.world_x)):
 				return float(a.world_x) < float(b.world_x)
@@ -1912,19 +1934,12 @@ func _sync_player_views() -> void:
 		var local_history_start := float(_local_render_history.front().get("tick", -1)) if not _local_render_history.is_empty() else -1.0
 		var local_history_end := float(_local_render_history.back().get("tick", -1)) if not _local_render_history.is_empty() else -1.0
 		var local_coverage := sample_render_history(_local_render_history, _local_render_clock_tick)
-		MultiplayerDiagnostics.record_start_sample({"frame_id": _render_frame_index, "sample_monotonic_usec": Time.get_ticks_usec(), "camera_left_before_frame": _camera_left_before_frame, "camera_left": camera_left, "camera_delta_x_frame": _camera_delta_x_frame, "snapshot_render_tick": _snapshot_render_tick, "remote_render_target_tick": _remote_render_target_tick, "remote_render_rate": _remote_render_rate, "remote_render_state": _remote_render_clock_state, "remote_sample_state": _remote_position_sample_state, "remote_sample_from_tick": _remote_position_sample_from_tick, "remote_sample_to_tick": _remote_position_sample_to_tick, "remote_sample_tick": _remote_position_sample_tick, "remote_render_clock_delta": _remote_render_clock_delta, "remote_buffer_headroom_ticks": float(_snapshot_buffer.back().get("tick", 0)) - _snapshot_render_tick if not _snapshot_buffer.is_empty() else -1.0, "authority_tick": _last_authoritative_tick, "simulation_tick": int(_simulation.get("tick")), "local_render_tick": _local_render_clock_tick, "local_render_clock_delta": _local_render_clock_delta, "render_frame_delta_seconds": _render_frame_delta_seconds, "local_render_history_start_tick": local_history_start, "local_render_history_end_tick": local_history_end, "local_render_phase_covered": bool(local_coverage.get("covered", false)), "local_render_resync_count": _local_render_resync_count, "visual_correction_before_frame": _visual_correction_before_frame, "visual_correction_after_frame": _visual_correction, "visual_correction_delta_frame": _visual_correction - _visual_correction_before_frame, "visual_correction": _visual_correction, "players": sample_players})
+		MultiplayerDiagnostics.record_start_sample({"frame_id": _render_frame_index, "sample_monotonic_usec": Time.get_ticks_usec(), "camera_left_before_frame": _camera_left_before_frame, "camera_left": camera_left, "camera_delta_x_frame": _camera_delta_x_frame, "snapshot_render_tick": _snapshot_render_tick, "remote_render_target_tick": _remote_render_target_tick, "remote_render_rate": _remote_render_rate, "remote_render_state": _remote_render_clock_state, "remote_sample_state": _remote_position_sample_state, "remote_sample_from_tick": _remote_position_sample_from_tick, "remote_sample_to_tick": _remote_position_sample_to_tick, "remote_sample_tick": _remote_position_sample_tick, "remote_render_clock_delta": _remote_render_clock_delta, "remote_position_hold_duration_ms": _remote_position_hold_duration_msec, "remote_buffer_headroom_ticks": float(_snapshot_buffer.back().get("tick", 0)) - _snapshot_render_tick if not _snapshot_buffer.is_empty() else -1.0, "authority_tick": _last_authoritative_tick, "simulation_tick": int(_simulation.get("tick")), "local_render_tick": _local_render_clock_tick, "local_render_clock_delta": _local_render_clock_delta, "render_frame_delta_seconds": _render_frame_delta_seconds, "local_render_history_start_tick": local_history_start, "local_render_history_end_tick": local_history_end, "local_render_phase_covered": bool(local_coverage.get("covered", false)), "local_render_resync_count": _local_render_resync_count, "visual_correction_before_frame": _visual_correction_before_frame, "visual_correction_after_frame": _visual_correction, "visual_correction_delta_frame": _visual_correction - _visual_correction_before_frame, "visual_correction": _visual_correction, "players": sample_players})
 
-func _visual_player_position(state: Dictionary, states: Array) -> Vector2:
-	var world_position := Vector2(float(state.get("world_x", 0.0)), float(state.get("y", 0.0)))
-	var user_id := str(state.get("user_id", ""))
-	var offset := float(_visual_slot_by_user.get(user_id, 0.0))
-	if not _visual_slot_by_user.has(user_id):
-		var user_ids: Array[String] = []
-		for other in states:
-			if other is Dictionary:
-				user_ids.append(str(other.get("user_id", "")))
-		offset = stable_visual_offset(user_id, user_ids)
-	return world_position + Vector2(offset, 0.0)
+func _visual_player_position(state: Dictionary, _states: Array) -> Vector2:
+	# Roster spacing moved sprites away from their collision positions, making
+	# wall contact look like a collision with another runner.
+	return Vector2(float(state.get("world_x", 0.0)), float(state.get("y", 0.0)))
 
 func _bring_local_runner_to_front() -> void:
 	# Player order in a snapshot is shared by every peer. Keep the local runner
@@ -2003,7 +2018,7 @@ func _refresh_camera_state() -> void:
 		_spectator_target_user_id = ""
 	else:
 		_camera_mode = CAMERA_MODE_SPECTATING
-	var followed_x := local_render.x + float(_visual_slot_by_user.get(_local_user_id, 0.0))
+	var followed_x := local_render.x
 	if _camera_mode == CAMERA_MODE_SPECTATING:
 		var players: Variant = _snapshot.get("players", [])
 		if players is Array:

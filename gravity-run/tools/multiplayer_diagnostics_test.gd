@@ -63,13 +63,18 @@ func _ready() -> void:
 	recorder.increment_total("transport_packets")
 	recorder.increment_total("transport_packets_snapshot")
 	assert(recorder._capture.totals.transport_packets == 1 and recorder._capture.totals.transport_packets_snapshot == 1 and recorder._capture.totals.transport_packets_control == 0, "packet totals distinguish decoded packets from polling and split channels")
-	recorder._capture = {"detail_samples": [], "start_samples": [], "incidents": [], "browser_samples": [], "events": [], "windows": [], "loss": {}, "totals": {}}
+	recorder._capture = {"phase": "running", "detail_samples": [], "start_samples": [], "incidents": [], "browser_samples": [], "events": [], "windows": [], "loss": {}, "totals": {"process_frames": 0}}
 	for index in 500:
 		recorder._capture.detail_samples.append({"padding": "m".repeat(5000)})
-	recorder._enforce_capture_memory_budget()
-	assert(JSON.stringify(recorder._capture).to_utf8_buffer().size() <= DiagnosticsScript.MAX_LOCAL_BYTES, "active capture remains within the 2 MiB memory budget")
-	assert(recorder._capture.loss.get("capture_detail_samples_reduced", false), "active capture reduction is marked")
-	recorder._capture = {"phase": "running", "start_samples": [], "loss": {}}
+	recorder._window_frames = 1
+	recorder._started_usec = Time.get_ticks_usec() - 1000000
+	recorder._window_started_usec = recorder._started_usec
+	recorder._flush_window(Time.get_ticks_usec())
+	assert(recorder._capture.detail_samples.size() == 500 and not recorder._capture.loss.has("capture_detail_samples_reduced"), "active match window flush must not serialize or reduce the full capture")
+	var frozen_large_capture: Dictionary = recorder._enforce_capture_memory_budget(recorder._capture)
+	assert(JSON.stringify(frozen_large_capture).to_utf8_buffer().size() <= DiagnosticsScript.MAX_LOCAL_BYTES, "post-match frozen capture remains within the 2 MiB memory budget")
+	assert(frozen_large_capture.loss.get("capture_detail_samples_reduced", false), "post-match reduction is explicitly marked")
+	recorder._capture = {"phase": "running", "start_samples": [], "loss": {}, "totals": {}}
 	recorder._started_usec = Time.get_ticks_usec()
 	recorder._race_started_usec = recorder._started_usec
 	recorder._last_start_sample_usec = 0
@@ -77,11 +82,11 @@ func _ready() -> void:
 		recorder.record_start_sample({"frame": index, "camera_left": float(index), "players": []})
 	assert(recorder._capture.start_samples.size() == DiagnosticsScript.MAX_START_SAMPLES, "frame-dense start diagnostics stay within the configured hard cap")
 	assert(recorder._capture.loss.start_samples_dropped == 5, "overflow is counted while retaining the latest frame samples")
-	assert(recorder._capture.start_samples.back().sample.frame == DiagnosticsScript.MAX_START_SAMPLES + 4, "the capped frame trace keeps its newest samples instead of discarding the incident tail")
+	assert(recorder._capture.start_samples.back().sample.frame == DiagnosticsScript.MAX_START_SAMPLES - 1, "the startup capture preserves the first frames instead of replacing them with later samples")
 	recorder._race_started_usec -= 4000000
 	recorder.record_start_sample({"frame": "outside_capture_window"})
 	assert(recorder._capture.start_samples.size() == DiagnosticsScript.MAX_START_SAMPLES, "frame-dense capture stops after its three-second race window")
-	recorder._capture = {"phase": "running", "start_samples": [], "detail_samples": [], "incidents": [], "events": [], "loss": {}}
+	recorder._capture = {"phase": "running", "start_samples": [], "detail_samples": [], "incidents": [], "events": [], "loss": {}, "totals": {}}
 	recorder._started_usec = Time.get_ticks_usec() - 4000000
 	recorder._race_started_usec = recorder._started_usec
 	recorder._frame_sample_ring.clear()
@@ -89,8 +94,23 @@ func _ready() -> void:
 		recorder.record_start_sample({"frame": index})
 	recorder.mark_problem("flicker_test")
 	assert(recorder._incident_capture.pre_frame_samples.size() == 4, "marking an incident must preserve recent frame-level samples from before the mark")
-	recorder.record_start_sample({"frame": 4})
+	assert(recorder._frame_sample_ring.is_empty(), "incident marking must rotate, not deep-copy/sanitize, its pre-event frame ring")
+	recorder.record_start_sample({"frame": 4, "user_id": "guest-uuid"})
 	assert(recorder._incident_capture.frame_samples.size() == 1, "incident capture must continue collecting frame-level samples after the mark")
+	assert(recorder._incident_capture.frame_samples[0].sample.user_id == "guest-uuid", "raw frame samples stay local until report finalization")
+	recorder._capture.incidents.append(recorder._incident_capture)
+	var frozen_incident: Dictionary = recorder._capture.duplicate(true)
+	recorder._sanitize_incident_frames(frozen_incident)
+	assert(frozen_incident.incidents[0].frame_samples[0].sample.user_id == "p1", "frozen incident samples are anonymized after the race")
+	recorder._capture = {"phase": "results", "schema_version": 1, "report_id": "deferred-report-test", "match_generation": "test-generation", "terminal_state": "running", "windows": [], "detail_samples": [], "start_samples": [{"t_ms": 0, "sample": {"user_id": "guest-uuid", "frame_id": 0}}], "events": [], "incidents": [], "browser_samples": [], "timings": {}, "totals": {"process_frames": 0}, "loss": {}}
+	recorder._started_usec = Time.get_ticks_usec()
+	recorder._window_started_usec = recorder._started_usec
+	recorder.finish_match("finished")
+	assert(recorder._capture.is_empty() and recorder._reports.is_empty() and recorder._pending_report_finalizations == 1, "finish freezes the capture immediately and defers report work")
+	assert(recorder.get_export_text().contains("saved after the match"), "active report export is refused instead of serializing the live capture")
+	await get_tree().process_frame
+	assert(recorder._pending_report_finalizations == 0 and recorder.get_latest_report().terminal_state == "finished", "deferred finalization saves the finished report after the results transition")
+	assert(recorder.get_latest_report().start_samples[0].sample.user_id == "p1", "deferred finalization anonymizes retained startup data")
 	print("Multiplayer diagnostics size/privacy tests passed.")
 	recorder.free()
 	get_tree().quit()

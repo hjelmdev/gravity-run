@@ -53,7 +53,6 @@ func _ready() -> void:
 	spectator_view.set("_local_user_id", "dead_local")
 	spectator_view.set("_snapshot", {"players": spectator_roster})
 	spectator_view.set("_authoritative_snapshot", {"finished": false, "players": spectator_roster})
-	spectator_view.set("_visual_slot_by_user", {"trailer": 0.0})
 	spectator_view.call("_refresh_camera_state")
 	assert(is_equal_approx(float(spectator_view.call("_camera_left")), 120.0), "a dead runner ahead of survivors must not pin the spectator camera at its own location")
 	spectator_view.free()
@@ -125,7 +124,6 @@ func _ready() -> void:
 	host_camera_view.set("_simulation", host_simulation)
 	host_camera_view.set("_snapshot", host_simulation.get_snapshot())
 	host_camera_view.set("_authoritative_snapshot", {})
-	host_camera_view.set("_visual_slot_by_user", {"guest_b": 0.0})
 	host_camera_view.call("_refresh_camera_state")
 	assert(str(host_camera_view.call("_player_state", "host").get("state", "")) == "dead", "the host's own simulated death must be authoritative without a received snapshot")
 	assert(host_camera_view.get("_camera_mode") == "SPECTATING" and host_camera_view.get("_spectator_target_user_id") == "guest_b", "a dead host should spectate the living guest")
@@ -248,7 +246,6 @@ func _ready() -> void:
 	guest_spectator_view.set("_snapshot", spectator_simulation.get_snapshot())
 	guest_spectator_view.set("_authoritative_snapshot", spectator_simulation.get_snapshot())
 	guest_spectator_view.set("_last_authoritative_tick", 1)
-	guest_spectator_view.set("_visual_slot_by_user", {"guest_b": 0.0})
 	var guest_a_prediction: RefCounted = LocalPredictionScript.new()
 	guest_a_prediction.bind(spectator_simulation, "guest_a")
 	guest_spectator_view.set("_local_prediction", guest_a_prediction)
@@ -317,7 +314,7 @@ func _ready() -> void:
 				received_at = elapsed
 				next_packet_at += float(packet_intervals[packet_index % packet_intervals.size()])
 				packet_index += 1
-			var clock_step: Dictionary = MatchScript.advance_remote_render_clock(remote_tick, frame_delta, latest_tick, maxf(latest_tick - 32.0, 0.0), elapsed - received_at, 2.0, 33.0, 0.0)
+			var clock_step: Dictionary = MatchScript.advance_remote_render_clock(remote_tick, frame_delta, latest_tick, maxf(latest_tick - 32.0, 0.0), elapsed - received_at, 5.0, 33.0, 0.0)
 			remote_tick = float(clock_step.render_tick)
 			assert(remote_tick >= last_tick and remote_tick - last_tick <= frame_delta * 60.0 * 1.081 + 0.001, "remote render time must advance continuously without packet-arrival jumps at %d Hz, frame %d" % [fps, frame])
 			assert(remote_tick <= latest_tick, "the remote render clock must never run ahead of available position samples at %d Hz, frame %d" % [fps, frame])
@@ -338,6 +335,9 @@ func _ready() -> void:
 				relative_max = maxf(relative_max, equal_speed_relative_tick)
 		assert(absf(remote_tick - 598.0) < 12.0, "jitter-adjusted render clock should stay near the delayed host timeline after 10 seconds at %d Hz" % fps)
 		assert(relative_max - relative_min < 2.0 and relative_min > 0.0, "equal-speed local and remote runners should keep a stable intentional render offset at %d Hz" % fps)
+	var buffered_clock: Dictionary = MatchScript.advance_remote_render_clock(100.0, 1.0 / 60.0, 104.0, 72.0, 0.0, 5.0, 20.0)
+	assert(is_equal_approx(float(buffered_clock.target_tick), 99.6), "the render target should preserve the configured five-tick buffer after RTT compensation")
+	assert(float(buffered_clock.buffer_headroom_ticks) >= 3.0, "remote rendering should retain actual snapshot headroom instead of advancing to the latest sample")
 	var buffer_resync: Dictionary = MatchScript.advance_remote_render_clock(5.0, 1.0 / 60.0, 8.0, 6.0, 0.0, 2.0, 30.0)
 	assert(buffer_resync.resynced and buffer_resync.state == "buffer_underrun_resync" and is_equal_approx(float(buffer_resync.render_tick), 6.0), "falling behind the retained buffer must be an explicit forward resync")
 	var buffer_hold: Dictionary = MatchScript.advance_remote_render_clock(7.0, 1.0 / 60.0, 7.0, 0.0, 0.0, 2.0, 30.0)
@@ -409,7 +409,6 @@ func _ready() -> void:
 	draw_order_root.add_child(remote_runner)
 	draw_order_view.set("_local_user_id", "local")
 	draw_order_view.set("_player_views", {"local": local_runner, "remote": remote_runner})
-	draw_order_view.set("_visual_slot_by_user", {"local": -14.0, "remote": 14.0, "third": 0.0})
 	draw_order_view.call("_bring_local_runner_to_front")
 	assert(draw_order_root.get_child(draw_order_root.get_child_count() - 1) == local_runner, "each client should draw its own runner in front regardless of shared player order")
 	var overlap_states: Array = [
@@ -419,7 +418,7 @@ func _ready() -> void:
 	]
 	var local_visual: Vector2 = draw_order_view.call("_visual_player_position", overlap_states[0], overlap_states)
 	var remote_visual: Vector2 = draw_order_view.call("_visual_player_position", overlap_states[1], overlap_states)
-	assert(is_equal_approx(absf(local_visual.x - remote_visual.x), 28.0), "overlapping runners should use stable roster offsets")
+	assert(local_visual == Vector2(400.0, 200.0) and remote_visual == local_visual, "overlapping runners must be drawn at their collision positions without roster spacing")
 	var crossed_states: Array = [
 		{"user_id": "local", "world_x": 411.0, "y": 200.0},
 		{"user_id": "remote", "world_x": 389.0, "y": 200.0},
@@ -427,8 +426,11 @@ func _ready() -> void:
 	]
 	var local_offset_before_crossing := local_visual.x - float(overlap_states[0].world_x)
 	var local_after_crossing: Vector2 = draw_order_view.call("_visual_player_position", crossed_states[0], crossed_states)
-	assert(is_equal_approx(local_after_crossing.x - float(crossed_states[0].world_x), local_offset_before_crossing), "a runner crossing another or changing vertical lane must not change its stable visual slot")
-	assert(is_equal_approx(MatchScript.stable_visual_offset("local", ["third", "remote", "local"]), MatchScript.stable_visual_offset("local", ["local", "third", "remote"])), "visual slots must not depend on player array order")
+	assert(is_equal_approx(local_after_crossing.x - float(crossed_states[0].world_x), local_offset_before_crossing), "crossing another runner must not introduce a visual offset")
+	for blocked_id: String in ["local", "remote", "third"]:
+		var blocked_state := {"user_id": blocked_id, "world_x": 1206.83333333333, "y": 438.0, "blocked": true}
+		var blocked_visual: Vector2 = draw_order_view.call("_visual_player_position", blocked_state, overlap_states)
+		assert(blocked_visual.is_equal_approx(Vector2(1206.83333333333, 438.0)), "every roster slot must display the actual blocked collision position")
 	draw_order_view.free()
 	match_view.add_child(course_root)
 	match_view.set("_course_root", course_root)
