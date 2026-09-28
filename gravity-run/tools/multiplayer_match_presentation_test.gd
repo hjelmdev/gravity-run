@@ -197,13 +197,15 @@ func _ready() -> void:
 	while int(guest_simulation.get("tick")) < 63:
 		guest_simulation.advance_to_tick(int(guest_simulation.get("tick")) + 1, 1, ["guest"])
 		clock_view.call("_record_local_render_sample")
-	clock_view.set("_local_render_clock_tick", 62.5)
+	clock_view.set("_local_render_clock_tick", 60.5)
 	clock_view.set("_network_clock", 2.55 + 1.0 / 30.0)
 	var ordinary_clock_snapshot: Dictionary = JSON.parse_string(JSON.stringify(host_simulation_for_clock.get_snapshot()))
 	ordinary_clock_snapshot["match_generation"] = "clock-test"
 	assert(bool(clock_view.call("_accept_authoritative_snapshot", ordinary_clock_snapshot)), "ordinary snapshot should reconcile through the complete receive path")
 	assert(int(guest_simulation.get("tick")) == 63 and int(clock_view.call("_prediction_target_tick")) == 63, "normal receive must not replay to tick 65 and then immediately target 63")
 	assert((clock_view.get("_visual_correction") as Vector2).length() < 0.01, "constant-speed replay at the same simulation phase must not be turned into correction")
+	assert(is_equal_approx(float(clock_view.get("_local_render_clock_tick")), 60.5), "a checkpoint at tick 61 must preserve the already displayed 60.5 render phase")
+	assert(str(clock_view.get("_local_render_history_coverage")) == "covered" and MatchScript.sample_render_history(clock_view.get("_local_render_history"), 60.5).covered, "reconcile must retain history coverage before a newer checkpoint instead of clamping to its first replay sample")
 	var before_bad_snapshot: Dictionary = guest_simulation.get_snapshot()
 	var before_bad_anchor := float(clock_view.get("_last_snapshot_received_network_clock"))
 	var before_bad_buffer_size := (clock_view.get("_snapshot_buffer") as Array).size()
@@ -268,6 +270,49 @@ func _ready() -> void:
 	assert(is_equal_approx(MatchScript.render_target_tick(100.0, 0.0, 5.0, -1.0), 95.0), "snapshot rendering should start behind the newest host tick")
 	assert(is_equal_approx(MatchScript.render_target_tick(100.0, 1.0, 5.0, 95.0), 103.0), "snapshot extrapolation must be capped to three ticks")
 	assert(is_equal_approx(MatchScript.render_target_tick(100.0, 0.0, 5.0, 96.0), 96.0), "the render timeline must never move backwards")
+	var uncovered_sample: Dictionary = MatchScript.sample_render_history([{"tick": 61, "position": Vector2(10.0, 0.0)}, {"tick": 63, "position": Vector2(20.0, 0.0)}], 60.5)
+	assert(not bool(uncovered_sample.covered), "a clamped endpoint must not be reported as a valid sample at an earlier time")
+	var merged_phase := MatchScript.merge_render_history_at_checkpoint(
+		[{"tick": 60, "position": Vector2(500.0, 0.0)}, {"tick": 61, "position": Vector2(508.333333, 0.0)}, {"tick": 62, "position": Vector2(516.666667, 0.0)}],
+		[{"tick": 61, "position": Vector2(508.333333, 0.0)}, {"tick": 62, "position": Vector2(516.666667, 0.0)}, {"tick": 63, "position": Vector2(525.0, 0.0)}],
+		61, 60.5
+	)
+	assert(bool(merged_phase.coverage.covered) and (merged_phase.coverage.position as Vector2).distance_to(Vector2(504.1666665, 0.0)) < 0.01, "merging checkpoint history must preserve the old prefix and exactly cover the 60.5 render phase: %s" % str(merged_phase))
+	for fps in [60, 120, 240]:
+		var remote_tick := 0.0
+		var elapsed := 0.0
+		var received_at := 0.0
+		var latest_tick := 0.0
+		var next_packet_at := 0.0
+		var packet_intervals := [0.028, 0.036, 0.031, 0.039, 0.033]
+		var packet_index := 0
+		var last_tick := remote_tick
+		var relative_min := INF
+		var relative_max := -INF
+		for frame in range(fps * 10):
+			var frame_delta := 1.0 / float(fps)
+			elapsed += frame_delta
+			if elapsed >= next_packet_at:
+				latest_tick = maxf(0.0, floor((elapsed - 0.0165) * 60.0))
+				received_at = elapsed
+				next_packet_at += float(packet_intervals[packet_index % packet_intervals.size()])
+				packet_index += 1
+			var clock_step: Dictionary = MatchScript.advance_remote_render_clock(remote_tick, frame_delta, latest_tick, maxf(latest_tick - 32.0, 0.0), elapsed - received_at, 2.0, 33.0, 0.0)
+			remote_tick = float(clock_step.render_tick)
+			assert(remote_tick >= last_tick and remote_tick - last_tick <= frame_delta * 60.0 * 1.081 + 0.001, "remote render time must advance continuously without packet-arrival jumps at %d Hz, frame %d" % [fps, frame])
+			last_tick = remote_tick
+			if elapsed >= 2.0:
+				var equal_speed_relative_tick := elapsed * 60.0 - remote_tick
+				relative_min = minf(relative_min, equal_speed_relative_tick)
+				relative_max = maxf(relative_max, equal_speed_relative_tick)
+		assert(absf(remote_tick - 598.0) < 12.0, "jitter-adjusted render clock should stay near the delayed host timeline after 10 seconds at %d Hz" % fps)
+		assert(relative_max - relative_min < 2.0 and relative_min > 0.0, "equal-speed local and remote runners should keep a stable intentional render offset at %d Hz" % fps)
+	var buffer_resync: Dictionary = MatchScript.advance_remote_render_clock(5.0, 1.0 / 60.0, 8.0, 6.0, 0.0, 2.0, 30.0)
+	assert(buffer_resync.resynced and buffer_resync.state == "buffer_underrun_resync" and is_equal_approx(float(buffer_resync.render_tick), 6.0), "falling behind the retained buffer must be an explicit forward resync")
+	var buffer_hold: Dictionary = MatchScript.advance_remote_render_clock(11.0, 1.0 / 60.0, 7.0, 0.0, 0.0, 2.0, 30.0)
+	assert(buffer_hold.state == "extrapolation_hold" and is_equal_approx(float(buffer_hold.render_tick), 11.0) and is_zero_approx(float(buffer_hold.clock_delta)), "a short snapshot starvation must hold at the extrapolation bound without rewinding")
+	var large_gap_hold: Dictionary = MatchScript.advance_remote_render_clock(30.0, 1.0 / 60.0, 10.0, 0.0, 0.0, 2.0, 30.0)
+	assert(large_gap_hold.state == "large_stream_gap_hold" and is_equal_approx(float(large_gap_hold.render_tick), 30.0), "a genuine large authority gap must be separately diagnosed and wait without a backward jump")
 	assert(MatchScript.correction_after_authority(Vector2(102.0, 202.0), Vector2(100.0, 200.0)).is_equal_approx(Vector2(2.0, 2.0)), "small local prediction errors should fade smoothly")
 	assert(MatchScript.correction_after_authority(Vector2(300.0, 200.0), Vector2(100.0, 200.0)).is_equal_approx(Vector2(200.0, 0.0)), "large ordinary prediction errors should be smoothed, not abruptly erased")
 	assert(MatchScript.correction_after_authority(Vector2(100.0, 350.0), Vector2(100.0, 200.0)).is_equal_approx(Vector2(0.0, 150.0)), "large vertical errors must not erase an unrelated horizontal render anchor")
