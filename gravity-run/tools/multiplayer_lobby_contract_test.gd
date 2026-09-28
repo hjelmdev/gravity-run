@@ -5,6 +5,7 @@ var failures := 0
 func _initialize() -> void:
 	var payload_sql := FileAccess.get_file_as_string("res://supabase/migrations/202609270010_restore_skin_id_in_room_payload.sql")
 	var phase_sql := FileAccess.get_file_as_string("res://supabase/migrations/202609270011_authoritative_match_phases.sql")
+	var capacity_sql := FileAccess.get_file_as_string("res://supabase/migrations/202609280001_multiplayer_five_player_rooms.sql")
 	var service_source := FileAccess.get_file_as_string("res://systems/multiplayer_service.gd")
 	var provider_source := FileAccess.get_file_as_string("res://systems/supabase_lobby_provider.gd")
 	var match_source := FileAccess.get_file_as_string("res://ui/multiplayer_match.gd")
@@ -19,6 +20,7 @@ func _initialize() -> void:
 	_check(phase_sql.contains("v_room.phase = 'RUNNING' and p_next_phase = 'FINISHED'"), "running should advance into a finished match")
 	_check(phase_sql.contains("if v_phase = 'OPEN' then"), "return-to-lobby should safely allow idempotent retries")
 	_check(phase_sql.contains("v_room.phase <> 'FINISHED'"), "only a finished match should return to the open lobby")
+	_check(capacity_sql.contains("max_players between 2 and 5") and capacity_sql.contains("player_slot between 1 and 5") and capacity_sql.contains("set max_players = 5"), "the five-player migration should expand room and slot limits including existing open rooms")
 	_check(service_source.contains("func _lobby_context()") and service_source.contains("_room_generation += 1"), "lobby request replies should be scoped to a room generation")
 	_check(service_source.contains("room_state_changed") and service_source.contains("poll_interval := 1.0"), "room hints should supplement countdown recovery polling")
 	_check(provider_source.contains("_pending_calls.insert") and provider_source.contains("first_background") and provider_source.contains("retry_count >= 2"), "lobby mutations should be prioritized, queued, and recoverable")
