@@ -63,6 +63,18 @@ func _ready() -> void:
 	recorder._enforce_capture_memory_budget()
 	assert(JSON.stringify(recorder._capture).to_utf8_buffer().size() <= DiagnosticsScript.MAX_LOCAL_BYTES, "active capture remains within the 2 MiB memory budget")
 	assert(recorder._capture.loss.get("capture_detail_samples_reduced", false), "active capture reduction is marked")
+	recorder._capture = {"phase": "running", "start_samples": [], "loss": {}}
+	recorder._started_usec = Time.get_ticks_usec()
+	recorder._race_started_usec = recorder._started_usec
+	recorder._last_start_sample_usec = 0
+	for index in DiagnosticsScript.MAX_START_SAMPLES + 5:
+		recorder.record_start_sample({"frame": index, "camera_left": float(index), "players": []})
+	assert(recorder._capture.start_samples.size() == DiagnosticsScript.MAX_START_SAMPLES, "frame-dense start diagnostics stay within the configured hard cap")
+	assert(recorder._capture.loss.start_samples_dropped == 5, "overflow is counted while retaining the latest frame samples")
+	assert(recorder._capture.start_samples.back().sample.frame == DiagnosticsScript.MAX_START_SAMPLES + 4, "the capped frame trace keeps its newest samples instead of discarding the incident tail")
+	recorder._race_started_usec -= 4000000
+	recorder.record_start_sample({"frame": "outside_capture_window"})
+	assert(recorder._capture.start_samples.size() == DiagnosticsScript.MAX_START_SAMPLES, "frame-dense capture stops after its three-second race window")
 	print("Multiplayer diagnostics size/privacy tests passed.")
 	recorder.free()
 	get_tree().quit()

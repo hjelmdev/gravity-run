@@ -248,12 +248,16 @@ func record_start_sample(sample: Dictionary) -> void:
 	var now := Time.get_ticks_usec()
 	if _race_started_usec > 0 and now - _race_started_usec > 3000000:
 		return
-	if _last_start_sample_usec > 0 and now - _last_start_sample_usec < DETAIL_INTERVAL_USEC:
+	# Keep low-rate context during the countdown, then capture every rendered
+	# frame for the first three seconds so one-frame position/camera jumps are
+	# visible in the report. The bounded buffer below retains the newest frames.
+	var sample_interval_usec := DETAIL_INTERVAL_USEC if _race_started_usec == 0 else 0
+	if _last_start_sample_usec > 0 and now - _last_start_sample_usec < sample_interval_usec:
 		return
 	_last_start_sample_usec = now
 	if _capture.start_samples.size() >= MAX_START_SAMPLES:
+		_capture.start_samples.pop_front()
 		_capture.loss.start_samples_dropped = int(_capture.loss.get("start_samples_dropped", 0)) + 1
-		return
 	_capture.start_samples.append({"t_ms": _elapsed_ms(), "sample": _sanitize(sample)})
 
 func mark_simulation_started(details: Dictionary = {}) -> void:
