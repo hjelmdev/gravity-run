@@ -55,7 +55,7 @@ func reconcile(checkpoint: Variant, requested_target_tick: int) -> Dictionary:
 	var old_tick := int(simulation.get("tick"))
 	var old_player: Dictionary = simulation.get_player(local_user_id)
 	if not simulation.restore_checkpoint(checkpoint):
-		return {"ok": false, "reason": "checkpoint_validation_failed"}
+		return {"ok": false, "reason": "checkpoint_validation_failed:%s" % str(simulation.get("last_restore_error"))}
 
 	var confirmed := {}
 	var results_by_player: Variant = checkpoint.get("processed_inputs", {})

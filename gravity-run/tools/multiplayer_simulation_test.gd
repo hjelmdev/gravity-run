@@ -6,6 +6,7 @@ const SimulationScript := preload("res://systems/multiplayer_simulation.gd")
 const LocalPredictionScript := preload("res://systems/multiplayer_local_prediction.gd")
 const ManifestScript := preload("res://systems/multiplayer_course_manifest.gd")
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
+const TerminalEventRules := preload("res://systems/multiplayer_terminal_event.gd")
 
 func _initialize() -> void:
 	assert(not HazardRules.spike_group_intersects_rect(1000.0, 460.0, 1, 32.0, 28.0, 32.0, false, Rect2(Vector2(986.0, 428.0), Vector2(2.0, 2.0))), "the triangular spike tip must not collide like its old bounding box")
@@ -70,6 +71,54 @@ func _initialize() -> void:
 	replay_a.start()
 	replay_b.start()
 	assert(replay_a.restore_checkpoint(checkpoint) and replay_b.restore_checkpoint(checkpoint), "a complete authority checkpoint should restore into separate prediction instances")
+	var wire_checkpoint: Variant = JSON.parse_string(JSON.stringify(checkpoint))
+	assert(wire_checkpoint is Dictionary, "a checkpoint must survive a real JSON encode/decode roundtrip")
+	var json_prediction_simulation := SimulationScript.new()
+	assert(json_prediction_simulation.configure(_make_manifest([], 10000), [{"user_id": "local"}, {"user_id": "host"}]).is_empty())
+	json_prediction_simulation.start()
+	var json_prediction := LocalPredictionScript.new()
+	json_prediction.bind(json_prediction_simulation, "local")
+	assert(json_prediction.remember_input(1, 10, -1, 1234))
+	var json_reconciliation: Dictionary = json_prediction.reconcile(wire_checkpoint, 12)
+	assert(bool(json_reconciliation.get("ok", false)), "local prediction must reconcile against a JSON-decoded checkpoint: %s" % json_reconciliation.get("reason", "unknown"))
+	assert(int(json_reconciliation.get("replayed_to_tick", -1)) == 12)
+	assert(int(json_prediction_simulation.get_player("local").get("gravity_direction", 1)) == -1, "unconfirmed local input must replay after JSON restore")
+	wire_checkpoint["placements"] = [{"user_id": "host", "display_name": "Host", "finish_tick": 7, "status": "finished"}]
+	var wire_restore := SimulationScript.new()
+	assert(wire_restore.configure(_make_manifest([], 10000), [{"user_id": "local"}, {"user_id": "host"}]).is_empty())
+	wire_restore.start()
+	assert(wire_restore.restore_checkpoint(wire_checkpoint), "JSON-decoded checkpoint arrays must restore without typed-array runtime errors: %s" % wire_restore.last_restore_error)
+	assert(int(wire_restore.get_snapshot().get("tick", -1)) == int(checkpoint.tick))
+	assert(wire_restore.get_snapshot().get("placements", []).size() == 1)
+	var atomic_before_wire_reject: Dictionary = wire_restore.get_snapshot()
+	var invalid_wire_checkpoint: Dictionary = wire_checkpoint.duplicate(true)
+	invalid_wire_checkpoint["placements"] = ["not a placement dictionary"]
+	assert(not wire_restore.restore_checkpoint(invalid_wire_checkpoint), "malformed JSON placement elements must be rejected")
+	assert(wire_restore.last_restore_error == "placement_not_dictionary:0")
+	assert(wire_restore.get_snapshot() == atomic_before_wire_reject, "failed JSON checkpoint restore must leave all simulation state untouched")
+	var barrel_wire_manifest := _make_manifest([{
+		"event_id": "wire_barrels",
+		"kind": "barrels",
+		"x": 900.0,
+		"y": 460.0,
+		"count": 2,
+		"spacing": 52.0,
+		"motion_speed_multiplier": 1.2,
+	}], 10000)
+	var barrel_wire_source := SimulationScript.new()
+	assert(barrel_wire_source.configure(barrel_wire_manifest, [{"user_id": "local"}, {"user_id": "host"}]).is_empty())
+	barrel_wire_source.start()
+	barrel_wire_source.advance_to_tick(8)
+	var barrel_wire_checkpoint: Dictionary = JSON.parse_string(JSON.stringify(barrel_wire_source.get_snapshot()))
+	var barrel_wire_target := SimulationScript.new()
+	assert(barrel_wire_target.configure(barrel_wire_manifest, [{"user_id": "local"}, {"user_id": "host"}]).is_empty())
+	barrel_wire_target.start()
+	assert(barrel_wire_target.restore_checkpoint(barrel_wire_checkpoint), "JSON-decoded barrel arrays must restore as typed candidates: %s" % barrel_wire_target.last_restore_error)
+	assert(barrel_wire_target.get_snapshot().get("world_hazards", {}).get("barrels", []).size() == 2)
+	var terminal_packet := {"event_tick": 1, "sent_host_tick": 2, "terminal_tick": 1, "terminal_reason": "out_of_bounds", "player": {"user_id": "local", "state": "dead", "terminal_tick": 1, "terminal_reason": "out_of_bounds"}}
+	assert(TerminalEventRules.validation_error(terminal_packet).is_empty(), "a real death on tick 1 must remain valid when queued at host tick 2")
+	terminal_packet["terminal_tick"] = 2
+	assert(TerminalEventRules.validation_error(terminal_packet) == "invalid_terminal_tick", "terminal payload tick mismatches must be rejected explicitly")
 	assert(bool(replay_a.queue_flip("local", 1, -1, 10).get("queued", false)))
 	assert(bool(replay_b.queue_flip("local", 1, -1, 10).get("queued", false)))
 	replay_a.advance_to_tick(20)

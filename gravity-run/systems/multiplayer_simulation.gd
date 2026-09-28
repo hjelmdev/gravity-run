@@ -31,6 +31,7 @@ var _last_queued_sequence: Dictionary = {}
 var _peak_backlog_seconds := 0.0
 var _terminal_transitions: Array[Dictionary] = []
 var match_finish_reason := ""
+var last_restore_error := ""
 
 func configure(course_manifest: Resource, players: Array) -> String:
 	var player_error := RaceRulesScript.validate_players(players)
@@ -262,10 +263,13 @@ func get_snapshot() -> Dictionary:
 	return {"tick": tick, "course_identity": str(manifest.get("course_identity")) if manifest != null else "", "players": snapshot_players, "placements": _placements.duplicate(true), "finished": match_finished, "finish_reason": match_finish_reason, "world_time": _world_elapsed, "accumulator": fmod(_accumulator, FIXED_DELTA), "world_hazards": {"barrels": _barrels.duplicate(true), "destroyed_event_ids": _destroyed_event_ids.keys()}, "processed_inputs": _processed_inputs.duplicate(true), "backlog_seconds": _accumulator, "peak_backlog_seconds": _peak_backlog_seconds}
 
 func restore_checkpoint(checkpoint: Variant) -> bool:
-	if not checkpoint is Dictionary or manifest == null:
-		return false
+	last_restore_error = ""
+	if not checkpoint is Dictionary:
+		return _reject_checkpoint("checkpoint_not_dictionary")
+	if manifest == null:
+		return _reject_checkpoint("manifest_missing")
 	if str(checkpoint.get("course_identity", "")) != str(manifest.get("course_identity")):
-		return false
+		return _reject_checkpoint("course_identity_mismatch")
 	var checkpoint_tick := int(checkpoint.get("tick", -1))
 	var world_time := float(checkpoint.get("world_time", NAN))
 	var accumulator := float(checkpoint.get("accumulator", NAN))
@@ -273,72 +277,103 @@ func restore_checkpoint(checkpoint: Variant) -> bool:
 	var raw_placements: Variant = checkpoint.get("placements", null)
 	var raw_hazards: Variant = checkpoint.get("world_hazards", null)
 	var raw_results: Variant = checkpoint.get("processed_inputs", {})
-	if checkpoint_tick < 0 or not is_finite(world_time) or world_time < 0.0 or absf(world_time - float(checkpoint_tick) * FIXED_DELTA) > 0.001 or not is_finite(accumulator) or accumulator < 0.0 or accumulator >= FIXED_DELTA or not raw_players is Array or not raw_placements is Array or not raw_results is Dictionary:
-		return false
-	if not authoritative_world_hazard_error(raw_hazards).is_empty() or raw_players.size() != _players.size():
-		return false
+	var raw_finished: Variant = checkpoint.get("finished", false)
+	var raw_finish_reason: Variant = checkpoint.get("finish_reason", "")
+	if typeof(raw_finished) != TYPE_BOOL or typeof(raw_finish_reason) != TYPE_STRING:
+		return _reject_checkpoint("finish_fields_wrong_type")
+	if checkpoint_tick < 0:
+		return _reject_checkpoint("invalid_tick")
+	if not is_finite(world_time) or world_time < 0.0 or absf(world_time - float(checkpoint_tick) * FIXED_DELTA) > 0.001:
+		return _reject_checkpoint("world_time_tick_mismatch")
+	if not is_finite(accumulator) or accumulator < 0.0 or accumulator >= FIXED_DELTA:
+		return _reject_checkpoint("invalid_accumulator")
+	if not raw_players is Array or not raw_placements is Array or not raw_results is Dictionary:
+		return _reject_checkpoint("players_placements_or_inputs_wrong_type")
+	var hazard_error := authoritative_world_hazard_error(raw_hazards)
+	if not hazard_error.is_empty():
+		return _reject_checkpoint(hazard_error)
+	if raw_players.size() != _players.size():
+		return _reject_checkpoint("roster_size_mismatch")
+	var candidate_placements: Array[Dictionary] = []
+	for index in range(raw_placements.size()):
+		var placement: Variant = raw_placements[index]
+		if not placement is Dictionary:
+			return _reject_checkpoint("placement_not_dictionary:%d" % index)
+		candidate_placements.append(placement.duplicate(true))
 	var restored_players := {}
 	for state in raw_players:
 		if not state is Dictionary:
-			return false
+			return _reject_checkpoint("player_not_dictionary")
 		var user_id := str(state.get("user_id", ""))
 		if not _players.has(user_id) or restored_players.has(user_id):
-			return false
+			return _reject_checkpoint("unknown_or_duplicate_player:%s" % user_id)
 		var x := float(state.get("world_x", NAN))
 		var y := float(state.get("y", NAN))
 		var vertical_speed := float(state.get("vertical_speed", NAN))
 		var cooldown := float(state.get("cooldown", NAN))
 		var gravity_direction := int(state.get("gravity_direction", 0))
 		if not is_finite(x) or not is_finite(y) or not is_finite(vertical_speed) or not is_finite(cooldown) or gravity_direction not in [-1, 1] or str(state.get("state", "")) not in ["running", "dead", "finished", "disconnected"]:
-			return false
+			return _reject_checkpoint("invalid_player_state:%s" % user_id)
 		restored_players[user_id] = state.duplicate(true)
 	if restored_players.size() != _players.size():
-		return false
+		return _reject_checkpoint("roster_player_missing")
 	var candidate_hazards: Dictionary = raw_hazards.duplicate(true)
+	var candidate_barrels: Array[Dictionary] = []
+	for index in range(candidate_hazards.get("barrels", []).size()):
+		var barrel: Variant = candidate_hazards.barrels[index]
+		if not barrel is Dictionary:
+			return _reject_checkpoint("barrel_not_dictionary:%d" % index)
+		candidate_barrels.append(barrel.duplicate(true))
 	var expected_events := {}
 	for event in manifest.get("events"):
 		expected_events[str(event.get("event_id", ""))] = true
 	for destroyed_id in candidate_hazards.get("destroyed_event_ids", []):
 		if not expected_events.has(str(destroyed_id)):
-			return false
-	for barrel in candidate_hazards.get("barrels", []):
+			return _reject_checkpoint("unknown_destroyed_event:%s" % str(destroyed_id))
+	for barrel in candidate_barrels:
 		for key in ["x", "y", "width", "height", "motion_speed_multiplier", "spawn_time", "fall_velocity", "roll_angle", "rotation"]:
 			if not is_finite(float(barrel.get(key, NAN))):
-				return false
+				return _reject_checkpoint("invalid_barrel_field:%s" % key)
 	var expected_user_ids := {}
 	for user_id in _players:
 		expected_user_ids[str(user_id)] = true
 	for user_id in raw_results:
 		var user_results: Variant = raw_results[user_id]
 		if not expected_user_ids.has(str(user_id)) or not user_results is Array or user_results.size() > MAX_INPUT_RESULTS:
-			return false
+			return _reject_checkpoint("invalid_input_results:%s" % str(user_id))
 		for result in user_results:
 			if not result is Dictionary or int(result.get("sequence", 0)) <= 0 or int(result.get("processed_tick", -1)) < 0 or int(result.get("processed_tick", -1)) > checkpoint_tick or typeof(result.get("accepted")) != TYPE_BOOL:
-				return false
+				return _reject_checkpoint("invalid_input_result:%s" % str(user_id))
 	var candidate_destroyed := {}
 	for event_id in candidate_hazards.get("destroyed_event_ids", []):
 		candidate_destroyed[str(event_id)] = true
+	var candidate_processed_inputs: Dictionary = raw_results.duplicate(true)
+	var candidate_last_queued_sequence := {}
+	for user_id in candidate_processed_inputs:
+		var results: Array = candidate_processed_inputs[user_id]
+		var highest_sequence := 0
+		for result in results:
+			highest_sequence = maxi(highest_sequence, int(result.get("sequence", 0)))
+		if highest_sequence > 0:
+			candidate_last_queued_sequence[user_id] = highest_sequence
 	# Validate the complete frame before mutating any live simulation state.
 	tick = checkpoint_tick
 	_world_elapsed = world_time
 	_accumulator = accumulator
 	_players = restored_players
-	_placements = raw_placements.duplicate(true)
-	_barrels = candidate_hazards.get("barrels", []).duplicate(true)
+	_placements = candidate_placements
+	_barrels = candidate_barrels
 	_destroyed_event_ids = candidate_destroyed
-	_processed_inputs = raw_results.duplicate(true)
+	_processed_inputs = candidate_processed_inputs
 	_queued_flip_inputs.clear()
-	_last_queued_sequence.clear()
-	for user_id in _processed_inputs:
-		var results: Array = _processed_inputs[user_id]
-		var highest_sequence := 0
-		for result in results:
-			highest_sequence = maxi(highest_sequence, int(result.get("sequence", 0)))
-		if highest_sequence > 0:
-			_last_queued_sequence[user_id] = highest_sequence
-	match_finished = bool(checkpoint.get("finished", false))
-	match_finish_reason = str(checkpoint.get("finish_reason", ""))
+	_last_queued_sequence = candidate_last_queued_sequence
+	match_finished = raw_finished
+	match_finish_reason = raw_finish_reason
 	return true
+
+func _reject_checkpoint(reason: String) -> bool:
+	last_restore_error = reason
+	return false
 
 func apply_authoritative_world_hazards(world_hazards: Variant) -> bool:
 	if not authoritative_world_hazard_error(world_hazards).is_empty():
