@@ -8,10 +8,12 @@ const MAX_LOCAL_BYTES := 2 * 1024 * 1024
 const MAX_WINDOWS := 180
 const MAX_DETAIL_SAMPLES := 600
 const MAX_START_SAMPLES := 720
+const MAX_FRAME_HISTORY_SAMPLES := 720
 const MAX_EVENTS := 1200
 const MAX_INCIDENTS := 3
 const DETAIL_INTERVAL_USEC := 50000
 const WINDOW_USEC := 1000000
+const CAPTURE_BUDGET_CHECK_INTERVAL_USEC := 5000000
 const LOCAL_FILE := "user://multiplayer_diagnostics.json"
 
 var _capture: Dictionary = {}
@@ -35,6 +37,8 @@ var _js_probe_installed := false
 var _id_to_label: Dictionary = {}
 var _last_start_sample_usec := 0
 var _race_started_usec := 0
+var _last_capture_budget_check_usec := 0
+var _frame_sample_ring: Array[Dictionary] = []
 var _test_layout_preference := "unknown"
 var _instances_preference: Variant = null
 
@@ -98,8 +102,10 @@ func begin_match(metadata: Dictionary) -> void:
 	if not _capture.is_empty():
 		finish_match("superseded")
 	_started_usec = Time.get_ticks_usec()
+	_last_capture_budget_check_usec = _started_usec
 	_race_started_usec = 0
 	_last_start_sample_usec = 0
+	_frame_sample_ring.clear()
 	_window_started_usec = _started_usec
 	_last_process_usec = 0
 	_last_detail_usec = 0
@@ -246,19 +252,31 @@ func record_start_sample(sample: Dictionary) -> void:
 	if _capture.is_empty() or str(_capture.get("phase", "")) not in ["startup", "running"]:
 		return
 	var now := Time.get_ticks_usec()
-	if _race_started_usec > 0 and now - _race_started_usec > 3000000:
-		return
-	# Keep low-rate context during the countdown, then capture every rendered
-	# frame for the first three seconds so one-frame position/camera jumps are
-	# visible in the report. The bounded buffer below retains the newest frames.
+	var in_start_window := _race_started_usec == 0 or now - _race_started_usec <= 3000000
+	# Keep low-rate context during countdown, then sample every rendered frame
+	# during the first three seconds and around an explicitly marked incident.
 	var sample_interval_usec := DETAIL_INTERVAL_USEC if _race_started_usec == 0 else 0
-	if _last_start_sample_usec > 0 and now - _last_start_sample_usec < sample_interval_usec:
+	if in_start_window and _last_start_sample_usec > 0 and now - _last_start_sample_usec < sample_interval_usec:
 		return
 	_last_start_sample_usec = now
-	if _capture.start_samples.size() >= MAX_START_SAMPLES:
-		_capture.start_samples.pop_front()
-		_capture.loss.start_samples_dropped = int(_capture.loss.get("start_samples_dropped", 0)) + 1
-	_capture.start_samples.append({"t_ms": _elapsed_ms(), "sample": _sanitize(sample)})
+	# Keep raw frame data only in this short-lived in-memory ring. Sanitize when
+	# copying it into an exportable report, not on every idle rendered frame.
+	var frame_sample := {"t_ms": _elapsed_ms(), "sample": sample}
+	_frame_sample_ring.append(frame_sample)
+	while _frame_sample_ring.size() > MAX_FRAME_HISTORY_SAMPLES or (not _frame_sample_ring.is_empty() and int(_frame_sample_ring.front().get("t_ms", 0)) < int(frame_sample.t_ms) - 3000):
+		_frame_sample_ring.pop_front()
+	if in_start_window:
+		if _capture.start_samples.size() >= MAX_START_SAMPLES:
+			_capture.start_samples.pop_front()
+			_capture.loss.start_samples_dropped = int(_capture.loss.get("start_samples_dropped", 0)) + 1
+		_capture.start_samples.append({"t_ms": frame_sample.t_ms, "sample": _sanitize(sample)})
+	if not _incident_capture.is_empty() and int(frame_sample.t_ms) >= int(_incident_capture.get("started_t_ms", 0)):
+		var incident_frames: Array = _incident_capture.get("frame_samples", [])
+		incident_frames.append({"t_ms": frame_sample.t_ms, "sample": _sanitize(sample)})
+		while incident_frames.size() > MAX_FRAME_HISTORY_SAMPLES:
+			incident_frames.pop_front()
+			_capture.loss.incident_frame_samples_dropped = int(_capture.loss.get("incident_frame_samples_dropped", 0)) + 1
+		_incident_capture.frame_samples = incident_frames
 
 func mark_simulation_started(details: Dictionary = {}) -> void:
 	_race_started_usec = Time.get_ticks_usec()
@@ -278,7 +296,11 @@ func mark_problem(label: String) -> void:
 	for sample in _capture.detail_samples:
 		if int(sample.get("t_ms", 0)) >= _elapsed_ms() - 5000:
 			before.append(sample.duplicate(true))
-	_incident_capture = {"label": label.left(32), "started_t_ms": _elapsed_ms(), "partial": false, "pre_samples": before, "samples": [], "remaining_usec": 5000000}
+	var frame_history: Array = []
+	for sample in _frame_sample_ring:
+		if int(sample.get("t_ms", 0)) >= _elapsed_ms() - 3000:
+			frame_history.append({"t_ms": sample.t_ms, "sample": _sanitize(sample.get("sample", {}))})
+	_incident_capture = {"label": label.left(32), "started_t_ms": _elapsed_ms(), "partial": false, "pre_samples": before, "samples": [], "pre_frame_samples": frame_history, "frame_samples": [], "remaining_usec": 5000000}
 	_add_event("incident_marked", {"label": label}, true)
 	report_changed.emit("Incident marked: " + label)
 
@@ -294,9 +316,10 @@ func finish_match(state: String) -> void:
 	_capture.capture_end_monotonic_usec = Time.get_ticks_usec()
 	_capture.terminal_state = state
 	_add_event("capture_finished", {"terminal_state": state}, true)
-	_enforce_capture_memory_budget()
+	_enforce_capture_memory_budget(true)
 	var completed := _capture.duplicate(true)
 	_capture.clear()
+	_frame_sample_ring.clear()
 	_reports.append(completed)
 	while _reports.size() > 2:
 		_reports.pop_front()
@@ -333,7 +356,7 @@ func _build_clipboard_text(report: Dictionary) -> String:
 		if not candidate.report.detail_samples.is_empty():
 			candidate.report.detail_samples = candidate.report.detail_samples.slice(maxi(0, candidate.report.detail_samples.size() / 2))
 		elif not candidate.report.start_samples.is_empty():
-			candidate.report.start_samples = candidate.report.start_samples.slice(0, candidate.report.start_samples.size() / 2)
+			candidate.report.start_samples = candidate.report.start_samples.slice(candidate.report.start_samples.size() / 2)
 		elif not candidate.report.incidents.is_empty():
 			if not _halve_incident_samples(candidate.report.incidents):
 				candidate.report.incidents.pop_back()
@@ -372,11 +395,12 @@ func _halve_incident_samples(incidents: Array) -> bool:
 	var incident_index := incidents.size() - 1
 	while incident_index >= 0:
 		var incident: Dictionary = incidents[incident_index]
-		if not incident.get("samples", []).is_empty() or not incident.get("pre_samples", []).is_empty():
-			incident.samples = incident.get("samples", []).slice(maxi(0, incident.get("samples", []).size() / 2))
-			incident.pre_samples = incident.get("pre_samples", []).slice(maxi(0, incident.get("pre_samples", []).size() / 2))
-			incidents[incident_index] = incident
-			return true
+		for sample_key in ["frame_samples", "pre_frame_samples", "samples", "pre_samples"]:
+			var entries: Array = incident.get(sample_key, [])
+			if not entries.is_empty():
+				incident[sample_key] = entries.slice(entries.size() / 2)
+				incidents[incident_index] = incident
+				return true
 		incident_index -= 1
 	return false
 
@@ -425,21 +449,24 @@ func _flush_window(now_usec: int, final_window: bool = false) -> void:
 	_window_timing.clear()
 	_window_gaps_by_phase.clear()
 	_window_started_usec = now_usec
-	_enforce_capture_memory_budget()
+	_enforce_capture_memory_budget(false)
 
-func _enforce_capture_memory_budget() -> void:
+func _enforce_capture_memory_budget(force: bool = true) -> void:
 	if _capture.is_empty():
 		return
 	var guard_started_usec := Time.get_ticks_usec()
+	if not force and guard_started_usec - _last_capture_budget_check_usec < CAPTURE_BUDGET_CHECK_INTERVAL_USEC:
+		return
+	_last_capture_budget_check_usec = guard_started_usec
 	var reductions := 0
 	var bytes := JSON.stringify(_capture).to_utf8_buffer().size()
 	while bytes > MAX_LOCAL_BYTES - 512 and reductions < 64:
 		reductions += 1
 		if not _capture.detail_samples.is_empty():
-			_capture.detail_samples = _capture.detail_samples.slice(0, _capture.detail_samples.size() / 2)
+			_capture.detail_samples = _capture.detail_samples.slice(_capture.detail_samples.size() / 2)
 			_capture.loss.capture_detail_samples_reduced = true
 		elif not _capture.start_samples.is_empty():
-			_capture.start_samples = _capture.start_samples.slice(0, _capture.start_samples.size() / 2)
+			_capture.start_samples = _capture.start_samples.slice(_capture.start_samples.size() / 2)
 			_capture.loss.capture_start_samples_reduced = true
 		elif not _capture.incidents.is_empty():
 			if not _halve_incident_samples(_capture.incidents):
@@ -518,8 +545,12 @@ func _sanitize(value: Variant, depth: int = 0, parent_key: String = "") -> Varia
 		return result
 	if value is Array:
 		var result: Array = []
+		# Match traces already have explicit ring-buffer limits. Do not silently
+		# truncate them to the generic 200-item diagnostics-array limit; that
+		# discarded most of the ten-second startup trace in exported reports.
+		var item_limit := 1200 if parent_key in ["events", "start_trace"] else 200
 		for item in value:
-			if result.size() >= 200:
+			if result.size() >= item_limit:
 				break
 			if parent_key in ["before", "after"] and item is String:
 				result.append(_safe_player_label(str(item)))
@@ -559,7 +590,7 @@ func _compact_timings(timings: Dictionary) -> Dictionary:
 func _reduce_local_report(report: Dictionary) -> Dictionary:
 	var copy := report.duplicate(true)
 	copy.detail_samples = copy.get("detail_samples", []).slice(maxi(0, copy.get("detail_samples", []).size() - 120))
-	copy.start_samples = copy.get("start_samples", []).slice(0, 120)
+	copy.start_samples = copy.get("start_samples", []).slice(maxi(0, copy.get("start_samples", []).size() - 120))
 	copy.events = _prioritize_events(copy.get("events", [])).slice(0, 300)
 	copy["local_report_reduced"] = true
 	return copy
@@ -584,7 +615,7 @@ func _save_local() -> void:
 		for index in range(_reports.size()):
 			var report: Dictionary = _reports[index]
 			report.detail_samples = report.get("detail_samples", []).slice(maxi(0, report.get("detail_samples", []).size() / 2))
-			report.start_samples = report.get("start_samples", []).slice(0, report.get("start_samples", []).size() / 2)
+			report.start_samples = report.get("start_samples", []).slice(report.get("start_samples", []).size() / 2)
 			report.events = _prioritize_events(report.get("events", [])).slice(0, maxi(48, report.get("events", []).size() / 2))
 			report["local_report_reduced"] = true
 			_reports[index] = report

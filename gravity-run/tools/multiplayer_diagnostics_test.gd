@@ -53,6 +53,12 @@ func _ready() -> void:
 	recorder._id_to_label = {"host-uuid": "p0", "guest-uuid": "p1"}
 	var sanitized_identities: Dictionary = recorder._sanitize({"email": "private@example.com", "access_token": "secret", "player_id": "guest-uuid", "spectator_target": "host-uuid", "before": ["host-uuid", "guest-uuid"], "after": ["guest-uuid", "host-uuid"], "position": 2})
 	assert(sanitized_identities == {"player_id": "p1", "spectator_target": "p0", "before": ["p0", "p1"], "after": ["p1", "p0"], "position": 2}, "diagnostics must redact player/spectator IDs and visual-order ID arrays")
+	var full_start_trace: Array = []
+	for index in 1024:
+		full_start_trace.append({"at_ms": index, "event": "trace_%d" % index})
+	var sanitized_trace: Dictionary = recorder._sanitize({"events": full_start_trace.slice(0, 240), "start_trace": full_start_trace})
+	assert(sanitized_trace.events.size() == 240 and sanitized_trace.start_trace.size() == 1024, "export sanitization must preserve the explicitly bounded match and ten-second startup traces")
+	assert(sanitized_trace.start_trace.back().event == "trace_1023", "startup trace export must retain the end of the captured window")
 	recorder._capture = {"totals": {"transport_packets": 0, "transport_packets_control": 0, "transport_packets_snapshot": 0}}
 	recorder.increment_total("transport_packets")
 	recorder.increment_total("transport_packets_snapshot")
@@ -75,6 +81,16 @@ func _ready() -> void:
 	recorder._race_started_usec -= 4000000
 	recorder.record_start_sample({"frame": "outside_capture_window"})
 	assert(recorder._capture.start_samples.size() == DiagnosticsScript.MAX_START_SAMPLES, "frame-dense capture stops after its three-second race window")
+	recorder._capture = {"phase": "running", "start_samples": [], "detail_samples": [], "incidents": [], "events": [], "loss": {}}
+	recorder._started_usec = Time.get_ticks_usec() - 4000000
+	recorder._race_started_usec = recorder._started_usec
+	recorder._frame_sample_ring.clear()
+	for index in 4:
+		recorder.record_start_sample({"frame": index})
+	recorder.mark_problem("flicker_test")
+	assert(recorder._incident_capture.pre_frame_samples.size() == 4, "marking an incident must preserve recent frame-level samples from before the mark")
+	recorder.record_start_sample({"frame": 4})
+	assert(recorder._incident_capture.frame_samples.size() == 1, "incident capture must continue collecting frame-level samples after the mark")
 	print("Multiplayer diagnostics size/privacy tests passed.")
 	recorder.free()
 	get_tree().quit()

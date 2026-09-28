@@ -267,9 +267,28 @@ func _ready() -> void:
 	assert(is_equal_approx(MatchScript.estimate_shared_start_msec(1000, 5.0, [400, 600]), 6250.0), "host start should compensate for measured peer delivery latency")
 	assert(is_equal_approx(MatchScript.estimate_guest_clock_offset_ms(5200, 5000, 5400), 0.0), "clock-offset estimation should use the probe round-trip midpoint")
 	assert(is_equal_approx(MatchScript.estimate_guest_clock_offset_ms(15200, 10000, 10400), 5000.0), "clock-offset estimation should translate a guest clock into host time")
+	var seed_simulation := SimulationScript.new()
+	assert(seed_simulation.configure(camera_manifest, [{"user_id": "host", "display_name": "Host"}, {"user_id": "guest", "display_name": "Guest"}]).is_empty())
+	var seed_view: Node2D = MatchScript.new()
+	seed_view.set("_simulation", seed_simulation)
+	seed_view.set("_local_user_id", "guest")
+	seed_view.set("_start_generation", "seed-anchor-test")
+	seed_view.set("_network_clock", 100.0)
+	seed_view.set("_go_start_at", 102.5)
+	seed_view.call("_seed_start_render_snapshot")
+	var seed_buffer: Array = seed_view.get("_snapshot_buffer")
+	assert(seed_buffer.size() == 1 and is_equal_approx(float(seed_buffer[0].received_at), 102.5), "tick-zero seed age must start at the synchronized RUN time, not when the countdown commit arrived")
+	var countdown_age := maxf(100.0 - float(seed_buffer[0].received_at), 0.0)
+	var seeded_clock: Dictionary = MatchScript.advance_remote_render_clock(-1.0, 0.0, 0.0, 0.0, countdown_age, 3.0, 0.0)
+	assert(is_equal_approx(float(seeded_clock.render_tick), 0.0) and float(seeded_clock.target_tick) < 1.0, "a 2.5-second countdown must not turn tick-zero into a roughly 148-tick-old snapshot")
+	seed_view.free()
 	assert(is_equal_approx(MatchScript.render_target_tick(100.0, 0.0, 5.0, -1.0), 95.0), "snapshot rendering should start behind the newest host tick")
-	assert(is_equal_approx(MatchScript.render_target_tick(100.0, 1.0, 5.0, 95.0), 103.0), "snapshot extrapolation must be capped to three ticks")
+	assert(is_equal_approx(MatchScript.render_target_tick(100.0, 1.0, 5.0, 95.0), 100.0), "the render target must never advance beyond the newest position sample")
 	assert(is_equal_approx(MatchScript.render_target_tick(100.0, 0.0, 5.0, 96.0), 96.0), "the render timeline must never move backwards")
+	var phase_at_latest := MatchScript.buffered_interpolation_phase(102.5, 100.0, 102.0)
+	assert(phase_at_latest.state == "buffer_exhausted_hold" and is_equal_approx(float(phase_at_latest.weight), 1.0) and is_equal_approx(float(phase_at_latest.sample_tick), 102.0), "when no bracketing sample exists, the sampler must explicitly hold the latest available state")
+	var phase_with_next_packet := MatchScript.buffered_interpolation_phase(102.5, 102.0, 104.0)
+	assert(phase_with_next_packet.state == "interpolated" and is_equal_approx(float(phase_with_next_packet.weight), 0.25), "a newly arrived sample must provide a real bracket instead of an extrapolation catch-up jump")
 	var uncovered_sample: Dictionary = MatchScript.sample_render_history([{"tick": 61, "position": Vector2(10.0, 0.0)}, {"tick": 63, "position": Vector2(20.0, 0.0)}], 60.5)
 	assert(not bool(uncovered_sample.covered), "a clamped endpoint must not be reported as a valid sample at an earlier time")
 	var merged_phase := MatchScript.merge_render_history_at_checkpoint(
@@ -287,6 +306,7 @@ func _ready() -> void:
 		var packet_intervals := [0.028, 0.036, 0.031, 0.039, 0.033]
 		var packet_index := 0
 		var last_tick := remote_tick
+		var last_remote_x := 0.0
 		var relative_min := INF
 		var relative_max := -INF
 		for frame in range(fps * 10):
@@ -300,6 +320,17 @@ func _ready() -> void:
 			var clock_step: Dictionary = MatchScript.advance_remote_render_clock(remote_tick, frame_delta, latest_tick, maxf(latest_tick - 32.0, 0.0), elapsed - received_at, 2.0, 33.0, 0.0)
 			remote_tick = float(clock_step.render_tick)
 			assert(remote_tick >= last_tick and remote_tick - last_tick <= frame_delta * 60.0 * 1.081 + 0.001, "remote render time must advance continuously without packet-arrival jumps at %d Hz, frame %d" % [fps, frame])
+			assert(remote_tick <= latest_tick, "the remote render clock must never run ahead of available position samples at %d Hz, frame %d" % [fps, frame])
+			var remote_history: Array[Dictionary] = []
+			var oldest_sample_tick := maxi(int(latest_tick) - 32, 0)
+			for history_tick in range(oldest_sample_tick, int(latest_tick) + 1, 2):
+				remote_history.append({"tick": history_tick, "position": Vector2(float(history_tick) * 500.0 / 60.0, 0.0)})
+			if remote_history.is_empty() or int(remote_history.back().get("tick", -1)) != int(latest_tick):
+				remote_history.append({"tick": int(latest_tick), "position": Vector2(latest_tick * 500.0 / 60.0, 0.0)})
+			var sampled_remote := MatchScript.sample_render_history(remote_history, remote_tick)
+			var remote_x := (sampled_remote.position as Vector2).x
+			assert(remote_x >= last_remote_x - 0.001 and remote_x - last_remote_x <= frame_delta * 500.0 * 1.081 + 0.1, "the actual sampled runner position must stay continuous at %d Hz, frame %d" % [fps, frame])
+			last_remote_x = remote_x
 			last_tick = remote_tick
 			if elapsed >= 2.0:
 				var equal_speed_relative_tick := elapsed * 60.0 - remote_tick
@@ -309,8 +340,8 @@ func _ready() -> void:
 		assert(relative_max - relative_min < 2.0 and relative_min > 0.0, "equal-speed local and remote runners should keep a stable intentional render offset at %d Hz" % fps)
 	var buffer_resync: Dictionary = MatchScript.advance_remote_render_clock(5.0, 1.0 / 60.0, 8.0, 6.0, 0.0, 2.0, 30.0)
 	assert(buffer_resync.resynced and buffer_resync.state == "buffer_underrun_resync" and is_equal_approx(float(buffer_resync.render_tick), 6.0), "falling behind the retained buffer must be an explicit forward resync")
-	var buffer_hold: Dictionary = MatchScript.advance_remote_render_clock(11.0, 1.0 / 60.0, 7.0, 0.0, 0.0, 2.0, 30.0)
-	assert(buffer_hold.state == "extrapolation_hold" and is_equal_approx(float(buffer_hold.render_tick), 11.0) and is_zero_approx(float(buffer_hold.clock_delta)), "a short snapshot starvation must hold at the extrapolation bound without rewinding")
+	var buffer_hold: Dictionary = MatchScript.advance_remote_render_clock(7.0, 1.0 / 60.0, 7.0, 0.0, 0.0, 2.0, 30.0)
+	assert(buffer_hold.state == "buffer_exhausted_hold" and is_equal_approx(float(buffer_hold.render_tick), 7.0) and is_zero_approx(float(buffer_hold.clock_delta)), "snapshot starvation must hold at the latest sample without advancing the render clock into unsampled time")
 	var large_gap_hold: Dictionary = MatchScript.advance_remote_render_clock(30.0, 1.0 / 60.0, 10.0, 0.0, 0.0, 2.0, 30.0)
 	assert(large_gap_hold.state == "large_stream_gap_hold" and is_equal_approx(float(large_gap_hold.render_tick), 30.0), "a genuine large authority gap must be separately diagnosed and wait without a backward jump")
 	assert(MatchScript.correction_after_authority(Vector2(102.0, 202.0), Vector2(100.0, 200.0)).is_equal_approx(Vector2(2.0, 2.0)), "small local prediction errors should fade smoothly")
