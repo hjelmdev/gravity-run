@@ -797,7 +797,7 @@ func _on_diagnostics_status_changed(message: String) -> void:
 
 func _on_diagnostic_layout_selected(index: int) -> void:
 	var layouts := ["unknown", "split_host", "three_windows", "separate_devices", "other"]
-	var current_instances := MultiplayerDiagnostics.get_instances_on_device()
+	var current_instances: Variant = MultiplayerDiagnostics.get_instances_on_device()
 	MultiplayerDiagnostics.set_test_context(str(layouts[index]), current_instances)
 
 func _on_diagnostic_instances_selected(index: int) -> void:
@@ -812,11 +812,9 @@ func _update_diagnostic_option_selections() -> void:
 	var layouts := ["unknown", "split_host", "three_windows", "separate_devices", "other"]
 	var layout_index := layouts.find(MultiplayerDiagnostics.get_test_layout())
 	_diagnostics_layout_option.select(maxi(layout_index, 0))
-	var instances := MultiplayerDiagnostics.get_instances_on_device()
+	var instances: Variant = MultiplayerDiagnostics.get_instances_on_device()
 	var instance_index := 0 if instances == null else int(instances)
 	_diagnostics_instances_option.select(clampi(instance_index, 0, 5))
-	if is_instance_valid(_latest_report_status):
-		_latest_report_status.text = message
 	_update_latest_report_actions()
 
 func _update_latest_report_actions() -> void:
