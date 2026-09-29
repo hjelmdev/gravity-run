@@ -6,6 +6,8 @@ signal peer_state_changed(peer_id: int, state: String, message: String)
 
 const STUN_SERVERS := [{"urls": ["stun:stun.l.google.com:19302"]}]
 const MAX_PENDING_ICE := 64
+const GUEST_OFFER_RETRY_SECONDS := 5.0
+const MAX_GUEST_OFFER_RETRIES := 3
 
 var peer: WebRTCMultiplayerPeer
 var room_id := ""
@@ -19,6 +21,8 @@ var _attempts: Dictionary = {}
 var _connection_generations: Dictionary = {}
 var _remote_generations: Dictionary = {}
 var _retired_attempts: Dictionary = {}
+var _guest_retry_elapsed := 0.0
+var _guest_retry_count := 0
 
 func configure(room: Dictionary, user_id: String, api_peer: WebRTCMultiplayerPeer) -> void:
 	close_all()
@@ -29,6 +33,32 @@ func configure(room: Dictionary, user_id: String, api_peer: WebRTCMultiplayerPee
 	room_members = room.get("members", []).duplicate(true)
 	local_peer_id = int(_member_for_user(user_id).get("player_slot", 1))
 	peer = api_peer
+	_guest_retry_elapsed = 0.0
+	_guest_retry_count = 0
+
+func update_room(room: Dictionary) -> void:
+	if str(room.get("room_id", "")) != room_id or peer == null:
+		configure(room, local_user_id, peer)
+		return
+	owner_user_id = str(room.get("owner_user_id", ""))
+	is_host = owner_user_id == local_user_id
+	room_members = room.get("members", []).duplicate(true)
+
+func _process(delta: float) -> void:
+	if peer == null or is_host or room_id.is_empty() or owner_user_id.is_empty() or _guest_retry_count >= MAX_GUEST_OFFER_RETRIES:
+		return
+	var host_peer: Dictionary = peer.get_peer(1) if peer.has_peer(1) else {}
+	if bool(host_peer.get("connected", false)):
+		_guest_retry_elapsed = 0.0
+		_guest_retry_count = 0
+		return
+	_guest_retry_elapsed += delta
+	if _guest_retry_elapsed < GUEST_OFFER_RETRY_SECONDS:
+		return
+	_guest_retry_elapsed = 0.0
+	_guest_retry_count += 1
+	_remove_connection(owner_user_id)
+	_start_guest_offer(owner_user_id)
 
 func begin_connection() -> void:
 	if peer == null or room_id.is_empty() or local_user_id.is_empty():
@@ -125,6 +155,8 @@ func close_all() -> void:
 	_connection_generations.clear()
 	_remote_generations.clear()
 	_retired_attempts.clear()
+	_guest_retry_elapsed = 0.0
+	_guest_retry_count = 0
 	room_id = ""
 	local_user_id = ""
 	owner_user_id = ""

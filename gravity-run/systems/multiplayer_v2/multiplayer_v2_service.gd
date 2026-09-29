@@ -70,6 +70,7 @@ var _round_coordinator: MultiplayerV2RoundCoordinator = RoundCoordinatorScript.n
 var _clock_ping_elapsed := 0.0
 var _heartbeat_elapsed := 0.0
 var _local_prepare_pending := false
+var _manifest_action_pending := ""
 var world_simulation: MultiplayerV2WorldSimulation
 var terminal_status: Dictionary = {}
 var _interaction_results: Dictionary = {}
@@ -193,6 +194,10 @@ func set_ready(ready: bool) -> void:
 	if has_room():
 		_begin_identity_action("set_ready", {"room_id": str(room_state.get("room_id", "")), "ready": ready})
 
+func set_skin_id(skin_id: int) -> void:
+	if has_room():
+		_begin_identity_action("set_skin", {"room_id": str(room_state.get("room_id", "")), "skin_id": posmod(skin_id, 4)})
+
 func request_start() -> void:
 	if not is_room_owner():
 		lobby_request_finished.emit("prepare_round", false, tr("Only the V2 host can start the round."))
@@ -285,6 +290,8 @@ func _on_identity_ready(user_id: String, _token: String, anonymous: bool, contex
 			_lobby_provider.refresh_room(str(arguments.room_id), token, context)
 		"set_ready":
 			_lobby_provider.set_ready(str(arguments.room_id), bool(arguments.ready), token, context)
+		"set_skin":
+			_lobby_provider.set_skin(str(arguments.room_id), int(arguments.skin_id), token, context)
 		"leave_room":
 			_lobby_provider.leave_room(str(arguments.room_id), token, context)
 		"prepare_round":
@@ -300,6 +307,8 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 	if not _lobby_contexts.has(context):
 		return
 	_lobby_contexts.erase(context)
+	if action in ["set_manifest", "ack_manifest"]:
+		_manifest_action_pending = ""
 	if action == "list_rooms":
 		var rooms: Array = data if data is Array else []
 		public_rooms_loaded.emit(rooms, message)
@@ -331,7 +340,11 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 		if next_room is Dictionary and not next_room.is_empty():
 			room_state = next_room.duplicate(true)
 			room_state["network_mode"] = "v2"
+			if action not in ["create_room", "join_room"]:
+				_webrtc_transport.update_room(room_state)
 			room_changed.emit(room_state.duplicate(true))
+			if action in ["set_manifest", "refresh_room"]:
+				_ensure_manifest()
 			if action in ["create_room", "join_room"]:
 				var maximum := maxi(1, int(room_state.get("max_players", 5)) - 1)
 				var error := open_host(room_state, maximum) if is_room_owner() else configure_client_peer(int(_member_for_user(identity_user_id).get("player_slot", 1)))
@@ -992,21 +1005,31 @@ func _decide_world_interaction(owner_peer_id: int, request: Dictionary) -> void:
 func _ensure_manifest() -> void:
 	if room_state.is_empty():
 		return
-	var builder := ManifestBuilderScript.new()
-	var built: Dictionary = builder.build(int(room_state.get("seed", 1)), int(room_state.get("course_length_px", 45000)), int(room_state.get("generator_version", CourseGeneratorScript.GENERATOR_VERSION)))
-	if built.get("manifest") == null:
-		lobby_request_finished.emit("manifest", false, str(built.get("error", "Could not build course manifest.")))
-		return
-	current_manifest = built.manifest
+	var expected_seed := int(room_state.get("seed", 1))
+	var expected_length := int(room_state.get("course_length_px", 45000))
+	var expected_generator := int(room_state.get("generator_version", CourseGeneratorScript.GENERATOR_VERSION))
+	if current_manifest == null or current_manifest.seed_value != expected_seed or current_manifest.course_length_px != expected_length or current_manifest.generator_version != expected_generator:
+		var builder := ManifestBuilderScript.new()
+		var built: Dictionary = builder.build(expected_seed, expected_length, expected_generator)
+		if built.get("manifest") == null:
+			lobby_request_finished.emit("manifest", false, str(built.get("error", "Could not build course manifest.")))
+			return
+		current_manifest = built.manifest
 	var local_hash := str(current_manifest.manifest_hash)
 	var expected_hash := str(room_state.get("manifest_hash", ""))
 	if is_room_owner() and expected_hash.is_empty():
+		if _manifest_action_pending == "set_manifest":
+			return
+		_manifest_action_pending = "set_manifest"
 		var context := "manifest:%d" % Time.get_ticks_msec()
 		_pending_lobby_context = context
 		_lobby_contexts[context] = "set_manifest"
 		_lobby_provider.set_manifest(str(room_state.room_id), int(room_state.seed), int(room_state.course_length_px), local_hash, _identity_adapter.token(), context)
 	elif expected_hash == local_hash:
 		if str(_member_for_user(identity_user_id).get("loaded_manifest_hash", "")) != expected_hash:
+			if _manifest_action_pending == "ack_manifest":
+				return
+			_manifest_action_pending = "ack_manifest"
 			var context := "ack_manifest:%d" % Time.get_ticks_msec()
 			_pending_lobby_context = context
 			_lobby_contexts[context] = "ack_manifest"
@@ -1110,7 +1133,15 @@ func _check_disconnect_grace() -> void:
 			_round_coordinator.cancel("host_disconnected")
 
 func connected_peer_ids() -> PackedInt32Array:
-	return webrtc_peer.get_peers() if webrtc_peer != null else PackedInt32Array()
+	var connected := PackedInt32Array()
+	if webrtc_peer == null:
+		return connected
+	var peer_states: Dictionary = webrtc_peer.get_peers()
+	for peer_id in peer_states:
+		var peer_state: Variant = peer_states[peer_id]
+		if peer_state is Dictionary and bool(peer_state.get("connected", false)):
+			connected.append(int(peer_id))
+	return connected
 
 func is_active() -> bool:
 	return _active

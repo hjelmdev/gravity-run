@@ -33,6 +33,9 @@ func refresh_room(room_id: String, token: String, context: String) -> void:
 func set_ready(room_id: String, ready: bool, token: String, context: String) -> void:
 	_call("set_ready", "multiplayer_v2_set_ready", {"p_room_id": room_id, "p_ready": ready}, token, context)
 
+func set_skin(room_id: String, skin_id: int, token: String, context: String) -> void:
+	_call("set_skin", "multiplayer_v2_set_skin", {"p_room_id": room_id, "p_skin_id": skin_id}, token, context)
+
 func leave_room(room_id: String, token: String, context: String) -> void:
 	_queue.clear()
 	_call("leave_room", "multiplayer_v2_leave_room", {"p_room_id": room_id}, token, context)

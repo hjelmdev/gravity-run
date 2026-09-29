@@ -1,5 +1,9 @@
 extends Control
 
+const ReadyIndicatorScript := preload("res://ui/ready_indicator.gd")
+const RunnerFrames := preload("res://assets/character/run_frames.tres")
+const SkinPalette := preload("res://player/skin_palette.gd")
+
 signal back_requested
 signal match_start_requested
 
@@ -23,12 +27,14 @@ var _room_summary: Label
 var _players: VBoxContainer
 var _ready_button: Button
 var _start_button: Button
+var _reconnect_button: Button
 var _create_button: Button
 var _join_button: Button
 var _room: Dictionary = {}
 var _active_view := "home"
 var _mobile_text_entry := false
 var _busy := false
+var _skin_request_pending := false
 var _lobby_buttons: Array[Button] = []
 
 func _ready() -> void:
@@ -42,6 +48,7 @@ func _ready() -> void:
 	MultiplayerV2Service.public_rooms_loaded.connect(_on_rooms_loaded)
 	MultiplayerV2Service.lobby_request_finished.connect(_on_request_finished)
 	MultiplayerV2Service.signaling_state_changed.connect(_on_signaling_state)
+	MultiplayerV2Service.transport_state_changed.connect(_on_transport_state)
 	MultiplayerV2Service.round_prepare_requested.connect(_on_round_prepare_requested)
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 	_on_viewport_size_changed()
@@ -184,6 +191,10 @@ func _build_ui() -> void:
 	var leave_button := _button(tr("Leave room"))
 	leave_button.pressed.connect(MultiplayerV2Service.leave_room)
 	_room_view.add_child(leave_button)
+	_reconnect_button = _button(tr("Reconnect to host"))
+	_reconnect_button.pressed.connect(MultiplayerV2Service.begin_peer_connection)
+	_room_view.add_child(_reconnect_button)
+	_show_view("home")
 
 func _new_view() -> VBoxContainer:
 	var view := VBoxContainer.new()
@@ -219,6 +230,16 @@ func _toggle_ready() -> void:
 			MultiplayerV2Service.set_ready(not bool(member_value.get("is_ready", false)))
 			return
 
+func _change_skin(direction: int) -> void:
+	if _skin_request_pending:
+		return
+	for member_value in _room.get("members", []):
+		if member_value is Dictionary and str(member_value.get("user_id", "")) == MultiplayerV2Service.identity_user_id:
+			_skin_request_pending = true
+			MultiplayerV2Service.set_skin_id(posmod(int(member_value.get("skin_id", 0)) + direction, SkinPalette.SKIN_COUNT))
+			_refresh_controls()
+			return
+
 func _on_room_changed(room: Dictionary) -> void:
 	_room = room.duplicate(true)
 	if _room.is_empty():
@@ -226,30 +247,87 @@ func _on_room_changed(room: Dictionary) -> void:
 		_clear_members()
 		return
 	_show_view("room")
-	_room_summary.text = tr("Room %s") % str(room.get("room_code", ""))
+	_room_summary.text = tr("Room %s · %d/%d players") % [str(room.get("room_code", "")), room.get("members", []).size(), int(room.get("max_players", 5))]
 	_clear_members()
 	var local_ready := false
+	var local_manifest_ready := false
+	var local_manifest_hash := str(room.get("manifest_hash", ""))
+	var connected_peers := MultiplayerV2Service.connected_peer_ids()
 	for member_value in room.get("members", []):
 		if not member_value is Dictionary:
 			continue
 		var member: Dictionary = member_value
 		var is_local := str(member.get("user_id", "")) == MultiplayerV2Service.identity_user_id
 		var ready_text := tr("Ready") if bool(member.get("is_ready", false)) else tr("Not ready")
-		var line := Label.new()
-		line.text = "%s%s  ·  %s" % [str(member.get("display_name", "Runner")), tr(" (you)") if is_local else "", ready_text]
-		_players.add_child(line)
+		var is_online := bool(member.get("is_connected", true))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		row.custom_minimum_size.y = 32.0
+		var ready_indicator := Control.new()
+		ready_indicator.set_script(ReadyIndicatorScript)
+		ready_indicator.set("is_ready", bool(member.get("is_ready", false)))
+		ready_indicator.set("is_online", is_online)
+		ready_indicator.custom_minimum_size = Vector2(22.0, 22.0)
+		ready_indicator.tooltip_text = ready_text if is_online else tr("Offline")
+		ready_indicator.accessibility_name = ready_indicator.tooltip_text
+		row.add_child(ready_indicator)
+		var name_label := Label.new()
+		name_label.text = "%s%s" % [str(member.get("display_name", "Runner")), tr(" (you)") if is_local else ""]
+		name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(name_label)
+		if not is_local and is_online:
+			var peer_id := int(member.get("player_slot", 1))
+			var link_label := Label.new()
+			link_label.text = tr("P2P connected") if peer_id in connected_peers else tr("Connecting…")
+			link_label.add_theme_font_size_override("font_size", 11)
+			link_label.add_theme_color_override("font_color", Color("42d6c5") if peer_id in connected_peers else Color("b8c7dc"))
+			row.add_child(link_label)
+		var skin_id := posmod(int(member.get("skin_id", 0)), SkinPalette.SKIN_COUNT)
+		if is_local:
+			var previous_skin := _button("<")
+			previous_skin.custom_minimum_size = Vector2(36, 34)
+			previous_skin.tooltip_text = tr("Previous skin")
+			previous_skin.accessibility_name = previous_skin.tooltip_text
+			previous_skin.disabled = _skin_request_pending or str(room.get("phase", "OPEN")) != "OPEN"
+			previous_skin.pressed.connect(_change_skin.bind(-1))
+			row.add_child(previous_skin)
+		var miniature := TextureRect.new()
+		miniature.custom_minimum_size = Vector2(32, 32)
+		miniature.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		miniature.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		miniature.texture = RunnerFrames.get_frame_texture("run", 0)
+		miniature.material = SkinPalette.make_material(skin_id)
+		row.add_child(miniature)
+		if is_local:
+			var next_skin := _button(">")
+			next_skin.custom_minimum_size = Vector2(36, 34)
+			next_skin.tooltip_text = tr("Next skin")
+			next_skin.accessibility_name = next_skin.tooltip_text
+			next_skin.disabled = _skin_request_pending or str(room.get("phase", "OPEN")) != "OPEN"
+			next_skin.pressed.connect(_change_skin.bind(1))
+			row.add_child(next_skin)
+		_players.add_child(row)
 		if is_local:
 			local_ready = bool(member.get("is_ready", false))
+			local_manifest_ready = str(member.get("loaded_manifest_hash", "")) == local_manifest_hash and not local_manifest_hash.is_empty()
 	_ready_button.text = tr("Not ready") if local_ready else tr("Ready")
-	_ready_button.disabled = str(room.get("phase", "")) != "OPEN"
+	_ready_button.disabled = str(room.get("phase", "")) != "OPEN" or not local_manifest_ready
 	_start_button.visible = MultiplayerV2Service.is_room_owner()
 	var blockers := MultiplayerV2Service.get_start_blockers()
 	_start_button.disabled = not blockers.is_empty()
-	_start_button.tooltip_text = ", ".join(blockers)
+	_start_button.tooltip_text = _start_blocker_message(blockers)
+	_reconnect_button.visible = not MultiplayerV2Service.is_room_owner() and not _has_host_connection()
 	if str(room.get("manifest_hash", "")).is_empty():
 		_status.text = tr("Preparing the shared course…")
 	else:
-		_status.text = tr("Room ready. All players must be ready before the host starts.")
+		if not _has_host_connection() and not MultiplayerV2Service.is_room_owner():
+			_status.text = tr("Waiting for a direct connection to the host…")
+		elif not local_manifest_ready:
+			_status.text = tr("Checking the shared course…")
+		elif not local_ready:
+			_status.text = tr("Mark yourself ready when you are ready.")
+		else:
+			_status.text = tr("Room ready. Waiting for players.")
 
 func _clear_members() -> void:
 	if not is_instance_valid(_players):
@@ -280,12 +358,14 @@ func _on_rooms_loaded(rooms: Array, message: String) -> void:
 		_public_rooms.add_child(empty)
 
 func _on_request_finished(action: String, success: bool, message: String) -> void:
+	if action == "set_skin":
+		_skin_request_pending = false
 	if not success:
 		_status.text = message
 	elif action == "connect":
 		_status.text = message
-	elif action in ["create_room", "join_room", "set_ready", "refresh_room"]:
-		_status.text = tr("Room updated.")
+	elif action in ["create_room", "join_room", "set_ready", "set_skin"]:
+		_status.text = ""
 	_refresh_controls()
 
 func _refresh_controls() -> void:
@@ -294,15 +374,45 @@ func _refresh_controls() -> void:
 		_create_button.disabled = _busy or in_room
 	if is_instance_valid(_join_button):
 		_join_button.disabled = _busy or in_room
-	if is_instance_valid(_start_button) and in_room:
-		_start_button.visible = MultiplayerV2Service.is_room_owner()
-		_start_button.disabled = not MultiplayerV2Service.get_start_blockers().is_empty()
+	if is_instance_valid(_ready_button):
+		_ready_button.disabled = not in_room or str(_room.get("phase", "")) != "OPEN"
+	if is_instance_valid(_start_button):
+		_start_button.visible = in_room and MultiplayerV2Service.is_room_owner()
+		_start_button.disabled = not in_room or not MultiplayerV2Service.get_start_blockers().is_empty()
+	if is_instance_valid(_reconnect_button):
+		_reconnect_button.visible = in_room and not MultiplayerV2Service.is_room_owner() and not _has_host_connection()
 
 func _on_signaling_state(connected: bool, message: String) -> void:
 	if connected:
 		_status.text = tr("Connected to room signaling.")
 	elif not message.is_empty():
 		_status.text = message
+
+func _on_transport_state(state: String, message: String) -> void:
+	if state == "connected":
+		_status.text = tr("Direct player connection ready.")
+	elif state == "failed":
+		_status.text = message
+	_refresh_controls()
+	if not _room.is_empty():
+		_on_room_changed(_room)
+
+func _has_host_connection() -> bool:
+	if MultiplayerV2Service.is_room_owner():
+		return true
+	return 1 in MultiplayerV2Service.connected_peer_ids()
+
+func _start_blocker_message(blockers: PackedStringArray) -> String:
+	if blockers.is_empty():
+		return tr("Start the race when everyone is ready.")
+	for blocker in blockers:
+		if str(blocker).begins_with("transport_missing"):
+			return tr("Waiting for all players to connect directly.")
+		if str(blocker).begins_with("member_not_ready"):
+			return tr("Every player must be ready before the host starts.")
+		if str(blocker).begins_with("manifest"):
+			return tr("Waiting for every player to load the course.")
+	return tr("The room is still preparing the race.")
 
 func _on_round_prepare_requested(_descriptor: Dictionary) -> void:
 	match_start_requested.emit()
