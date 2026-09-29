@@ -28,6 +28,7 @@ AchievementService="*res://systems/achievement_service.gd"
 InventoryService="*res://systems/inventory_service.gd"
 AppNavigation="*res://systems/app_navigation.gd"
 MultiplayerService="*res://systems/multiplayer_service.gd"
+MultiplayerV2Service="*res://systems/multiplayer_v2/multiplayer_v2_service.gd"
 MultiplayerDiagnostics="*res://systems/multiplayer_diagnostics.gd"
 MobileTextEntry="*res://systems/mobile_text_entry.gd"
 

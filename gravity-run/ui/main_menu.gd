@@ -5,6 +5,8 @@ const GAME_HUB_SCENE := preload("res://ui/game_hub.tscn")
 const INVENTORY_SCREEN_SCENE := preload("res://ui/inventory_screen.tscn")
 const MULTIPLAYER_LOBBY_SCENE := preload("res://ui/multiplayer_lobby.tscn")
 const MULTIPLAYER_MATCH_SCENE := preload("res://ui/multiplayer_match.tscn")
+const MULTIPLAYER_V2_LOBBY_SCENE := preload("res://ui/multiplayer_v2/multiplayer_v2_lobby.tscn")
+const MULTIPLAYER_V2_MATCH_SCENE := preload("res://ui/multiplayer_v2/multiplayer_v2_match.tscn")
 const COURSE_GENERATOR_SCRIPT := preload("res://systems/course_generator.gd")
 const COURSE_RULESET_SCRIPT := preload("res://systems/course_generation_ruleset.gd")
 
@@ -47,6 +49,7 @@ var _create_challenge_button: Button
 var _game_hub: Control
 var _inventory_screen: Control
 var _multiplayer_lobby: Control
+var _multiplayer_v2_lobby: Control
 var _return_to_hub_after_screen := false
 
 func _ready() -> void:
@@ -72,6 +75,10 @@ func _ready() -> void:
 	if AppNavigation.consume_multiplayer_lobby_request():
 		_show_game_hub()
 		_show_multiplayer_lobby()
+		return
+	if AppNavigation.consume_multiplayer_v2_lobby_request():
+		_show_game_hub()
+		_show_multiplayer_v2_lobby()
 		return
 	if AppNavigation.consume_game_hub_request():
 		_show_game_hub()
@@ -184,6 +191,7 @@ func _show_game_hub() -> void:
 	_game_hub.character_requested.connect(_show_character_screen)
 	_game_hub.shop_requested.connect(_show_shop_screen)
 	_game_hub.multiplayer_requested.connect(_show_multiplayer_lobby)
+	_game_hub.multiplayer_v2_requested.connect(_show_multiplayer_v2_lobby)
 	_game_hub.main_menu_requested.connect(_return_to_main_menu)
 	add_child(_game_hub)
 
@@ -197,6 +205,17 @@ func _show_multiplayer_lobby() -> void:
 
 func _start_multiplayer_match() -> void:
 	get_tree().change_scene_to_packed(MULTIPLAYER_MATCH_SCENE)
+
+func _show_multiplayer_v2_lobby() -> void:
+	if is_instance_valid(_multiplayer_v2_lobby):
+		_multiplayer_v2_lobby.queue_free()
+	_multiplayer_v2_lobby = MULTIPLAYER_V2_LOBBY_SCENE.instantiate()
+	_multiplayer_v2_lobby.back_requested.connect(_show_game_hub)
+	_multiplayer_v2_lobby.match_start_requested.connect(_start_multiplayer_v2_match)
+	add_child(_multiplayer_v2_lobby)
+
+func _start_multiplayer_v2_match() -> void:
+	get_tree().change_scene_to_packed(MULTIPLAYER_V2_MATCH_SCENE)
 
 func _show_character_screen() -> void:
 	_show_inventory_screen("character")

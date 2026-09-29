@@ -3,6 +3,7 @@ extends Node
 
 var _open_game_hub_on_menu := false
 var _open_multiplayer_lobby_on_menu := false
+var _open_multiplayer_v2_lobby_on_menu := false
 
 func request_game_hub() -> void:
 	_open_game_hub_on_menu = true
@@ -18,4 +19,12 @@ func request_multiplayer_lobby() -> void:
 func consume_multiplayer_lobby_request() -> bool:
 	var requested := _open_multiplayer_lobby_on_menu
 	_open_multiplayer_lobby_on_menu = false
+	return requested
+
+func request_multiplayer_v2_lobby() -> void:
+	_open_multiplayer_v2_lobby_on_menu = true
+
+func consume_multiplayer_v2_lobby_request() -> bool:
+	var requested := _open_multiplayer_v2_lobby_on_menu
+	_open_multiplayer_v2_lobby_on_menu = false
 	return requested
