@@ -4,6 +4,9 @@ const DiagnosticsScript := preload("res://systems/multiplayer_diagnostics.gd")
 
 func _ready() -> void:
 	var recorder := DiagnosticsScript.new()
+	add_child(recorder)
+	recorder.set_process(false)
+	recorder._reports.clear()
 	var large_report := {
 		"schema_version": 1,
 		"report_id": "report-test",
@@ -71,9 +74,13 @@ func _ready() -> void:
 	recorder._window_started_usec = recorder._started_usec
 	recorder._flush_window(Time.get_ticks_usec())
 	assert(recorder._capture.detail_samples.size() == 500 and not recorder._capture.loss.has("capture_detail_samples_reduced"), "active match window flush must not serialize or reduce the full capture")
-	var frozen_large_capture: Dictionary = recorder._enforce_capture_memory_budget(recorder._capture)
+	var frozen_large_capture: Dictionary = await recorder._enforce_capture_memory_budget(recorder._capture)
 	assert(JSON.stringify(frozen_large_capture).to_utf8_buffer().size() <= DiagnosticsScript.MAX_LOCAL_BYTES, "post-match frozen capture remains within the 2 MiB memory budget")
 	assert(frozen_large_capture.loss.get("capture_detail_samples_reduced", false), "post-match reduction is explicitly marked")
+	var singleton_oversized := {"report_id": "single-sample", "totals": {}, "loss": {}, "detail_samples": [{"padding": "x".repeat(DiagnosticsScript.MAX_LOCAL_BYTES + 2048)}], "browser_samples": [], "events": [], "windows": [], "incidents": [], "start_samples": [], "after_match_trace": []}
+	var singleton_reduced: Dictionary = await recorder._enforce_capture_memory_budget(singleton_oversized)
+	assert(singleton_reduced.detail_samples.is_empty(), "an oversized single detail sample must be removed rather than slice to itself")
+	assert(int(singleton_reduced.totals.diagnostics_size_reduction_iterations) <= 12 and singleton_reduced.totals.diagnostics_size_budget_met, "single-item reductions must make bounded progress to the exact report budget")
 	recorder._capture = {"phase": "running", "start_samples": [], "loss": {}, "totals": {}}
 	recorder._started_usec = Time.get_ticks_usec()
 	recorder._race_started_usec = recorder._started_usec
@@ -105,12 +112,19 @@ func _ready() -> void:
 	recorder._capture = {"phase": "results", "schema_version": 1, "report_id": "deferred-report-test", "match_generation": "test-generation", "terminal_state": "running", "windows": [], "detail_samples": [], "start_samples": [{"t_ms": 0, "sample": {"user_id": "guest-uuid", "frame_id": 0}}], "events": [], "incidents": [], "browser_samples": [], "timings": {}, "totals": {"process_frames": 0}, "loss": {}}
 	recorder._started_usec = Time.get_ticks_usec()
 	recorder._window_started_usec = recorder._started_usec
+	recorder.record_post_match_event("results_requested", {"tick": 42})
 	recorder.finish_match("finished")
 	assert(recorder._capture.is_empty() and recorder._reports.is_empty() and recorder._pending_report_finalizations == 1, "finish freezes the capture immediately and defers report work")
 	assert(recorder.get_export_text().contains("saved after the match"), "active report export is refused instead of serializing the live capture")
-	await get_tree().process_frame
+	for _frame in 8:
+		if recorder._pending_report_finalizations == 0:
+			break
+		await get_tree().process_frame
 	assert(recorder._pending_report_finalizations == 0 and recorder.get_latest_report().terminal_state == "finished", "deferred finalization saves the finished report after the results transition")
 	assert(recorder.get_latest_report().start_samples[0].sample.user_id == "p1", "deferred finalization anonymizes retained startup data")
+	assert(recorder.get_latest_report().after_match_trace[0].event == "results_requested", "result intent should be retained before the report capture freezes")
+	recorder.record_post_match_event("room_state_applied", {"phase": "OPEN", "room_version": 4})
+	assert(recorder.get_latest_report().after_match_trace.back().event == "room_state_applied", "the after-match lobby trace should remain attached to the latest local report without rebuilding its JSON on each event")
 	print("Multiplayer diagnostics size/privacy tests passed.")
 	recorder.free()
 	get_tree().quit()

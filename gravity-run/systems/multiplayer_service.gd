@@ -69,9 +69,10 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if not room_state.is_empty():
 		_lobby_poll_elapsed += delta
-		# Roster/readiness/countdown changes should not wait several seconds.
-		# Keep match polling less frequent, where snapshots already carry motion.
-		var poll_interval := 1.0 if str(room_state.get("phase", "OPEN")) == "COUNTDOWN" else 15.0
+		# P2P snapshots own motion during RUNNING. Lobby/FINISHED room state is
+		# polled quickly as a fallback if its realtime hint was missed.
+		var phase := str(room_state.get("phase", "OPEN"))
+		var poll_interval := 1.0 if phase == "COUNTDOWN" else (15.0 if phase == "RUNNING" else 2.0)
 		if _lobby_poll_elapsed >= poll_interval:
 			_lobby_poll_elapsed = 0.0
 			refresh_room()
@@ -84,6 +85,9 @@ func is_room_owner() -> bool:
 
 func get_room_id() -> String:
 	return str(room_state.get("room_id", ""))
+
+func get_room_generation() -> int:
+	return _room_generation
 
 func get_signaling_topic() -> String:
 	return str(room_state.get("signaling_topic", ""))
@@ -228,6 +232,7 @@ func leave_room() -> void:
 
 func return_to_lobby() -> void:
 	if has_room():
+		MultiplayerDiagnostics.record_post_match_event("return_to_lobby_rpc_requested", {"room_id": get_room_id(), "phase": str(room_state.get("phase", "")), "local_room_generation": _room_generation})
 		_lobby_provider.return_to_lobby(get_room_id(), _current_token(), _lobby_context())
 
 func advance_match_phase(phase: String) -> void:
@@ -371,6 +376,8 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 	if action == "list_public_rooms":
 		public_rooms_loaded.emit(data if success and data is Array else [], message if not success else "")
 		return
+	if action == "return_to_lobby":
+		MultiplayerDiagnostics.record_post_match_event("return_to_lobby_rpc_completed", {"success": success, "phase": str(room_state.get("phase", "")), "message": message.left(120)})
 	# Ignore replies from a request that was already in flight when the player
 	# left; otherwise a stale refresh/ready response can put the old room back.
 	if action not in ["create_room", "join_room", "leave_room"] and not has_room():
@@ -393,7 +400,10 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 	if data is Dictionary:
 		var resolved_room: Variant = data.get("room", data) if action == "start_countdown" else data
 		if resolved_room is Dictionary:
+			var old_phase := str(room_state.get("phase", ""))
 			room_state = resolved_room.duplicate(true)
+			if old_phase != str(room_state.get("phase", "")) or action == "return_to_lobby":
+				MultiplayerDiagnostics.record_post_match_event("room_state_applied", {"action": action, "phase": str(room_state.get("phase", "")), "local_room_generation": _room_generation, "member_count": get_members().size()})
 			print("[MP_DIAG] ", JSON.stringify({"event": "room_state_received", "action": action, "room_id": get_room_id(), "phase": str(room_state.get("phase", "")), "members": get_members().size(), "generation": _room_generation, "at_ms": Time.get_ticks_msec()}))
 			room_changed.emit(room_state.duplicate(true))
 			if action == "start_countdown":

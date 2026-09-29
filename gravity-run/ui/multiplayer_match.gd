@@ -126,6 +126,7 @@ var _status_label: Label
 var _distance_label: Label
 var _result_label: Label
 var _results_panel: PanelContainer
+var _results_frame_event_pending := false
 var _results_list: VBoxContainer
 var _return_lobby_button: Button
 var _course_root: Node2D
@@ -442,6 +443,7 @@ func _on_peer_data_received(peer_user_id: String, channel_name: String, payload:
 					MultiplayerService.queue_reliable_peer_message(peer_user_id, {"kind": "match_setup_ack", "room_id": MultiplayerService.get_room_id()})
 			"return_lobby_request":
 				if str(payload.get("room_id", "")) == MultiplayerService.get_room_id() and bool(_snapshot.get("finished", false)):
+					MultiplayerDiagnostics.record_post_match_event("return_request_received_by_host", {"requester": peer_user_id, "tick": int(_snapshot.get("tick", -1))})
 					_return_requester_name = _member_display_name(peer_user_id)
 					_return_notice_override = ""
 					_update_return_request_notice()
@@ -2066,7 +2068,7 @@ static func distance_m(world_x: float, start_x: float) -> int:
 	return maxi(0, int((world_x - start_x) / 10.0))
 
 func _record_match_diag(event_name: String, details: Dictionary) -> void:
-	var important := event_name in ["simulation_started", "race_start_handshake_started", "race_start_probe_ack", "race_start_committed", "race_start_commit_received", "snapshot_stream_started", "camera_state_changed", "player_terminal_queued", "player_terminal_received", "match_terminal_snapshot", "match_finished_queued", "reliable_finish_ack", "results_panel_shown", "match_peer_failed", "flip_input_sent", "flip_input_queued", "flip_result_received"]
+	var important := event_name in ["simulation_started", "race_start_handshake_started", "race_start_probe_ack", "race_start_committed", "race_start_commit_received", "snapshot_stream_started", "camera_state_changed", "player_terminal_queued", "player_terminal_received", "match_terminal_snapshot", "match_finished_queued", "reliable_finish_ack", "results_visible_requested", "match_peer_failed", "flip_input_sent", "flip_input_queued", "flip_result_received"]
 	MultiplayerDiagnostics.record_event(event_name, details, important)
 	var now := Time.get_ticks_msec()
 	var signature := event_name + ":" + str(details.get("reason", ""))
@@ -2292,9 +2294,9 @@ func _show_results() -> void:
 			_local_finish_ignored_logged = true
 			_record_match_diag("local_finish_ignored", {"local_tick": int(_simulation.get("tick")) if _simulation != null else -1, "local_players": _snapshot.get("players", [])})
 		return
+	MultiplayerDiagnostics.record_post_match_event("results_requested", {"tick": int(result_snapshot.get("tick", -1)), "finish_reason": str(result_snapshot.get("finish_reason", _finish_reason))})
 	_snapshot = result_snapshot.duplicate(true)
-	_log_terminal_snapshot("results_panel_shown", _snapshot)
-	MultiplayerDiagnostics.finish_match("finished")
+	_log_terminal_snapshot("results_visible_requested", _snapshot)
 	_results_panel.visible = true
 	_status_label.visible = false
 	_result_label.visible = true
@@ -2372,9 +2374,20 @@ func _show_results() -> void:
 		_results_list.add_child(row)
 		previous_place = place
 		previous_distance = state_distance
+	MultiplayerDiagnostics.record_post_match_event("results_visible_requested", {"tick": int(_snapshot.get("tick", -1)), "player_count": states.size()})
+	if not _results_frame_event_pending:
+		_results_frame_event_pending = true
+		RenderingServer.frame_post_draw.connect(_on_results_frame_rendered, CONNECT_ONE_SHOT)
+	MultiplayerDiagnostics.finish_match("finished")
+
+func _on_results_frame_rendered() -> void:
+	_results_frame_event_pending = false
+	MultiplayerDiagnostics.record_post_match_event("results_frame_rendered", {"tick": int(_snapshot.get("tick", -1)), "frame": Engine.get_process_frames()})
+
 func _return_to_lobby() -> void:
 	if _return_requested:
 		return
+	MultiplayerDiagnostics.record_post_match_event("return_to_lobby_requested", {"owner": MultiplayerService.is_room_owner(), "phase": str(MultiplayerService.room_state.get("phase", ""))})
 	_return_requested = true
 	_return_lobby_button.disabled = true
 	_return_lobby_button.text = tr("Returning to lobby…")
@@ -2382,6 +2395,7 @@ func _return_to_lobby() -> void:
 		MultiplayerService.return_to_lobby()
 	else:
 		var queued := MultiplayerService.queue_reliable_peer_message(_owner_user_id, {"kind": "return_lobby_request", "room_id": MultiplayerService.get_room_id()})
+		MultiplayerDiagnostics.record_post_match_event("return_request_sent_to_host", {"queued": queued, "host_peer": _owner_user_id})
 		if queued:
 			_return_request_started_at = _network_clock
 			_return_lobby_button.text = tr("Return request sent to host…")

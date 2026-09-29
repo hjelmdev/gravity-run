@@ -40,6 +40,9 @@ var _frame_sample_ring: Array[Dictionary] = []
 var _frame_sample_write_index := 0
 var _pending_report_finalizations := 0
 var _last_automatic_problem_usec := 0
+var _after_match_traces: Dictionary = {}
+var _after_match_generation := ""
+var _after_match_started_usec := 0
 var _test_layout_preference := "unknown"
 var _instances_preference: Variant = null
 
@@ -160,6 +163,7 @@ func begin_match(metadata: Dictionary) -> void:
 		"start_samples": [],
 		"events": [],
 		"incidents": [],
+		"after_match_trace": [],
 		"browser_samples": [],
 		"totals": {"process_frames": 0, "snapshot_received": 0, "snapshot_accepted": 0, "snapshot_rejected": 0, "transport_polls": 0, "transport_packets": 0, "transport_packets_control": 0, "transport_packets_snapshot": 0},
 		"loss": {"detail_samples_dropped": 0, "start_samples_dropped": 0, "events_dropped": 0, "windows_dropped": 0, "incidents_dropped": 0},
@@ -337,6 +341,18 @@ func finish_match(state: String) -> void:
 	_capture.terminal_state = state
 	_add_event("capture_finished", {"terminal_state": state}, true)
 	var completed := _capture
+	_after_match_generation = str(completed.get("match_generation", ""))
+	_after_match_started_usec = Time.get_ticks_usec()
+	if not _after_match_generation.is_empty():
+		var opening_trace: Array = completed.get("after_match_trace", []).duplicate(true)
+		for sample in opening_trace:
+			if sample is Dictionary:
+				sample.after_match_ms = float(int(sample.get("at_monotonic_usec", _after_match_started_usec)) - _after_match_started_usec) / 1000.0
+		_after_match_traces[_after_match_generation] = opening_trace
+		while _after_match_traces.size() > 2:
+			_after_match_traces.erase(_after_match_traces.keys()[0])
+	else:
+		_after_match_started_usec = 0
 	completed["_detail_sample_write_index"] = _detail_sample_write_index
 	_capture = {}
 	_detail_sample_write_index = 0
@@ -347,21 +363,51 @@ func finish_match(state: String) -> void:
 	report_changed.emit("Multiplayer report is being finalized locally.")
 
 func _finalize_completed_report(completed: Dictionary) -> void:
+	# Let the results UI reach an actual engine-rendered frame before any report work.
+	if DisplayServer.get_name() == "headless":
+		await get_tree().process_frame
+	else:
+		await RenderingServer.frame_post_draw
 	var finalize_started_usec := Time.get_ticks_usec()
+	record_post_match_event("report_finalization_started", {"report_id": str(completed.get("report_id", ""))})
 	var incident_sanitize_started_usec := Time.get_ticks_usec()
 	var detail_write_index := int(completed.get("_detail_sample_write_index", 0))
 	completed.erase("_detail_sample_write_index")
 	_sanitize_incident_frames(completed, detail_write_index)
 	completed.totals.diagnostics_incident_sanitize_usec = Time.get_ticks_usec() - incident_sanitize_started_usec
-	completed = _enforce_capture_memory_budget(completed)
+	completed = await _enforce_capture_memory_budget(completed)
 	completed.totals.diagnostics_finalize_usec = Time.get_ticks_usec() - finalize_started_usec
 	_reports.append(completed)
 	while _reports.size() > 2:
 		_reports.pop_front()
 		_save_loss_marker()
-	_save_local()
+	await get_tree().process_frame
+	await _save_local()
 	_pending_report_finalizations = maxi(_pending_report_finalizations - 1, 0)
+	record_post_match_event("report_finalization_completed", {"report_id": str(completed.get("report_id", "")), "elapsed_ms": float(completed.totals.get("diagnostics_finalize_usec", 0)) / 1000.0, "size_reduction_iterations": int(completed.totals.get("diagnostics_size_reduction_iterations", 0))})
 	report_changed.emit("Multiplayer report saved locally.")
+
+func record_post_match_event(event_name: String, details: Dictionary = {}) -> void:
+	if event_name.is_empty():
+		return
+	var trace: Array = []
+	if not _capture.is_empty():
+		trace = _capture.get("after_match_trace", [])
+	elif not _after_match_generation.is_empty():
+		trace = _after_match_traces.get(_after_match_generation, [])
+	else:
+		return
+	var now_usec := Time.get_ticks_usec()
+	var sample := {"at_monotonic_usec": now_usec, "after_match_ms": float(now_usec - _after_match_started_usec) / 1000.0 if _after_match_started_usec > 0 else 0.0, "event": event_name.left(80), "details": _sanitize(details)}
+	trace.append(sample)
+	if trace.size() > 240:
+		trace.pop_front()
+		if not _capture.is_empty():
+			_capture.loss.after_match_trace_dropped = int(_capture.loss.get("after_match_trace_dropped", 0)) + 1
+	if not _capture.is_empty():
+		_capture.after_match_trace = trace
+	elif not _after_match_generation.is_empty():
+		_after_match_traces[_after_match_generation] = trace
 
 func _sanitize_incident_frames(report: Dictionary, detail_write_index: int = 0) -> void:
 	var start_samples: Array = []
@@ -411,7 +457,13 @@ func get_status() -> String:
 	return "Recording multiplayer diagnostics locally."
 
 func get_latest_report() -> Dictionary:
-	return _reports.back().duplicate(true) if not _reports.is_empty() else {}
+	if _reports.is_empty():
+		return {}
+	var report: Dictionary = _reports.back().duplicate(true)
+	var generation := str(report.get("match_generation", ""))
+	if _after_match_traces.has(generation):
+		report.after_match_trace = (_after_match_traces[generation] as Array).duplicate(true)
+	return report
 
 func get_export_text(compact: bool = true) -> String:
 	if not _capture.is_empty() or _pending_report_finalizations > 0:
@@ -427,21 +479,27 @@ func _build_clipboard_text(report: Dictionary) -> String:
 	var candidate := _reduce_for_export(report)
 	var json_text := JSON.stringify(candidate)
 	var reductions := 0
-	while json_text.to_utf8_buffer().size() > MAX_CLIPBOARD_BYTES - 32 and reductions < 64:
+	while json_text.to_utf8_buffer().size() > MAX_CLIPBOARD_BYTES - 32 and reductions < 12:
 		reductions += 1
 		if not candidate.report.detail_samples.is_empty():
-			candidate.report.detail_samples = candidate.report.detail_samples.slice(maxi(0, candidate.report.detail_samples.size() / 2))
+			var count: int = candidate.report.detail_samples.size()
+			candidate.report.detail_samples = candidate.report.detail_samples.slice(count / 2) if count > 1 else []
 		elif not candidate.report.start_samples.is_empty():
-			candidate.report.start_samples = candidate.report.start_samples.slice(candidate.report.start_samples.size() / 2)
+			var count: int = candidate.report.start_samples.size()
+			candidate.report.start_samples = candidate.report.start_samples.slice(count / 2) if count > 1 else []
 		elif not candidate.report.incidents.is_empty():
 			if not _halve_incident_samples(candidate.report.incidents):
 				candidate.report.incidents.pop_back()
 		elif not candidate.report.browser_samples.is_empty():
-			candidate.report.browser_samples = candidate.report.browser_samples.slice(maxi(0, candidate.report.browser_samples.size() / 2))
-		elif candidate.report.events.size() > 8:
-			candidate.report.events = _prioritize_events(candidate.report.events).slice(0, maxi(8, candidate.report.events.size() / 2))
-		elif candidate.report.windows.size() > 4:
-			candidate.report.windows = candidate.report.windows.slice(maxi(0, candidate.report.windows.size() / 2))
+			var count: int = candidate.report.browser_samples.size()
+			candidate.report.browser_samples = candidate.report.browser_samples.slice(count / 2) if count > 1 else []
+		elif not candidate.report.events.is_empty():
+			var events: Array = _prioritize_events(candidate.report.events)
+			var count := events.size()
+			candidate.report.events = events.slice(0, maxi(1, count / 2)) if count > 8 else (events.slice(0, count - 1) if count > 1 else [])
+		elif not candidate.report.windows.is_empty():
+			var count: int = candidate.report.windows.size()
+			candidate.report.windows = candidate.report.windows.slice(count / 2) if count > 4 else (candidate.report.windows.slice(0, count - 1) if count > 1 else [])
 		else:
 			candidate.report.loss.clipboard_metadata_only = true
 			candidate.report.detail_samples.clear()
@@ -450,6 +508,7 @@ func _build_clipboard_text(report: Dictionary) -> String:
 			candidate.report.browser_samples.clear()
 			candidate.report.events = _prioritize_events(candidate.report.events).slice(0, 8)
 			candidate.report.windows.clear()
+			candidate.report.after_match_trace.clear()
 		candidate.report.loss["clipboard_reduced"] = true
 		json_text = JSON.stringify(candidate)
 	if json_text.to_utf8_buffer().size() > MAX_CLIPBOARD_BYTES - 32:
@@ -464,7 +523,7 @@ func _minimal_report_for_export(source: Dictionary, destination: String) -> Dict
 			minimal[key] = source[key]
 	minimal["loss"] = source.get("loss", {}).duplicate(true) if source.get("loss", {}) is Dictionary else {}
 	minimal.loss["%s_metadata_only" % destination] = true
-	minimal.loss["%s_omitted_sections" % destination] = ["roster", "windows", "detail_samples", "start_samples", "events", "incidents", "browser_samples", "timings"]
+	minimal.loss["%s_omitted_sections" % destination] = ["roster", "windows", "detail_samples", "start_samples", "events", "incidents", "browser_samples", "timings", "after_match_trace"]
 	return minimal
 
 func _halve_incident_samples(incidents: Array) -> bool:
@@ -474,7 +533,7 @@ func _halve_incident_samples(incidents: Array) -> bool:
 		for sample_key in ["frame_samples", "pre_frame_samples", "samples", "pre_samples"]:
 			var entries: Array = incident.get(sample_key, [])
 			if not entries.is_empty():
-				incident[sample_key] = entries.slice(entries.size() / 2)
+				incident[sample_key] = entries.slice(entries.size() / 2) if entries.size() > 1 else []
 				incidents[incident_index] = incident
 				return true
 		incident_index -= 1
@@ -534,32 +593,60 @@ func _enforce_capture_memory_budget(report: Dictionary) -> Dictionary:
 	var guard_started_usec := Time.get_ticks_usec()
 	var reductions := 0
 	var bytes := JSON.stringify(report).to_utf8_buffer().size()
-	while bytes > MAX_LOCAL_BYTES - 512 and reductions < 64:
+	var bytes_before := bytes
+	var categories: Array[String] = []
+	while bytes > MAX_LOCAL_BYTES - 512 and reductions < 24:
 		reductions += 1
-		if not report.detail_samples.is_empty():
-			report.detail_samples = report.detail_samples.slice(report.detail_samples.size() / 2)
-			report.loss.capture_detail_samples_reduced = true
-		elif not report.browser_samples.is_empty():
-			report.browser_samples = report.browser_samples.slice(report.browser_samples.size() / 2)
-			report.loss.capture_browser_samples_reduced = true
-		elif report.events.size() > 8:
-			report.events = _prioritize_events(report.events).slice(0, maxi(8, report.events.size() / 2))
-			report.loss.capture_events_reduced = true
-		elif report.windows.size() > 4:
-			report.windows = report.windows.slice(report.windows.size() / 2)
-			report.loss.capture_windows_reduced = true
-		elif not report.incidents.is_empty() and _halve_incident_samples(report.incidents):
-			report.loss.capture_incidents_reduced = true
-		elif not report.start_samples.is_empty():
-			report.start_samples = report.start_samples.slice(0, maxi(1, report.start_samples.size() / 2))
-			report.loss.capture_start_samples_reduced = true
-		else:
+		var category := _reduce_capture_once(report)
+		if category.is_empty():
 			report = _minimal_report_for_export(report, "local_capture")
+			category = "minimal_metadata_fallback"
+		categories.append(category)
+		if not category.begins_with("minimal_"):
+			report.loss["capture_%s_reduced" % category] = true
+		# Each reduction makes progress; yield so lobby, transport and rematch
+		# updates continue while the report is reduced and rechecked.
+		await get_tree().process_frame
 		var size_check_started_usec := Time.get_ticks_usec()
 		bytes = JSON.stringify(report).to_utf8_buffer().size()
 		report.totals.diagnostics_size_check_usec = int(report.totals.get("diagnostics_size_check_usec", 0)) + Time.get_ticks_usec() - size_check_started_usec
+		if category == "minimal_metadata_fallback" and bytes > MAX_LOCAL_BYTES - 512:
+			break
+	report.totals.diagnostics_size_bytes_before = bytes_before
+	report.totals.diagnostics_size_bytes_after = bytes
+	report.totals.diagnostics_size_reduction_iterations = reductions
+	report.totals.diagnostics_size_reduction_categories = categories
+	report.totals.diagnostics_size_budget_met = bytes <= MAX_LOCAL_BYTES - 512
 	report.totals.diagnostics_size_reduction_usec = Time.get_ticks_usec() - guard_started_usec
 	return report
+
+func _reduce_capture_once(report: Dictionary) -> String:
+	if not report.detail_samples.is_empty():
+		var detail_size: int = report.detail_samples.size()
+		report.detail_samples = report.detail_samples.slice(detail_size / 2) if detail_size > 1 else []
+		return "detail_samples"
+	if not report.browser_samples.is_empty():
+		var browser_size: int = report.browser_samples.size()
+		report.browser_samples = report.browser_samples.slice(browser_size / 2) if browser_size > 1 else []
+		return "browser_samples"
+	if not report.events.is_empty():
+		var events: Array = _prioritize_events(report.events)
+		var event_size := events.size()
+		report.events = events.slice(0, maxi(1, event_size / 2)) if event_size > 8 else (events.slice(0, event_size - 1) if event_size > 1 else [])
+		return "events"
+	if not report.windows.is_empty():
+		var window_size: int = report.windows.size()
+		report.windows = report.windows.slice(window_size / 2) if window_size > 4 else (report.windows.slice(0, window_size - 1) if window_size > 1 else [])
+		return "windows"
+	if not report.incidents.is_empty():
+		if not _halve_incident_samples(report.incidents):
+			report.incidents.pop_back()
+		return "incidents"
+	if not report.start_samples.is_empty():
+		var start_size: int = report.start_samples.size()
+		report.start_samples = report.start_samples.slice(0, start_size / 2) if start_size > 1 else []
+		return "start_samples"
+	return ""
 
 func _phase_gap_stats() -> Dictionary:
 	var result := {}
@@ -640,9 +727,9 @@ func _safe_player_label(identity: String) -> String:
 
 func _reduce_for_export(report: Dictionary) -> Dictionary:
 	var copy := report.duplicate(true)
-	for key in ["detail_samples", "start_samples", "incidents", "browser_samples", "timings"]:
+	for key in ["detail_samples", "start_samples", "incidents", "browser_samples", "after_match_trace", "timings"]:
 		if not copy.has(key):
-			copy[key] = [] if key != "timings" else {}
+			copy[key] = {} if key == "timings" else []
 	copy["detail_samples"] = copy.detail_samples.slice(maxi(0, copy.detail_samples.size() - 120))
 	copy["start_samples"] = copy.start_samples.slice(maxi(0, copy.start_samples.size() - 120))
 	copy["events"] = _prioritize_events(copy.get("events", [])).slice(maxi(0, copy.get("events", []).size() - 240))
@@ -683,32 +770,36 @@ func _prioritize_events(events: Array) -> Array:
 func _save_local() -> void:
 	var local := {"reports": _reports, "saved_at": Time.get_datetime_string_from_system(true)}
 	var serialization_started_usec := Time.get_ticks_usec()
+	await get_tree().process_frame
 	var serialized := JSON.stringify(local)
 	if serialized.to_utf8_buffer().size() > MAX_LOCAL_BYTES and _reports.size() > 1:
 		var latest: Dictionary = _reports.back()
 		latest.loss.previous_reports_pruned_locally = _reports.size() - 1
 		_reports = [latest]
 		local.reports = _reports
+		await get_tree().process_frame
 		serialized = JSON.stringify(local)
 	if serialized.to_utf8_buffer().size() > MAX_LOCAL_BYTES and not _reports.is_empty():
 		_reports[_reports.size() - 1] = _reduce_local_report(_reports.back())
 		local.reports = _reports
-		serialized = JSON.stringify(local)
-	if not _reports.is_empty():
-		_reports.back().totals.diagnostics_report_serialization_usec = Time.get_ticks_usec() - serialization_started_usec
-		local.reports = _reports
+		await get_tree().process_frame
 		serialized = JSON.stringify(local)
 	if serialized.to_utf8_buffer().size() > MAX_LOCAL_BYTES:
 		if _reports.is_empty():
 			return
 		_reports[_reports.size() - 1] = _minimal_report_for_export(_reports.back(), "local_save")
 		local.reports = _reports
+		await get_tree().process_frame
 		serialized = JSON.stringify(local)
-		if serialized.to_utf8_buffer().size() > MAX_LOCAL_BYTES:
-			return
+	var final_bytes := serialized.to_utf8_buffer().size()
+	if final_bytes > MAX_LOCAL_BYTES:
+		return
 	var file := FileAccess.open(LOCAL_FILE, FileAccess.WRITE)
 	if file != null:
 		file.store_string(serialized)
+	if not _reports.is_empty():
+		_reports.back().totals.diagnostics_report_serialization_usec = Time.get_ticks_usec() - serialization_started_usec
+		_reports.back().totals.diagnostics_report_serialized_bytes = final_bytes
 
 func _load_local() -> void:
 	if not FileAccess.file_exists(LOCAL_FILE):
