@@ -35,7 +35,7 @@ signal world_baseline_received(baseline: Dictionary)
 signal world_interaction_resolved(request_id: String, accepted: bool, message: String, commit: Dictionary)
 signal results_received(result: Dictionary)
 
-const V2_GAME_VERSION := "2.1.20260929.1"
+const V2_GAME_VERSION := "2.1.20260930.1"
 const MAX_PLAYERS := 5
 const POSITION_RATE_HZ := 30
 
@@ -84,6 +84,19 @@ var _world_event_acks: Dictionary = {}
 var _disconnect_since_usec: Dictionary = {}
 var _last_heartbeat_usec: Dictionary = {}
 var _last_reconnect_attempt_usec: Dictionary = {}
+var _reconnect_generation: Dictionary = {}
+var _reconnect_sync_pending: Dictionary = {}
+var _reconnect_sync_requests: Dictionary = {}
+var _reconnect_sync_since_usec: Dictionary = {}
+var _reconnect_sync_elapsed := 0.0
+var _pending_round_failure: Dictionary = {}
+var _pending_round_failure_since_usec := -1
+var _received_round_failures: Dictionary = {}
+var _round_failure_retry_elapsed := 0.0
+var _round_abort_pending: Dictionary = {}
+var _round_abort_retry_elapsed := 0.0
+var _round_abort_return_pending := false
+var _round_abort_started_usec := -1
 var _result_retry_elapsed := 0.0
 var _result_committed := false
 var _committed_result: Dictionary = {}
@@ -102,6 +115,20 @@ var _room_refresh_in_flight := false
 var last_start_failure := ""
 const DISCONNECT_GRACE_USEC := 10_000_000
 const HEARTBEAT_INTERVAL_SECONDS := 1.0
+const PEER_LIVENESS_TIMEOUT_USEC := 3_000_000
+const RECONNECT_RETRY_USEC := 2_000_000
+
+static func liveness_restart_due(now_usec: int, last_contact_usec: int, last_attempt_usec: int) -> bool:
+	if last_contact_usec < 0 or now_usec - last_contact_usec < PEER_LIVENESS_TIMEOUT_USEC:
+		return false
+	if last_attempt_usec >= 0 and now_usec - last_attempt_usec < RECONNECT_RETRY_USEC:
+		return false
+	# Fresh contact preserves a healthy peer across round transitions; a stale
+	# peer can be restarted even if the ICE state still says connected.
+	return true
+
+static func reconnect_world_revision_matches(expected_revision: int, actual_revision: int) -> bool:
+	return expected_revision >= 0 and actual_revision == expected_revision
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -129,9 +156,11 @@ func _process(delta: float) -> void:
 				for target in connected_peer_ids():
 					send_control(int(target), "HEARTBEAT", {"host_sent_usec": Time.get_ticks_usec()})
 		_round_coordinator.process(Time.get_ticks_usec())
+		_process_reconnect_sync(delta)
 		_drain_interaction_claims()
 		_process_result_delivery(delta)
 		_process_terminal_delivery(delta)
+		_process_round_failure_delivery(delta)
 		if _local_prepare_pending and (_round_coordinator.is_host or _round_coordinator.clock.is_synchronized()):
 			_local_prepare_pending = false
 			_round_coordinator.mark_local_prepared(Time.get_ticks_usec())
@@ -174,6 +203,7 @@ func _create_lobby_services() -> void:
 	_webrtc_transport.name = "WebRTC"
 	_webrtc_transport.signal_outgoing.connect(_signaling_transport.send_signal)
 	_webrtc_transport.peer_state_changed.connect(_on_peer_state_changed)
+	_webrtc_transport.transport_mutation.connect(_on_transport_mutation)
 	add_child(_webrtc_transport)
 	_round_coordinator.control_requested.connect(send_control)
 	_round_coordinator.round_started.connect(_on_round_started)
@@ -281,6 +311,8 @@ func get_start_blockers() -> PackedStringArray:
 			blockers.append("member_not_ready:%s" % str(member.get("display_name", "Runner")))
 		if str(member.get("loaded_manifest_hash", "")) != str(room_state.get("manifest_hash", "")):
 			blockers.append("manifest_unacknowledged:%s" % str(member.get("display_name", "Runner")))
+		if _reconnect_sync_pending.has(int(member.get("player_slot", 1))):
+			blockers.append("reconnect_sync_pending:%s" % str(member.get("display_name", "Runner")))
 	var connected := connected_peer_ids()
 	for member in members:
 		if str(member.get("user_id", "")) == identity_user_id:
@@ -554,6 +586,13 @@ func _on_signaling_message(message: Dictionary) -> void:
 func _on_peer_state_changed(peer_id: int, state: String, message: String) -> void:
 	transport_state_changed.emit(state, "Peer %d: %s" % [peer_id, message])
 
+func _on_transport_mutation(event: String, details: Dictionary) -> void:
+	var entry := details.duplicate(true)
+	entry["api_peer_id_after"] = network_api.get_unique_id() if network_api != null else -1
+	entry["session_peer_id"] = int(session.get("local_peer_id", -1))
+	entry["transport_connected"] = int(details.get("peer_id", -1)) in connected_peer_ids()
+	diagnostics.record_event(event, entry)
+
 func _member_for_user(user_id: String) -> Dictionary:
 	for member in get_members():
 		if str(member.get("user_id", "")) == user_id:
@@ -565,6 +604,7 @@ func open_host(session_descriptor: Dictionary, max_clients: int = 4) -> Error:
 		return ERR_BUSY
 	if max_clients < 1 or max_clients > MAX_PLAYERS - 1:
 		return ERR_INVALID_PARAMETER
+	_reset_peer_liveness()
 	webrtc_peer = WebRTCMultiplayerPeer.new()
 	# WebRTCMultiplayerPeer takes ICE servers here; player limits are enforced by the V2 room roster.
 	var error: Error = webrtc_peer.create_server([])
@@ -606,6 +646,7 @@ func attach_guest_peer(peer_id: int, connection: WebRTCPeerConnection) -> Error:
 func configure_client_peer(assigned_peer_id: int) -> Error:
 	if assigned_peer_id < 2 or assigned_peer_id > MAX_PLAYERS:
 		return ERR_INVALID_PARAMETER
+	_reset_peer_liveness()
 	webrtc_peer = WebRTCMultiplayerPeer.new()
 	var error := webrtc_peer.create_client(assigned_peer_id)
 	if error != OK:
@@ -649,9 +690,14 @@ func get_snapshot_rate() -> int:
 func send_sample(sample: Dictionary) -> void:
 	if not _active or rpc_endpoint == null:
 		return
+	if str(session.get("role", "")) == "guest" and _reconnect_sync_pending.has(1):
+		return
 	if not _peer_mapping_verified_sample:
 		if not _validate_local_peer_mapping("first_sample"):
-			_round_coordinator.cancel("peer_mapping_mismatch")
+			if _local_transport_is_reconnecting():
+				diagnostics.record_event("peer_mapping_deferred_during_reconnect", {"session_peer_id": int(session.get("local_peer_id", -1)), "network_peer_id": network_api.get_unique_id() if network_api != null else -1})
+				return
+			_report_round_failure("peer_mapping_mismatch")
 			return
 		_peer_mapping_verified_sample = true
 	if _sample_accumulator < _sample_period:
@@ -684,7 +730,7 @@ func send_interaction(request: Dictionary) -> void:
 
 func send_control(peer_id: int, kind: String, payload: Dictionary) -> void:
 	if _active:
-		if kind in ["PREPARE_ROUND", "PREPARE_RECEIVED", "PREPARE_REJECTED", "PREPARED", "COMMIT_START", "START_ACK", "CANCEL_START", "START_ABORT"]:
+		if kind in ["PREPARE_ROUND", "PREPARE_RECEIVED", "PREPARE_REJECTED", "PREPARE_FAILED", "PREPARED", "COMMIT_START", "START_ACK", "CANCEL_START", "START_ABORT", "ROUND_FAILED", "ROUND_FAILED_ACK", "ROUND_ABORT", "RECONNECT_SYNC", "RECONNECT_SYNC_ACK", "RECONNECT_SYNC_CONFIRMED", "RECONNECT_SYNC_COMPLETE"]:
 			diagnostics.record_event("control_sent", {"kind": kind, "peer_id": peer_id, "attempt_id": str(payload.get("attempt_id", _start_attempt_id)), "round_id": str(payload.get("round_id", _round_id)), "generation": int(payload.get("lobby_generation", room_state.get("lobby_generation", -1))), "manifest_hash": str(payload.get("manifest_hash", ""))})
 		var packet := _session_envelope()
 		packet.merge(payload, true)
@@ -709,11 +755,13 @@ func begin_round(round_id: String, roster_revision: int) -> void:
 	_terminal_delivery_pending.clear()
 	_terminal_delivery_elapsed = 0.0
 	_received_terminal_events.clear()
+	_received_round_failures.clear()
+	_pending_round_failure.clear()
+	_pending_round_failure_since_usec = -1
 	terminal_status.clear()
 	_interaction_results.clear()
 	_pending_interactions.clear()
-	_disconnect_since_usec.clear()
-	_last_heartbeat_usec.clear()
+	# Contact and outage state belong to the peer session, not one individual round.
 	diagnostics.record_event("round_began", {"round_id": round_id, "roster_revision": roster_revision})
 
 func _on_player_sample_rpc(sender_peer_id: int, sample: Dictionary) -> void:
@@ -722,6 +770,9 @@ func _on_player_sample_rpc(sender_peer_id: int, sample: Dictionary) -> void:
 	var packet_error := _packet_session_error(sample, false)
 	if not packet_error.is_empty():
 		diagnostics.record_event("sample_rejected", {"peer_id": sender_peer_id, "reason": packet_error})
+		return
+	if _reconnect_sync_pending.has(sender_peer_id):
+		diagnostics.record_event("sample_rejected", {"peer_id": sender_peer_id, "reason": "reconnect_session_sync_pending"})
 		return
 	var owner_peer := int(sample.get("owner_peer_id", -1))
 	if str(session.get("role", "")) == "host":
@@ -736,6 +787,8 @@ func _on_player_sample_rpc(sender_peer_id: int, sample: Dictionary) -> void:
 		if not reason.is_empty():
 			diagnostics.record_event("sample_rejected", {"peer_id": owner_peer, "reason": reason})
 			return
+		if sender_peer_id != 1:
+			_mark_peer_contact(sender_peer_id, "SAMPLE")
 		_last_sample_by_peer[owner_peer] = int(sample.sample_seq)
 		_last_seen_tick_by_peer[owner_peer] = int(sample.simulation_tick)
 		_audit_sample_physics(owner_peer, sample)
@@ -743,7 +796,7 @@ func _on_player_sample_rpc(sender_peer_id: int, sample: Dictionary) -> void:
 		diagnostics.increment_metric("samples_validated_host")
 		player_sample_received.emit(owner_peer, sample.duplicate(true))
 		for target in connected_peer_ids():
-			if int(target) != owner_peer:
+			if int(target) != owner_peer and not _reconnect_sync_pending.has(int(target)):
 				rpc_endpoint.send_sample_to_peer(int(target), sample)
 		return
 	if sender_peer_id != 1 or owner_peer == int(session.get("local_peer_id", -1)) or not _is_roster_peer(owner_peer):
@@ -751,6 +804,7 @@ func _on_player_sample_rpc(sender_peer_id: int, sample: Dictionary) -> void:
 	var reason := ValidationScript.validate_sample(sample, _round_id, owner_peer, int(_last_sample_by_peer.get(owner_peer, 0)), int(_last_seen_tick_by_peer.get(owner_peer, 0)))
 	if not reason.is_empty():
 		return
+	_mark_peer_contact(sender_peer_id, "SAMPLE")
 	_last_sample_by_peer[owner_peer] = int(sample.sample_seq)
 	_last_seen_tick_by_peer[owner_peer] = int(sample.simulation_tick)
 	_last_sample_state_by_peer[owner_peer] = sample.duplicate(true)
@@ -770,6 +824,8 @@ func _audit_sample_physics(peer_id: int, sample: Dictionary) -> void:
 func _on_input_audit_rpc(sender_peer_id: int, audit: Dictionary) -> void:
 	if not _active or str(session.get("role", "")) != "host" or not _is_roster_peer(sender_peer_id):
 		return
+	if _reconnect_sync_pending.has(sender_peer_id):
+		return
 	if not _packet_session_error(audit, false).is_empty():
 		return
 	if int(audit.get("owner_peer_id", -1)) != sender_peer_id or str(audit.get("round_id", "")) != _round_id:
@@ -779,6 +835,7 @@ func _on_input_audit_rpc(sender_peer_id: int, audit: Dictionary) -> void:
 	if sequence <= int(_last_input_sequence_by_peer.get(sender_peer_id, 0)) or input_tick < 0 or input_tick > int(_last_seen_tick_by_peer.get(sender_peer_id, input_tick)) + 30:
 		diagnostics.record_event("input_audit_rejected", {"peer_id": sender_peer_id, "reason": "stale_or_future_input"})
 		return
+	_mark_peer_contact(sender_peer_id, "INPUT_AUDIT")
 	_last_input_sequence_by_peer[sender_peer_id] = sequence
 	if str(audit.get("kind", "")) == "gravity_flip" and bool(audit.get("accepted", false)):
 		var prior_flip_tick := int(_last_accepted_flip_tick_by_peer.get(sender_peer_id, -100000))
@@ -790,21 +847,27 @@ func _on_input_audit_rpc(sender_peer_id: int, audit: Dictionary) -> void:
 func _on_terminal_rpc(sender_peer_id: int, report: Dictionary) -> void:
 	if not _active or str(session.get("role", "")) != "host" or not _is_roster_peer(sender_peer_id):
 		return
+	if _reconnect_sync_pending.has(sender_peer_id):
+		return
 	if not _packet_session_error(report, false).is_empty():
 		return
 	var reason := ValidationScript.validate_terminal(report, _round_id, sender_peer_id)
 	if not reason.is_empty():
 		diagnostics.record_event("terminal_rejected", {"peer_id": sender_peer_id, "reason": reason})
 		return
+	_mark_peer_contact(sender_peer_id, "TERMINAL")
 	_commit_terminal(sender_peer_id, report)
 
 func _on_world_interaction_rpc(sender_peer_id: int, request: Dictionary) -> void:
 	if not _active or str(session.get("role", "")) != "host" or not _is_roster_peer(sender_peer_id):
 		return
+	if _reconnect_sync_pending.has(sender_peer_id):
+		return
 	if not _packet_session_error(request, false).is_empty():
 		return
 	if str(request.get("round_id", "")) != _round_id or str(request.get("request_id", "")).is_empty():
 		return
+	_mark_peer_contact(sender_peer_id, "WORLD_INTERACTION")
 	_process_world_interaction(sender_peer_id, request)
 
 func _on_control_rpc(sender_peer_id: int, kind: String, payload: Dictionary) -> void:
@@ -814,13 +877,33 @@ func _on_control_rpc(sender_peer_id: int, kind: String, payload: Dictionary) -> 
 	if not packet_error.is_empty():
 		diagnostics.record_event("control_rejected", {"peer_id": sender_peer_id, "kind": kind, "reason": packet_error, "attempt_id": str(payload.get("attempt_id", _start_attempt_id)), "round_id": str(payload.get("round_id", "")), "generation": int(payload.get("lobby_generation", -1)), "manifest_hash": str(payload.get("manifest_hash", ""))})
 		return
+	var sync_control_kinds := ["RECONNECT_SYNC", "RECONNECT_SYNC_ACK", "RECONNECT_SYNC_CONFIRMED", "RECONNECT_SYNC_COMPLETE"]
 	if str(session.get("role", "")) == "host":
-		if sender_peer_id != 1 and (not _is_roster_peer(sender_peer_id) or kind not in ["PREPARE_RECEIVED", "PREPARED", "PREPARE_REJECTED", "PREPARE_FAILED", "START_ACK", "CLOCK_PING", "HEARTBEAT", "WORLD_EVENT_ACK", "RESULT_ACK", "TERMINAL_ACK", "WORLD_HASH"]):
+		if sender_peer_id != 1 and (not _is_roster_peer(sender_peer_id) or kind not in ["PREPARE_RECEIVED", "PREPARED", "PREPARE_REJECTED", "PREPARE_FAILED", "ROUND_FAILED", "ROUND_FAILED_ACK", "START_ACK", "CLOCK_PING", "HEARTBEAT", "WORLD_EVENT_ACK", "RESULT_ACK", "TERMINAL_ACK", "WORLD_HASH", "RECONNECT_SYNC", "RECONNECT_SYNC_CONFIRMED"]):
 			diagnostics.record_event("control_rejected", {"peer_id": sender_peer_id, "kind": kind, "reason": "sender_or_kind_not_allowed"})
 			return
+		if sender_peer_id != 1 and _reconnect_sync_pending.has(sender_peer_id) and kind not in ["RECONNECT_SYNC", "RECONNECT_SYNC_CONFIRMED", "WORLD_EVENT_ACK", "ROUND_FAILED", "ROUND_FAILED_ACK"]:
+			diagnostics.record_event("control_rejected", {"peer_id": sender_peer_id, "kind": kind, "reason": "reconnect_session_sync_pending"})
+			return
+		if sender_peer_id != 1 and not sync_control_kinds.has(kind) and not _reconnect_sync_pending.has(sender_peer_id):
+			_mark_peer_contact(sender_peer_id, kind)
 		_handle_host_control(sender_peer_id, kind, payload)
 	else:
 		if sender_peer_id != 1:
+			return
+		if _reconnect_sync_pending.has(1) and kind not in ["RECONNECT_SYNC_ACK", "RECONNECT_SYNC_COMPLETE", "WORLD_BASELINE", "ROUND_ABORT", "ROUND_FAILED_ACK", "RETURN_TO_LOBBY"]:
+			diagnostics.record_event("control_rejected", {"peer_id": sender_peer_id, "kind": kind, "reason": "reconnect_session_sync_pending"})
+			return
+		if not sync_control_kinds.has(kind) and not _reconnect_sync_pending.has(1):
+			_mark_peer_contact(sender_peer_id, kind)
+		if kind == "ROUND_ABORT":
+			var abort_event_id := str(payload.get("event_id", ""))
+			send_control(1, "ROUND_FAILED_ACK", {"event_id": abort_event_id, "round_id": _round_id})
+			if not abort_event_id.is_empty() and not _received_round_failures.has(abort_event_id):
+				_received_round_failures[abort_event_id] = true
+				_pending_round_failure.clear()
+				_pending_round_failure_since_usec = -1
+				round_failed.emit(str(payload.get("reason", "round_aborted_by_host")))
 			return
 		if kind == "START_ABORT":
 			_start_attempt_id = str(payload.get("attempt_id", ""))
@@ -838,12 +921,68 @@ func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary
 	if str(payload.get("round_id", "")) != _round_id and kind not in ["CLOCK_PING", "HEARTBEAT"]:
 		return
 	match kind:
+		"RECONNECT_SYNC":
+			_reconnect_sync_pending[sender_peer_id] = true
+			if not _reconnect_sync_since_usec.has(sender_peer_id):
+				_reconnect_sync_since_usec[sender_peer_id] = Time.get_ticks_usec()
+			_reconnect_sync_requests[sender_peer_id] = payload.duplicate(true)
+			var host_revision := world_simulation.entity_ledger.revision if world_simulation != null else 0
+			if int(payload.get("client_world_revision", 0)) > host_revision:
+				diagnostics.record_event("reconnect_sync_rejected", {"peer_id": sender_peer_id, "reason": "client_world_revision_ahead", "client_revision": int(payload.get("client_world_revision", -1)), "host_revision": host_revision, "round_id": _round_id})
+				return
+			_reconnect_sync_requests[sender_peer_id] = payload.duplicate(true)
+			_send_reconnect_sync_response(sender_peer_id, payload)
+		"RECONNECT_SYNC_CONFIRMED":
+			var host_revision := world_simulation.entity_ledger.revision if world_simulation != null else 0
+			var guest_revision := int(payload.get("client_world_revision", -1))
+			if str(payload.get("round_id", "")) != _round_id or not reconnect_world_revision_matches(host_revision, guest_revision):
+				diagnostics.record_event("reconnect_sync_retry", {"peer_id": sender_peer_id, "reason": "world_revision_unconfirmed", "client_revision": guest_revision, "host_revision": host_revision, "client_tick": int(payload.get("client_tick", -1)), "host_tick": world_simulation.tick if world_simulation != null else 0})
+				var prior_request: Dictionary = _reconnect_sync_requests.get(sender_peer_id, payload)
+				_send_reconnect_sync_response(sender_peer_id, prior_request)
+				return
+			diagnostics.record_event("reconnect_session_confirmed", {"peer_id": sender_peer_id, "round_id": _round_id, "client_tick": int(payload.get("client_tick", -1)), "host_tick": world_simulation.tick if world_simulation != null else 0, "world_revision": host_revision})
+			_mark_peer_contact(sender_peer_id, "RECONNECT_SYNC_CONFIRMED")
+			_reconnect_sync_pending.erase(sender_peer_id)
+			_reconnect_sync_requests.erase(sender_peer_id)
+			_reconnect_sync_since_usec.erase(sender_peer_id)
+			send_control(sender_peer_id, "RECONNECT_SYNC_COMPLETE", {"round_id": _round_id, "world_tick": world_simulation.tick if world_simulation != null else 0, "world_revision": host_revision})
 		"PREPARE_FAILED":
 			if str(payload.get("attempt_id", "")) != _start_attempt_id or str(payload.get("round_id", "")) != _round_id:
 				return
 			var reason := str(payload.get("reason", "guest_prepare_failed"))
 			diagnostics.record_event("prepare_failed_by_guest", {"attempt_id": _start_attempt_id, "round_id": _round_id, "peer_id": sender_peer_id, "phase": str(payload.get("phase", "unknown")), "reason": reason})
 			_round_coordinator.cancel("guest_prepare_failed:%s" % reason)
+		"ROUND_FAILED":
+			var event_id := str(payload.get("event_id", ""))
+			if event_id.is_empty() or str(payload.get("round_id", "")) != _round_id:
+				return
+			send_control(sender_peer_id, "ROUND_FAILED_ACK", {"event_id": event_id, "round_id": _round_id})
+			if _received_round_failures.has(event_id):
+				diagnostics.record_event("round_failure_duplicate", {"event_id": event_id, "peer_id": sender_peer_id})
+				return
+			_received_round_failures[event_id] = true
+			var reason := str(payload.get("reason", "guest_round_failed"))
+			diagnostics.record_event("round_failure_received", {"event_id": event_id, "peer_id": sender_peer_id, "reason": reason, "tick": int(payload.get("simulation_tick", -1))})
+			var abort_payload := {"event_id": event_id, "round_id": _round_id, "reason": reason}
+			_round_abort_pending.clear()
+			for member in room_state.get("members", []):
+				var target := int(member.get("player_slot", 1))
+				if target != 1:
+					_round_abort_pending[target] = abort_payload.duplicate(true)
+			_round_abort_retry_elapsed = 1.0
+			_round_abort_started_usec = Time.get_ticks_usec()
+			_round_abort_return_pending = true
+			_round_coordinator.cancel(reason, "running_round", false)
+		"ROUND_FAILED_ACK":
+			if str(session.get("role", "")) == "host":
+				var pending_abort: Dictionary = _round_abort_pending.get(sender_peer_id, {})
+				if str(payload.get("round_id", "")) == _round_id and str(payload.get("event_id", "")) == str(pending_abort.get("event_id", "")):
+					diagnostics.record_event("round_abort_acknowledged", {"event_id": str(payload.get("event_id", "")), "peer_id": sender_peer_id})
+					_round_abort_pending.erase(sender_peer_id)
+			elif str(payload.get("round_id", "")) == _round_id and str(payload.get("event_id", "")) == str(_pending_round_failure.get("event_id", "")):
+				diagnostics.record_event("round_failure_acknowledged", {"event_id": str(payload.get("event_id", "")), "peer_id": sender_peer_id})
+				_pending_round_failure.clear()
+				_pending_round_failure_since_usec = -1
 		"PREPARE_REJECTED":
 			var reason := str(payload.get("reason", "guest_rejected_prepare"))
 			diagnostics.record_event("prepare_rejected_by_guest", {"peer_id": sender_peer_id, "round_id": _round_id, "reason": reason})
@@ -861,7 +1000,7 @@ func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary
 			var received := Time.get_ticks_usec()
 			send_control(sender_peer_id, "CLOCK_PONG", {"client_sent_usec": int(payload.get("client_sent_usec", 0)), "host_received_usec": received, "host_sent_usec": Time.get_ticks_usec()})
 		"HEARTBEAT":
-			_last_heartbeat_usec[sender_peer_id] = Time.get_ticks_usec()
+			pass
 		"WORLD_EVENT_ACK":
 			var ack_revision := int(payload.get("world_revision", -1))
 			_world_event_acks[sender_peer_id] = maxi(int(_world_event_acks.get(sender_peer_id, 0)), ack_revision)
@@ -878,6 +1017,29 @@ func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary
 
 func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 	match kind:
+		"RECONNECT_SYNC_ACK":
+			var expected_round := str(payload.get("round_id", ""))
+			var host_revision := int(payload.get("world_revision", -1))
+			var local_revision := world_simulation.entity_ledger.revision if world_simulation != null else 0
+			var baseline_required := bool(payload.get("baseline_required", false))
+			if expected_round != _round_id or (baseline_required and world_simulation == null) or not reconnect_world_revision_matches(host_revision, local_revision):
+				diagnostics.record_event("reconnect_sync_ack_rejected", {"round_id": _round_id, "host_round_id": expected_round, "host_revision": host_revision, "local_revision": local_revision, "baseline_required": baseline_required})
+				_send_reconnect_sync_request()
+				return
+			var progress := _local_reconnect_progress()
+			diagnostics.record_event("reconnect_sync_ack_accepted", {"round_id": _round_id, "client_tick": int(progress.client_tick), "host_tick": int(payload.get("world_tick", 0)), "world_revision": local_revision})
+			send_control(1, "RECONNECT_SYNC_CONFIRMED", {"round_id": _round_id, "client_tick": int(progress.client_tick), "client_world_tick": int(progress.world_tick), "client_world_revision": local_revision})
+		"RECONNECT_SYNC_COMPLETE":
+			var host_revision := int(payload.get("world_revision", -1))
+			var local_revision := world_simulation.entity_ledger.revision if world_simulation != null else 0
+			if str(payload.get("round_id", "")) != _round_id or not reconnect_world_revision_matches(host_revision, local_revision):
+				diagnostics.record_event("reconnect_sync_complete_rejected", {"round_id": _round_id, "host_round_id": str(payload.get("round_id", "")), "host_revision": host_revision, "local_revision": local_revision})
+				_send_reconnect_sync_request()
+				return
+			_reconnect_sync_pending.erase(1)
+			_reconnect_sync_since_usec.erase(1)
+			_mark_peer_contact(1, "RECONNECT_SYNC_COMPLETE")
+			diagnostics.record_event("reconnect_session_confirmed", {"peer_id": 1, "round_id": _round_id, "world_tick": int(payload.get("world_tick", 0)), "world_revision": local_revision, "api_peer_id": network_api.get_unique_id() if network_api != null else -1})
 		"START_ABORT":
 			pass
 		"PREPARE_ROUND":
@@ -921,6 +1083,11 @@ func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 				round_failed.emit("The start commit was invalid or the guest clock is not synchronized.")
 		"CANCEL_START":
 			_round_coordinator.cancel(str(payload.get("reason", "host_cancelled")), "host_cancelled", false)
+		"ROUND_FAILED_ACK":
+			if str(payload.get("round_id", "")) == _round_id and str(payload.get("event_id", "")) == str(_pending_round_failure.get("event_id", "")):
+				diagnostics.record_event("round_failure_acknowledged", {"event_id": str(payload.get("event_id", "")), "peer_id": 1})
+				_pending_round_failure.clear()
+				_pending_round_failure_since_usec = -1
 		"RETURN_TO_LOBBY":
 			var next_room: Dictionary = payload.get("room", {})
 			if not should_apply_return_to_lobby(room_state, next_room):
@@ -1099,6 +1266,122 @@ func _process_terminal_delivery(delta: float) -> void:
 	_terminal_delivery_elapsed = 0.0
 	for pending in _terminal_delivery_pending.values():
 		send_control(int(pending.target), "TERMINAL_COMMIT", pending.report)
+
+func _process_round_failure_delivery(delta: float) -> void:
+	if str(session.get("role", "")) == "guest" and not _pending_round_failure.is_empty():
+		_round_failure_retry_elapsed += delta
+		if _round_failure_retry_elapsed >= 1.0:
+			_round_failure_retry_elapsed = 0.0
+			var payload: Dictionary = _pending_round_failure.duplicate(true)
+			diagnostics.record_event("round_failure_send_attempt", {"event_id": str(payload.get("event_id", "")), "transport_connected": 1 in connected_peer_ids(), "network_peer_id": network_api.get_unique_id() if network_api != null else -1, "round_id": _round_id})
+			send_control(1, "ROUND_FAILED", payload)
+		if _pending_round_failure_since_usec >= 0 and Time.get_ticks_usec() - _pending_round_failure_since_usec >= DISCONNECT_GRACE_USEC:
+			diagnostics.record_event("round_failure_delivery_expired", {"event_id": str(_pending_round_failure.get("event_id", "")), "grace_usec": DISCONNECT_GRACE_USEC})
+			_pending_round_failure.clear()
+			_pending_round_failure_since_usec = -1
+	if str(session.get("role", "")) != "host" or not _round_abort_return_pending:
+		return
+	_round_abort_retry_elapsed += delta
+	if _round_abort_retry_elapsed < 1.0:
+		return
+	_round_abort_retry_elapsed = 0.0
+	var now := Time.get_ticks_usec()
+	for peer_id_value in _round_abort_pending.keys():
+		var peer_id := int(peer_id_value)
+		if peer_id in connected_peer_ids():
+			send_control(peer_id, "ROUND_ABORT", _round_abort_pending[peer_id])
+		if _round_abort_started_usec >= 0 and now - _round_abort_started_usec >= DISCONNECT_GRACE_USEC:
+			_round_abort_pending.erase(peer_id)
+	if _round_abort_pending.is_empty():
+		_round_abort_return_pending = false
+		return_to_lobby()
+
+func _local_reconnect_progress() -> Dictionary:
+	var latest_frame: Dictionary = diagnostics.frames.back() if not diagnostics.frames.is_empty() else {}
+	var world_tick := world_simulation.tick if world_simulation != null else int(latest_frame.get("world_tick", 0))
+	var world_revision := world_simulation.entity_ledger.revision if world_simulation != null else 0
+	return {"round_id": _round_id, "client_tick": int(latest_frame.get("tick", 0)), "world_tick": world_tick, "world_revision": world_revision}
+
+func _send_reconnect_sync_request() -> void:
+	if not _active or str(session.get("role", "")) != "guest" or not _reconnect_sync_pending.has(1) or not connected_peer_ids().has(1):
+		return
+	var progress := _local_reconnect_progress()
+	diagnostics.record_event("reconnect_sync_requested", {"round_id": _round_id, "client_tick": int(progress.client_tick), "world_tick": int(progress.world_tick), "world_revision": int(progress.world_revision), "api_peer_id": network_api.get_unique_id() if network_api != null else -1, "session_peer_id": int(session.get("local_peer_id", -1))})
+	send_control(1, "RECONNECT_SYNC", progress)
+
+func _send_reconnect_sync_response(peer_id: int, request: Dictionary) -> void:
+	if world_simulation != null:
+		send_control(peer_id, "WORLD_BASELINE", {"world_baseline": world_simulation.entity_ledger.baseline()})
+	var host_tick := world_simulation.tick if world_simulation != null else 0
+	var host_revision := world_simulation.entity_ledger.revision if world_simulation != null else 0
+	diagnostics.record_event("reconnect_sync_response_sent", {"peer_id": peer_id, "round_id": _round_id, "client_tick": int(request.get("client_tick", -1)), "client_world_tick": int(request.get("world_tick", -1)), "client_world_revision": int(request.get("world_revision", -1)), "host_tick": host_tick, "host_world_revision": host_revision})
+	send_control(peer_id, "RECONNECT_SYNC_ACK", {"round_id": _round_id, "world_tick": host_tick, "world_revision": host_revision, "baseline_required": world_simulation != null})
+
+func _process_reconnect_sync(delta: float) -> void:
+	if _reconnect_sync_pending.is_empty():
+		_reconnect_sync_elapsed = 0.0
+		return
+	_reconnect_sync_elapsed += delta
+	if _reconnect_sync_elapsed < 1.0:
+		return
+	_reconnect_sync_elapsed = 0.0
+	if str(session.get("role", "")) == "guest":
+		_send_reconnect_sync_request()
+		return
+	for peer_id_value in _reconnect_sync_requests.keys():
+		var peer_id := int(peer_id_value)
+		if _reconnect_sync_pending.has(peer_id) and Time.get_ticks_usec() - int(_reconnect_sync_since_usec.get(peer_id, Time.get_ticks_usec())) >= DISCONNECT_GRACE_USEC:
+			if _round_coordinator.state == RoundCoordinatorScript.State.RUNNING and not terminal_status.has(peer_id):
+				var failure_report := {"round_id": _round_id, "owner_peer_id": peer_id, "simulation_tick": _last_seen_tick_by_peer.get(peer_id, 0), "state": "disconnected", "reason": "reconnect_sync_timeout", "event_id": "%s:%d:sync-timeout" % [_round_id, peer_id]}
+				diagnostics.record_event("reconnect_sync_timed_out", {"peer_id": peer_id, "round_id": _round_id, "elapsed_usec": Time.get_ticks_usec() - int(_reconnect_sync_since_usec.get(peer_id, Time.get_ticks_usec()))})
+				_commit_terminal(peer_id, failure_report)
+			_reconnect_sync_pending.erase(peer_id)
+			_reconnect_sync_requests.erase(peer_id)
+			_reconnect_sync_since_usec.erase(peer_id)
+			continue
+		if _reconnect_sync_pending.has(peer_id) and connected_peer_ids().has(peer_id):
+			_send_reconnect_sync_response(peer_id, _reconnect_sync_requests[peer_id])
+
+func _report_round_failure(reason: String) -> void:
+	if str(session.get("role", "")) != "guest" or _round_coordinator.state != RoundCoordinatorScript.State.RUNNING:
+		return
+	var event_id := "%s:%d:failed:%s" % [_round_id, int(session.get("local_peer_id", -1)), Crypto.new().generate_random_bytes(8).hex_encode()]
+	_pending_round_failure = {"event_id": event_id, "round_id": _round_id, "attempt_id": _start_attempt_id, "peer_id": int(session.get("local_peer_id", -1)), "reason": reason}
+	_pending_round_failure_since_usec = Time.get_ticks_usec()
+	_round_failure_retry_elapsed = 1.0
+	diagnostics.record_event("round_failure_persisted", _pending_round_failure.duplicate(true))
+	_round_coordinator.state = RoundCoordinatorScript.State.CANCELLED
+	round_failed.emit(reason)
+
+func _mark_peer_contact(peer_id: int, source: String) -> void:
+	var now := Time.get_ticks_usec()
+	if str(session.get("role", "")) == "guest" and peer_id == 1 and network_api != null and network_api.get_unique_id() != int(session.get("local_peer_id", -1)):
+		diagnostics.record_event("reconnect_session_rejected", {"peer_id": peer_id, "source": source, "api_peer_id": network_api.get_unique_id(), "session_peer_id": int(session.get("local_peer_id", -1)), "disconnect_age_usec": now - int(_disconnect_since_usec.get(peer_id, now))})
+		return
+	_last_heartbeat_usec[peer_id] = now
+	if str(session.get("role", "")) == "guest" and peer_id == 1:
+		_last_host_heartbeat_usec = now
+	if _disconnect_since_usec.has(peer_id):
+		diagnostics.record_event("reconnect_session_confirmed", {"peer_id": peer_id, "source": source, "outage_usec": now - int(_disconnect_since_usec[peer_id]), "api_peer_id": network_api.get_unique_id() if network_api != null else -1, "session_peer_id": int(session.get("local_peer_id", -1))})
+		transport_state_changed.emit("connected", "Peer %d session reconnected." % peer_id)
+	_disconnect_since_usec.erase(peer_id)
+	_last_reconnect_attempt_usec.erase(peer_id)
+
+func _reset_peer_liveness() -> void:
+	_disconnect_since_usec.clear()
+	_last_heartbeat_usec.clear()
+	_last_reconnect_attempt_usec.clear()
+	_reconnect_generation.clear()
+	_reconnect_sync_pending.clear()
+	_reconnect_sync_requests.clear()
+	_reconnect_sync_since_usec.clear()
+	_reconnect_sync_elapsed = 0.0
+	_last_host_heartbeat_usec = -1
+
+func _local_transport_is_reconnecting() -> bool:
+	if str(session.get("role", "")) != "guest":
+		return false
+	return not connected_peer_ids().has(1) or _disconnect_since_usec.has(1)
 
 func report_world_hash(world_tick: int, revision: int, state_hash: String) -> void:
 	if not _active or world_tick < 0 or state_hash.length() != 64:
@@ -1433,21 +1716,26 @@ func _packet_session_error(packet: Dictionary, allow_next_generation: bool) -> S
 
 func _on_peer_connected(peer_id: int) -> void:
 	diagnostics.increment_metric("peer_connected_events")
-	_disconnect_since_usec.erase(peer_id)
-	_last_reconnect_attempt_usec.erase(peer_id)
-	_last_heartbeat_usec[peer_id] = Time.get_ticks_usec()
-	diagnostics.record_event("peer_connected", {"peer_id": peer_id})
-	transport_state_changed.emit("connected", "Peer %d connected." % peer_id)
-	if is_room_owner() and _active and world_simulation != null and not _round_id.is_empty():
-		send_control(peer_id, "WORLD_BASELINE", {"world_baseline": world_simulation.entity_ledger.baseline()})
+	var is_reconnect := _disconnect_since_usec.has(peer_id)
+	if is_reconnect:
+		_reconnect_sync_pending[peer_id] = true
+		_reconnect_sync_requests.erase(peer_id)
+		_reconnect_sync_since_usec[peer_id] = int(_disconnect_since_usec[peer_id])
+	diagnostics.record_event("peer_transport_connected_unconfirmed", {"peer_id": peer_id, "outage_usec": Time.get_ticks_usec() - int(_disconnect_since_usec.get(peer_id, Time.get_ticks_usec())), "api_peer_id": network_api.get_unique_id() if network_api != null else -1, "session_peer_id": int(session.get("local_peer_id", -1))})
+	transport_state_changed.emit("reconnecting", "Peer %d transport connected; validating session." % peer_id)
+	if is_reconnect and not is_room_owner() and peer_id == 1:
+		call_deferred("_send_reconnect_sync_request")
 
 func _on_peer_disconnected(peer_id: int) -> void:
 	diagnostics.increment_metric("peer_disconnected_events")
-	_disconnect_since_usec[peer_id] = Time.get_ticks_usec()
-	_last_reconnect_attempt_usec[peer_id] = Time.get_ticks_usec()
-	_restart_peer_link(peer_id)
-	diagnostics.record_event("peer_disconnected", {"peer_id": peer_id})
-	transport_state_changed.emit("disconnected", "Peer %d disconnected." % peer_id)
+	var now := Time.get_ticks_usec()
+	if not _disconnect_since_usec.has(peer_id):
+		_disconnect_since_usec[peer_id] = now
+	_reconnect_sync_pending[peer_id] = true
+	_reconnect_sync_requests.erase(peer_id)
+	_reconnect_sync_since_usec[peer_id] = now
+	diagnostics.record_event("peer_disconnected", {"peer_id": peer_id, "outage_started_usec": int(_disconnect_since_usec[peer_id]), "api_peer_id": network_api.get_unique_id() if network_api != null else -1, "session_peer_id": int(session.get("local_peer_id", -1))})
+	transport_state_changed.emit("reconnecting", "Peer %d disconnected; reconnect grace started." % peer_id)
 
 func _restart_peer_link(peer_id: int) -> void:
 	if _webrtc_transport == null:
@@ -1462,43 +1750,89 @@ func _restart_peer_link(peer_id: int) -> void:
 				user_id = str(member.get("user_id", ""))
 				break
 	if not user_id.is_empty():
+		var transport_connected := peer_id in connected_peer_ids()
+		var now := Time.get_ticks_usec()
+		diagnostics.record_event("restart_requested", {"peer_id": peer_id, "reason": "session_liveness_timeout", "caller": "multiplayer_v2_service._check_disconnect_grace", "transport_connected": transport_connected, "contact_age_usec": now - int(_last_heartbeat_usec.get(peer_id, now)), "disconnect_age_usec": now - int(_disconnect_since_usec.get(peer_id, now)), "deadline_usec": int(_disconnect_since_usec.get(peer_id, now)) + DISCONNECT_GRACE_USEC, "reconnect_generation": int(_reconnect_generation.get(peer_id, 0)), "api_peer_id_before": network_api.get_unique_id() if network_api != null else -1, "session_peer_id": int(session.get("local_peer_id", -1))})
 		_webrtc_transport.restart_peer(user_id, initiate_offer)
 
+func _recreate_guest_network_peer(reason: String) -> void:
+	var assigned_peer_id := int(session.get("local_peer_id", -1))
+	var api_peer_before := network_api.get_unique_id() if network_api != null else -1
+	diagnostics.record_event("client_peer_recreation_requested", {"reason": reason, "assigned_peer_id": assigned_peer_id, "api_peer_id_before": api_peer_before, "disconnect_age_usec": Time.get_ticks_usec() - int(_disconnect_since_usec.get(1, Time.get_ticks_usec())), "reconnect_generation": int(_reconnect_generation.get(1, 0))})
+	if assigned_peer_id < 2 or assigned_peer_id > MAX_PLAYERS or _webrtc_transport == null:
+		return
+	if webrtc_peer != null:
+		webrtc_peer.close()
+	var replacement := WebRTCMultiplayerPeer.new()
+	var error := replacement.create_client(assigned_peer_id)
+	if error != OK:
+		diagnostics.record_event("client_peer_recreation_failed", {"reason": reason, "error": error, "assigned_peer_id": assigned_peer_id, "api_peer_id_before": api_peer_before})
+		return
+	webrtc_peer = replacement
+	if network_api != null:
+		network_api.multiplayer_peer = replacement
+	_webrtc_transport.rebind_client_peer(replacement)
+	diagnostics.record_event("client_peer_recreated", {"reason": reason, "assigned_peer_id": assigned_peer_id, "api_peer_id_before": api_peer_before, "api_peer_id_after": network_api.get_unique_id() if network_api != null else -1, "session_peer_id": int(session.get("local_peer_id", -1)), "reconnect_generation": int(_reconnect_generation.get(1, 0))})
+	if network_api == null or network_api.get_unique_id() != assigned_peer_id:
+		return
+	_webrtc_transport.begin_connection()
+
 func _check_disconnect_grace() -> void:
-	if _round_coordinator.state != RoundCoordinatorScript.State.RUNNING:
+	if not _active:
 		return
 	var now := Time.get_ticks_usec()
 	var connected := connected_peer_ids()
 	if str(session.get("role", "")) == "host":
 		for member in room_state.get("members", []):
 			var peer_id := int(member.get("player_slot", 1))
-			var heartbeat_fresh := now - int(_last_heartbeat_usec.get(peer_id, -1_000_000_000)) < 3_000_000
-			if peer_id == 1 or terminal_status.has(peer_id) or (peer_id in connected and heartbeat_fresh):
-				_disconnect_since_usec.erase(peer_id)
+			if peer_id == 1 or terminal_status.has(peer_id):
+				continue
+			var last_contact := int(_last_heartbeat_usec.get(peer_id, -1))
+			var contact_fresh := last_contact >= 0 and now - last_contact < 3_000_000
+			if peer_id in connected and _reconnect_sync_pending.has(peer_id):
+				var sync_started := int(_reconnect_sync_since_usec.get(peer_id, now))
+				if now - sync_started >= DISCONNECT_GRACE_USEC:
+					diagnostics.record_event("reconnect_sync_timed_out", {"peer_id": peer_id, "round_id": _round_id, "elapsed_usec": now - sync_started})
+					if _round_coordinator.state == RoundCoordinatorScript.State.RUNNING and not terminal_status.has(peer_id):
+						var failure_report := {"round_id": _round_id, "owner_peer_id": peer_id, "simulation_tick": _last_seen_tick_by_peer.get(peer_id, 0), "state": "disconnected", "reason": "reconnect_sync_timeout", "event_id": "%s:%d:sync-timeout" % [_round_id, peer_id]}
+						_commit_terminal(peer_id, failure_report)
+					_reconnect_sync_pending.erase(peer_id)
+					_reconnect_sync_requests.erase(peer_id)
+					_reconnect_sync_since_usec.erase(peer_id)
+				continue
+			if peer_id in connected and contact_fresh:
 				continue
 			if not _disconnect_since_usec.has(peer_id):
-				_disconnect_since_usec[peer_id] = now
-				continue
-			if now - int(_last_reconnect_attempt_usec.get(peer_id, -1_000_000_000)) >= 2_000_000:
+				_disconnect_since_usec[peer_id] = last_contact + 3_000_000 if last_contact >= 0 else now
+			if str(session.get("role", "")) == "guest" and liveness_restart_due(now, last_contact, int(_last_reconnect_attempt_usec.get(peer_id, -1))):
 				_last_reconnect_attempt_usec[peer_id] = now
-				_restart_peer_link(peer_id)
-			if now - int(_disconnect_since_usec[peer_id]) >= DISCONNECT_GRACE_USEC:
+				_reconnect_generation[peer_id] = int(_reconnect_generation.get(peer_id, 0)) + 1
+				if peer_id == 1 and network_api != null and network_api.get_unique_id() != int(session.get("local_peer_id", -1)):
+					_recreate_guest_network_peer("api_peer_id_reset")
+				else:
+					_restart_peer_link(peer_id)
+			if _round_coordinator.state == RoundCoordinatorScript.State.RUNNING and now - int(_disconnect_since_usec[peer_id]) >= DISCONNECT_GRACE_USEC:
 				var report := {"round_id": _round_id, "owner_peer_id": peer_id, "simulation_tick": _last_seen_tick_by_peer.get(peer_id, 0), "state": "disconnected", "reason": "connection_grace_expired", "event_id": "%s:%d:disconnected" % [_round_id, peer_id]}
 				diagnostics.record_event("peer_marked_disconnected", {"peer_id": peer_id, "grace_usec": now - int(_disconnect_since_usec[peer_id])})
 				_commit_terminal(peer_id, report)
 	else:
-		var host_heartbeat_fresh := _last_host_heartbeat_usec >= 0 and now - _last_host_heartbeat_usec < 3_000_000
-		if 1 in connected and host_heartbeat_fresh:
-			_disconnect_since_usec.erase(1)
+		var host_contact := int(_last_heartbeat_usec.get(1, -1))
+		var host_contact_fresh := host_contact >= 0 and now - host_contact < 3_000_000
+		if 1 in connected and host_contact_fresh:
 			return
 		if not _disconnect_since_usec.has(1):
-			_disconnect_since_usec[1] = now
-		if now - int(_last_reconnect_attempt_usec.get(1, -1_000_000_000)) >= 2_000_000:
+			_disconnect_since_usec[1] = host_contact + 3_000_000 if host_contact >= 0 else now
+		var api_peer_mismatch := network_api != null and network_api.get_unique_id() != int(session.get("local_peer_id", -1))
+		var retry_transport := not connected.has(1) or (_reconnect_sync_pending.has(1) and api_peer_mismatch)
+		if retry_transport and liveness_restart_due(now, host_contact, int(_last_reconnect_attempt_usec.get(1, -1))):
 			_last_reconnect_attempt_usec[1] = now
-			_restart_peer_link(1)
-		if now - int(_disconnect_since_usec[1]) >= DISCONNECT_GRACE_USEC:
-			round_failed.emit("The V2 host was disconnected beyond the reconnect grace period.")
-			_round_coordinator.cancel("host_disconnected")
+			_reconnect_generation[1] = int(_reconnect_generation.get(1, 0)) + 1
+			if api_peer_mismatch:
+				_recreate_guest_network_peer("api_peer_id_reset")
+			else:
+				_restart_peer_link(1)
+		if _round_coordinator.state == RoundCoordinatorScript.State.RUNNING and now - int(_disconnect_since_usec[1]) >= DISCONNECT_GRACE_USEC:
+			_round_coordinator.cancel("The V2 host was disconnected beyond the reconnect grace period.", "disconnect_grace_expired", false)
 
 func connected_peer_ids() -> PackedInt32Array:
 	var connected := PackedInt32Array()
@@ -1522,6 +1856,11 @@ func close_session(reason: String = "left_room") -> void:
 		network_api.multiplayer_peer = OfflineMultiplayerPeer.new()
 	_active = false
 	_sample_accumulator = 0.0
+	_reset_peer_liveness()
+	_pending_round_failure.clear()
+	_pending_round_failure_since_usec = -1
+	_round_abort_pending.clear()
+	_round_abort_return_pending = false
 	if not session.is_empty():
 		diagnostics.record_event("session_closed", {"reason": reason})
 	session.clear()

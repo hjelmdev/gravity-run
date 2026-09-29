@@ -12,6 +12,7 @@ const Runner := preload("res://systems/multiplayer_v2/v2_local_runner.gd")
 const Coordinator := preload("res://systems/multiplayer_v2/v2_round_coordinator.gd")
 const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_export.gd")
 const V2Service := preload("res://systems/multiplayer_v2/multiplayer_v2_service.gd")
+const V2Transport := preload("res://systems/multiplayer_v2/v2_webrtc_transport.gd")
 
 func _initialize() -> void:
 	var numeric_roster := [
@@ -28,6 +29,32 @@ func _initialize() -> void:
 	_assert(not V2Service.should_apply_return_to_lobby(lobby_snapshot, {"room_id": "room", "room_session_id": "session", "lobby_generation": 5, "phase": "OPEN"}), "old return-to-lobby packet cannot regress a newer lobby")
 	_assert(not V2Service.should_apply_return_to_lobby(lobby_snapshot, {"room_id": "room", "room_session_id": "other-session", "lobby_generation": 7, "phase": "OPEN"}), "return-to-lobby packet from another room session is rejected")
 	var diagnostics = preload("res://systems/multiplayer_v2/v2_diagnostics.gd").new()
+	var liveness_service = V2Service.new()
+	liveness_service._last_heartbeat_usec[2] = 5_000_000
+	liveness_service._disconnect_since_usec[2] = 4_900_000
+	liveness_service.begin_round("liveness-round", 7)
+	_assert(int(liveness_service._last_heartbeat_usec.get(2, -1)) == 5_000_000, "round transition preserves the peer session contact timestamp")
+	_assert(int(liveness_service._disconnect_since_usec.get(2, -1)) == 4_900_000, "round transition preserves an in-progress transport outage")
+	_assert(not V2Service.liveness_restart_due(5_050_000, 5_000_000, -1), "freshly acknowledged connected peer is not restarted after round start")
+	_assert(not V2Service.liveness_restart_due(5_050_000, -1, -1), "missing heartbeat history cannot trigger an immediate reconnect")
+	_assert(not V2Service.liveness_restart_due(7_900_000, 5_000_000, -1), "peer gets the full liveness deadline before reconnect")
+	_assert(V2Service.liveness_restart_due(8_000_000, 5_000_000, -1), "genuinely silent peer can be restarted after liveness deadline")
+	_assert(not V2Service.liveness_restart_due(8_500_000, 5_000_000, 8_000_000), "reconnect retry respects its full retry interval")
+	_assert(V2Service.liveness_restart_due(10_000_000, 5_000_000, 8_000_000), "disconnected peer may retry after the explicit retry interval")
+	_assert(V2Service.reconnect_world_revision_matches(7, 7), "reconnect session sync accepts an identical shared-world revision")
+	_assert(not V2Service.reconnect_world_revision_matches(7, 6), "reconnect session sync rejects a stale shared-world revision")
+	_assert(not V2Service.reconnect_world_revision_matches(-1, -1), "reconnect session sync rejects an unknown shared-world revision")
+	liveness_service.free()
+	var reconnect_transport = V2Transport.new()
+	var reconnect_peer := WebRTCMultiplayerPeer.new()
+	_assert(reconnect_peer.create_client(2) == OK and reconnect_peer.get_unique_id() == 2, "recreated WebRTC client preserves its assigned logical peer ID")
+	reconnect_transport.owner_user_id = "host-user"
+	reconnect_transport._connection_generations["host-user"] = 4
+	reconnect_transport.rebind_client_peer(reconnect_peer)
+	_assert(reconnect_transport.peer.get_unique_id() == 2, "transport rebind uses the recreated client peer")
+	_assert(int(reconnect_transport._connection_generations.get("host-user", 0)) == 4, "client peer recreation preserves signaling generation monotonicity")
+	reconnect_peer.close()
+	reconnect_transport.free()
 	var event_unix_before := int(Time.get_unix_time_from_system() * 1_000_000.0)
 	diagnostics.record_event("utc-test")
 	var event_unix := int(diagnostics.events.back().at_unix_usec)

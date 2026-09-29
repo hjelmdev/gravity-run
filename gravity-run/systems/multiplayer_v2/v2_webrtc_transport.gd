@@ -3,11 +3,10 @@ extends Node
 
 signal signal_outgoing(message: Dictionary)
 signal peer_state_changed(peer_id: int, state: String, message: String)
+signal transport_mutation(event: String, details: Dictionary)
 
 const STUN_SERVERS := [{"urls": ["stun:stun.l.google.com:19302"]}]
 const MAX_PENDING_ICE := 64
-const GUEST_OFFER_RETRY_SECONDS := 5.0
-const MAX_GUEST_OFFER_RETRIES := 3
 
 var peer: WebRTCMultiplayerPeer
 var room_id := ""
@@ -21,8 +20,6 @@ var _attempts: Dictionary = {}
 var _connection_generations: Dictionary = {}
 var _remote_generations: Dictionary = {}
 var _retired_attempts: Dictionary = {}
-var _guest_retry_elapsed := 0.0
-var _guest_retry_count := 0
 
 func configure(room: Dictionary, user_id: String, api_peer: WebRTCMultiplayerPeer) -> void:
 	close_all()
@@ -33,8 +30,6 @@ func configure(room: Dictionary, user_id: String, api_peer: WebRTCMultiplayerPee
 	room_members = room.get("members", []).duplicate(true)
 	local_peer_id = int(_member_for_user(user_id).get("player_slot", 1))
 	peer = api_peer
-	_guest_retry_elapsed = 0.0
-	_guest_retry_count = 0
 
 func update_room(room: Dictionary) -> void:
 	if str(room.get("room_id", "")) != room_id or peer == null:
@@ -43,22 +38,6 @@ func update_room(room: Dictionary) -> void:
 	owner_user_id = str(room.get("owner_user_id", ""))
 	is_host = owner_user_id == local_user_id
 	room_members = room.get("members", []).duplicate(true)
-
-func _process(delta: float) -> void:
-	if peer == null or is_host or room_id.is_empty() or owner_user_id.is_empty() or _guest_retry_count >= MAX_GUEST_OFFER_RETRIES:
-		return
-	var host_peer: Dictionary = peer.get_peer(1) if peer.has_peer(1) else {}
-	if bool(host_peer.get("connected", false)):
-		_guest_retry_elapsed = 0.0
-		_guest_retry_count = 0
-		return
-	_guest_retry_elapsed += delta
-	if _guest_retry_elapsed < GUEST_OFFER_RETRY_SECONDS:
-		return
-	_guest_retry_elapsed = 0.0
-	_guest_retry_count += 1
-	_remove_connection(owner_user_id)
-	_start_guest_offer(owner_user_id)
 
 func begin_connection() -> void:
 	if peer == null or room_id.is_empty() or local_user_id.is_empty():
@@ -145,6 +124,21 @@ func restart_peer(user_id: String, initiate_offer: bool) -> void:
 		return
 	_start_guest_offer(user_id)
 
+func rebind_client_peer(api_peer: WebRTCMultiplayerPeer) -> void:
+	# Preserve monotonically increasing signaling generations while replacing a
+	# WebRTCMultiplayerPeer whose local client ID was reset by the engine.
+	for user_id in _connections.keys():
+		var entry: Dictionary = _connections[user_id]
+		var connection: WebRTCPeerConnection = entry.get("connection")
+		var api_peer_id_before := peer.get_unique_id() if peer != null else -1
+		transport_mutation.emit("peer_removed", {"user_id": user_id, "peer_id": int(entry.get("peer_id", -1)), "connection_generation": int(entry.get("generation", -1)), "api_peer_id_before": api_peer_id_before, "reason": "client_peer_recreated"})
+		transport_mutation.emit("connection_closed", {"user_id": user_id, "peer_id": int(entry.get("peer_id", -1)), "connection_generation": int(entry.get("generation", -1)), "api_peer_id_before": api_peer_id_before, "reason": "client_peer_recreated"})
+		if connection != null:
+			connection.close()
+	_connections.clear()
+	_attempts.clear()
+	peer = api_peer
+
 func close_all() -> void:
 	for entry in _connections.values():
 		var connection: WebRTCPeerConnection = entry.get("connection")
@@ -155,8 +149,6 @@ func close_all() -> void:
 	_connection_generations.clear()
 	_remote_generations.clear()
 	_retired_attempts.clear()
-	_guest_retry_elapsed = 0.0
-	_guest_retry_count = 0
 	room_id = ""
 	local_user_id = ""
 	owner_user_id = ""
@@ -177,6 +169,7 @@ func _new_connection(user_id: String, attempt: String, peer_id: int, generation:
 	connection.session_description_created.connect(_on_description_created.bind(user_id, attempt))
 	connection.ice_candidate_created.connect(_on_ice_candidate_created.bind(user_id, attempt))
 	_connections[user_id] = {"connection": connection, "attempt": attempt, "peer_id": peer_id, "generation": generation, "remote_description_set": false, "pending_ice": []}
+	transport_mutation.emit("peer_connection_created", {"user_id": user_id, "peer_id": peer_id, "connection_generation": generation, "api_peer_id": peer.get_unique_id() if peer != null else -1})
 	_attempts[user_id] = attempt
 	peer_state_changed.emit(peer_id, "connecting", "Negotiating V2 WebRTC link.")
 	return connection
@@ -208,6 +201,7 @@ func _remove_connection(user_id: String) -> void:
 		_attempts.erase(user_id)
 		return
 	var entry: Dictionary = _connections[user_id]
+	var api_peer_id_before := peer.get_unique_id() if peer != null else -1
 	var attempt := str(entry.get("attempt", ""))
 	var retired: Array = _retired_attempts.get(user_id, [])
 	retired.append(attempt)
@@ -217,8 +211,10 @@ func _remove_connection(user_id: String) -> void:
 	var connection: WebRTCPeerConnection = entry.get("connection")
 	if peer != null:
 		peer.remove_peer(int(entry.get("peer_id", 0)))
+	transport_mutation.emit("peer_removed", {"user_id": user_id, "peer_id": int(entry.get("peer_id", -1)), "connection_generation": int(entry.get("generation", -1)), "api_peer_id_before": api_peer_id_before, "reason": "restart_peer"})
 	if connection != null:
 		connection.close()
+		transport_mutation.emit("connection_closed", {"user_id": user_id, "peer_id": int(entry.get("peer_id", -1)), "connection_generation": int(entry.get("generation", -1)), "api_peer_id_before": api_peer_id_before, "reason": "restart_peer"})
 	_connections.erase(user_id)
 	_attempts.erase(user_id)
 
