@@ -5,7 +5,7 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 	<meta name="theme-color" content="#101827">
 	<link rel="manifest" href="./gravity-run.manifest.json">
-	<link rel="apple-touch-icon" href="./game/index.180x180.png">
+	<link rel="apple-touch-icon" href="./game-v2/index.apple-touch-icon.png">
 	<title>Gravity Run</title>
 	<style>
 		html, body {
@@ -176,11 +176,11 @@
 		// Retire old Godot workers and cached game exports before loading the iframe.
 		if ('serviceWorker' in navigator) {
 			const pageScope = new URL('./', location.href).href;
-			const gameScope = new URL('./game/', location.href).href;
+			const gameScopes = ['./game/', './game-v2/', './multiplayer-v2/', './multiplayer-v2/game/'].map((path) => new URL(path, location.href).href);
 			const cachePrefix = 'Gravity Run-sw-cache-';
 			const loadGame = () => { document.getElementById('game-frame').src = './game-v2/index.html'; };
 			navigator.serviceWorker.getRegistrations().then(async (registrations) => {
-				const oldWorkers = registrations.filter((registration) => registration.scope === pageScope || registration.scope === gameScope);
+				const oldWorkers = registrations.filter((registration) => registration.scope === pageScope || gameScopes.includes(registration.scope));
 				if (oldWorkers.length === 0) {
 					loadGame();
 					return;
