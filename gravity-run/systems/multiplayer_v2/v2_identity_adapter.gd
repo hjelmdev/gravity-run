@@ -1,5 +1,5 @@
 extends Node
-## Owns anonymous V2 identity state while borrowing an authenticated app token.
+## Owns a per-page anonymous identity for isolated V2 multiplayer sessions.
 
 const Config := preload("res://systems/leaderboard_config.gd")
 signal identity_ready(user_id: String, token: String, is_anonymous: bool, context: String)
@@ -20,12 +20,6 @@ func _ready() -> void:
 	add_child(_request)
 
 func ensure_identity(display_name: String, context: String) -> void:
-	if AuthService.is_authenticated and not AuthService.get_access_token().is_empty():
-		user_id = AuthService.user_id
-		access_token = AuthService.get_access_token()
-		is_anonymous = false
-		identity_ready.emit(user_id, access_token, false, context)
-		return
 	if not access_token.is_empty() and Time.get_unix_time_from_system() < expires_at - 60:
 		identity_ready.emit(user_id, access_token, is_anonymous, context)
 		return
@@ -46,9 +40,19 @@ func _on_signup_completed(result: int, response_code: int, _headers: PackedStrin
 	if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300 or not parsed is Dictionary:
 		identity_failed.emit(tr("Could not create a V2 multiplayer identity (HTTP %d).") % response_code, context)
 		return
-	user_id = str(parsed.get("id", ""))
-	access_token = str(parsed.get("access_token", ""))
-	expires_at = int(Time.get_unix_time_from_system()) + int(parsed.get("expires_in", 3600))
+	var auth_data: Variant = parsed.get("data", parsed)
+	if not auth_data is Dictionary:
+		auth_data = parsed
+	var session: Variant = auth_data.get("session", auth_data)
+	if not session is Dictionary:
+		session = auth_data
+	var user: Variant = auth_data.get("user", parsed.get("user", auth_data))
+	if not user is Dictionary:
+		user = auth_data
+	user_id = str(user.get("id", auth_data.get("id", parsed.get("id", ""))))
+	access_token = str(session.get("access_token", auth_data.get("access_token", parsed.get("access_token", ""))))
+	var expires_in := int(session.get("expires_in", auth_data.get("expires_in", parsed.get("expires_in", 3600))))
+	expires_at = int(Time.get_unix_time_from_system()) + expires_in
 	is_anonymous = true
 	if user_id.is_empty() or access_token.is_empty():
 		identity_failed.emit(tr("Supabase returned an incomplete V2 identity."), context)
@@ -56,4 +60,4 @@ func _on_signup_completed(result: int, response_code: int, _headers: PackedStrin
 	identity_ready.emit(user_id, access_token, true, context)
 
 func token() -> String:
-	return AuthService.get_access_token() if not is_anonymous and AuthService.is_authenticated else access_token
+	return access_token

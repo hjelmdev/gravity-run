@@ -212,7 +212,7 @@ func get_start_blockers() -> PackedStringArray:
 	if str(room_state.get("manifest_hash", "")).is_empty() or current_manifest == null:
 		blockers.append("manifest_missing")
 	var members: Array = room_state.get("members", [])
-	if members.size() < 2 or members.size() > MAX_PLAYERS:
+	if members.is_empty() or members.size() > MAX_PLAYERS:
 		blockers.append("player_count")
 	for member in members:
 		if not bool(member.get("is_connected", true)):
