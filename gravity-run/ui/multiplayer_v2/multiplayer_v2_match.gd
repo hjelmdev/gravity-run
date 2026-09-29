@@ -3,6 +3,7 @@ extends Node2D
 const LocalRunnerScript := preload("res://systems/multiplayer_v2/v2_local_runner.gd")
 const WorldSimulationScript := preload("res://systems/multiplayer_v2/v2_world_simulation.gd")
 const RemoteTrackScript := preload("res://systems/multiplayer_v2/v2_remote_track.gd")
+const PlayerScene := preload("res://player/player.tscn")
 const Motion := preload("res://systems/runner_motion.gd")
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const CourseGeneratorScript := preload("res://systems/course_generator.gd")
@@ -10,7 +11,6 @@ const CourseGeneratorScript := preload("res://systems/course_generator.gd")
 const FIXED_DELTA := 1.0 / 60.0
 const CAMERA_PLAYER_X := 250.0
 const MAX_CATCHUP_STEPS := 12
-const PLAYER_COLORS := [Color("54dfcd"), Color("ffcb62"), Color("fa7e91"), Color("a895ff"), Color("a7df6a")]
 
 var _manifest: Resource
 var _runner
@@ -25,6 +25,7 @@ var _remote_tracks: Dictionary = {}
 var _remote_terminal: Dictionary = {}
 var _remote_locomotion: Dictionary = {}
 var _slot_by_peer: Dictionary = {}
+var _player_views: Dictionary = {}
 var _camera_left := 0.0
 var _spectator_peer_id := 0
 var _last_spectator_event_peer_id := -1
@@ -134,6 +135,12 @@ func _build_peer_slots() -> void:
 	for member in MultiplayerV2Service.get_members():
 		var peer_id := int(member.get("player_slot", 1))
 		_slot_by_peer[peer_id] = peer_id - 1
+		var runner := PlayerScene.instantiate() as Node2D
+		runner.name = "Runner_%d" % peer_id
+		add_child(runner)
+		runner.call("set_input_enabled", false)
+		runner.call("set_skin_id", int(member.get("skin_id", 0)))
+		_player_views[peer_id] = runner
 		if peer_id == int(MultiplayerV2Service.session.get("local_peer_id", 1)):
 			continue
 		var track = RemoteTrackScript.new()
@@ -148,6 +155,7 @@ func _physics_process(delta: float) -> void:
 	for track in _remote_tracks.values():
 		track.advance(delta)
 	if not _round_started:
+		_sync_player_views()
 		queue_redraw()
 		return
 	_accumulator += minf(delta, FIXED_DELTA * float(MAX_CATCHUP_STEPS))
@@ -161,6 +169,7 @@ func _physics_process(delta: float) -> void:
 		_accumulator = fmod(_accumulator, FIXED_DELTA)
 	_update_spectator_camera()
 	_update_hud()
+	_sync_player_views()
 	MultiplayerV2Service.diagnostics.record_frame({"tick": _runner.simulation_tick, "world_tick": _world.tick, "x": float(_runner.player_state.get("world_x", 0.0)), "y": float(_runner.player_state.get("y", 0.0)), "camera_left": _camera_left, "render_fraction": _accumulator / FIXED_DELTA, "physics_delta_ms": delta * 1000.0, "fps": Engine.get_frames_per_second(), "window_focused": DisplayServer.window_is_focused()})
 	MultiplayerV2Service.diagnostics.observe_max("max_physics_delta_ms", delta * 1000.0)
 	queue_redraw()
@@ -419,38 +428,54 @@ func _draw_hazards() -> void:
 func _draw_players() -> void:
 	for member in MultiplayerV2Service.get_members():
 		var peer_id := int(member.get("player_slot", 1))
-		var slot := int(_slot_by_peer.get(peer_id, 0))
-		var world_x := float(_manifest.start_x)
-		var y := float(_manifest.initial_floor_y) - Motion.SIZE.y * 0.5
-		var gravity := 1
-		var locomotion := "running"
-		if peer_id == int(MultiplayerV2Service.session.get("local_peer_id", 1)):
-			var local_render: Dictionary = _runner.render_state(_accumulator / FIXED_DELTA)
-			world_x = float(local_render.get("world_x", world_x))
-			y = float(local_render.get("y", y))
-			gravity = int(_runner.player_state.get("gravity_direction", 1))
-			locomotion = str(_runner.player_state.get("state", "running"))
-		else:
-			var remote := _remote_track_sample(peer_id)
-			if not remote.is_empty():
-				world_x = float(remote.get("world_x", world_x))
-				y = float(remote.get("y", y))
-				gravity = int(remote.get("gravity_direction", gravity))
-			locomotion = str(_remote_locomotion.get(peer_id, "running"))
-			if str(_remote_terminal.get(peer_id, "running")) != "running":
-				locomotion = str(_remote_terminal[peer_id])
-		var offset := float(slot) * 18.0
-		var rect := Rect2(Vector2(world_x - _camera_left + offset - Motion.SIZE.x * 0.5, y - Motion.SIZE.y * 0.5), Motion.SIZE)
-		var color: Color = PLAYER_COLORS[posmod(slot, PLAYER_COLORS.size())]
-		if locomotion == "pending_barrel":
-			color = Color("ffd45c")
-		elif locomotion in ["dead", "disconnected"]:
-			color = color.darkened(0.55)
-		draw_rect(rect, color)
-		draw_rect(rect, Color("f6f1dc"), false, 2.0)
-		var gravity_mark_y := rect.position.y + 7.0 if gravity < 0 else rect.end.y - 7.0
-		draw_line(Vector2(rect.position.x + 8.0, gravity_mark_y), Vector2(rect.end.x - 8.0, gravity_mark_y), Color("18243a"), 3.0)
-		draw_string(ThemeDB.fallback_font, Vector2(rect.position.x - 7.0, rect.position.y - 7.0), str(member.get("display_name", "Runner")), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("edf3ff"))
+		var pose := _player_render_pose(member)
+		var screen_position: Vector2 = pose.position
+		draw_string(ThemeDB.fallback_font, screen_position + Vector2(-16.0, -Motion.SIZE.y * 0.5 - 8.0), str(member.get("display_name", "Runner")), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("edf3ff"))
+
+func _player_render_pose(member: Dictionary) -> Dictionary:
+	var peer_id := int(member.get("player_slot", 1))
+	var slot := int(_slot_by_peer.get(peer_id, 0))
+	var world_x := float(_manifest.start_x)
+	var y := float(_manifest.initial_floor_y) - Motion.SIZE.y * 0.5
+	var gravity := 1
+	var locomotion := "running"
+	if peer_id == int(MultiplayerV2Service.session.get("local_peer_id", 1)):
+		var local_render: Dictionary = _runner.render_state(_accumulator / FIXED_DELTA)
+		world_x = float(local_render.get("world_x", world_x))
+		y = float(local_render.get("y", y))
+		gravity = int(_runner.player_state.get("gravity_direction", 1))
+		locomotion = str(_runner.player_state.get("state", "running"))
+	else:
+		var remote := _remote_track_sample(peer_id)
+		if not remote.is_empty():
+			world_x = float(remote.get("world_x", world_x))
+			y = float(remote.get("y", y))
+			gravity = int(remote.get("gravity_direction", gravity))
+		locomotion = str(_remote_locomotion.get(peer_id, "running"))
+		if str(_remote_terminal.get(peer_id, "running")) != "running":
+			locomotion = str(_remote_terminal[peer_id])
+	var offset := float(slot) * 18.0
+	return {"position": Vector2(world_x - _camera_left + offset, y), "gravity": gravity, "locomotion": locomotion}
+
+func _sync_player_views() -> void:
+	for member in MultiplayerV2Service.get_members():
+		var peer_id := int(member.get("player_slot", 1))
+		var runner_value: Variant = _player_views.get(peer_id)
+		if not is_instance_valid(runner_value) or not runner_value is Node2D:
+			continue
+		var pose := _player_render_pose(member)
+		var runner: Node2D = runner_value
+		var screen_position: Vector2 = pose.position
+		runner.position = screen_position
+		runner.visible = screen_position.x > -80.0 and screen_position.x < get_viewport_rect().size.x + 80.0
+		var sprite := runner.get_node_or_null("AnimatedSprite2D") as AnimatedSprite2D
+		if sprite == null:
+			continue
+		sprite.flip_v = int(pose.gravity) < 0
+		if str(pose.locomotion) not in ["running", "pending_barrel"]:
+			sprite.stop()
+		elif not sprite.is_playing():
+			sprite.play("run")
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not _round_started or str(_runner.player_state.get("state", "")) not in ["running", "pending_barrel"]:

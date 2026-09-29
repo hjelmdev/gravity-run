@@ -40,6 +40,30 @@ func _initialize() -> void:
 	host_coordinator.process(host_coordinator.host_start_usec + 1)
 	_assert(started[0], "round starts after host time anchor and start acknowledgements")
 
+	var retry_coordinator = Coordinator.new()
+	var prepare_sends := [0]
+	var prepare_failures: Array[String] = []
+	retry_coordinator.control_requested.connect(func(_peer_id: int, kind: String, _payload: Dictionary) -> void:
+		if kind == "PREPARE_ROUND":
+			prepare_sends[0] += 1
+	)
+	retry_coordinator.round_failed.connect(func(reason: String) -> void: prepare_failures.append(reason))
+	_assert(retry_coordinator.prepare_as_host({"round_id": "retry-round", "lobby_generation": 8}, [2], 10_000_000), "host starts retryable prepare")
+	retry_coordinator.mark_local_prepared(10_000_001)
+	retry_coordinator.process(10_000_000 + Coordinator.PREPARE_RETRY_USEC)
+	_assert(prepare_sends[0] == 2, "host retries prepare for an unprepared guest")
+	retry_coordinator.process(10_000_000 + Coordinator.PREPARE_TIMEOUT_USEC)
+	_assert(prepare_failures == ["prepare_timeout"], "host cancels and reports a stalled prepare")
+	_assert(retry_coordinator.state == Coordinator.State.CANCELLED, "timed out prepare releases coordinator state")
+	retry_coordinator.reset_for_lobby()
+	_assert(retry_coordinator.state == Coordinator.State.IDLE and retry_coordinator.round_id.is_empty(), "returning to lobby clears stale round state")
+
+	var guest_coordinator = Coordinator.new()
+	_assert(guest_coordinator.receive_prepare_as_guest({"round_id": "old-round", "lobby_generation": 3}), "guest accepts first prepare")
+	guest_coordinator.state = Coordinator.State.CANCELLED
+	_assert(guest_coordinator.receive_prepare_as_guest({"round_id": "new-round", "lobby_generation": 4}), "guest accepts a newer lobby generation after an aborted round")
+	_assert(guest_coordinator.round_id == "new-round", "guest coordinator replaces the stale round")
+
 	var track = Track.new()
 	_assert(track.add_sample(_sample(2, 2, 200.0)), "remote track accepts later sample")
 	_assert(track.add_sample(_sample(1, 1, 100.0)), "remote track inserts reordered sample")

@@ -167,7 +167,7 @@ func _create_lobby_services() -> void:
 	add_child(_webrtc_transport)
 	_round_coordinator.control_requested.connect(send_control)
 	_round_coordinator.round_started.connect(_on_round_started)
-	_round_coordinator.round_failed.connect(func(reason: String) -> void: round_failed.emit(reason))
+	_round_coordinator.round_failed.connect(_on_coordinator_round_failed)
 
 func has_room() -> bool:
 	return not room_state.is_empty()
@@ -317,6 +317,8 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 		return
 	if action == "leave_room":
 		room_state.clear()
+		_round_coordinator.reset_for_lobby()
+		_round_id = ""
 		room_changed.emit({})
 		lobby_request_finished.emit(action, success, message)
 		return
@@ -344,9 +346,17 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 			if action not in ["create_room", "join_room"]:
 				_webrtc_transport.update_room(room_state)
 			room_changed.emit(room_state.duplicate(true))
-			if action in ["set_manifest", "refresh_room"]:
+			if action == "return_to_lobby":
+				_round_coordinator.reset_for_lobby()
+				_round_id = ""
+				for target in connected_peer_ids():
+					send_control(int(target), "RETURN_TO_LOBBY", {"room": room_state.duplicate(true)})
+				_ensure_manifest()
+			elif action in ["set_manifest", "refresh_room"]:
 				_ensure_manifest()
 			if action in ["create_room", "join_room"]:
+				_round_coordinator.reset_for_lobby()
+				_round_id = ""
 				var maximum := maxi(1, int(room_state.get("max_players", 5)) - 1)
 				var error := open_host(room_state, maximum) if is_room_owner() else configure_client_peer(int(_member_for_user(identity_user_id).get("player_slot", 1)))
 				if error == OK:
@@ -357,11 +367,7 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 					_webrtc_transport.begin_connection()
 					_ensure_manifest()
 		elif action in ["set_manifest", "refresh_room", "return_to_lobby"]:
-			if action == "return_to_lobby":
-				for target in connected_peer_ids():
-					send_control(int(target), "RETURN_TO_LOBBY", {"room": room_state.duplicate(true)})
-				_ensure_manifest()
-			elif action == "ack_manifest":
+			if action == "ack_manifest":
 				room_changed.emit(room_state.duplicate(true))
 		lobby_request_finished.emit(action, success, message)
 	else:
@@ -626,10 +632,13 @@ func _on_world_interaction_rpc(sender_peer_id: int, request: Dictionary) -> void
 func _on_control_rpc(sender_peer_id: int, kind: String, payload: Dictionary) -> void:
 	if not _active:
 		return
-	if not _packet_session_error(payload, kind in ["PREPARE_ROUND", "RETURN_TO_LOBBY"]).is_empty():
+	var packet_error := _packet_session_error(payload, kind in ["PREPARE_ROUND", "PREPARE_REJECTED", "RETURN_TO_LOBBY"])
+	if not packet_error.is_empty():
+		diagnostics.record_event("control_rejected", {"peer_id": sender_peer_id, "kind": kind, "reason": packet_error})
 		return
 	if str(session.get("role", "")) == "host":
-		if sender_peer_id != 1 and (not _is_roster_peer(sender_peer_id) or kind not in ["PREPARED", "START_ACK", "CLOCK_PING", "HEARTBEAT", "WORLD_EVENT_ACK", "RESULT_ACK", "TERMINAL_ACK", "WORLD_HASH"]):
+		if sender_peer_id != 1 and (not _is_roster_peer(sender_peer_id) or kind not in ["PREPARED", "PREPARE_REJECTED", "START_ACK", "CLOCK_PING", "HEARTBEAT", "WORLD_EVENT_ACK", "RESULT_ACK", "TERMINAL_ACK", "WORLD_HASH"]):
+			diagnostics.record_event("control_rejected", {"peer_id": sender_peer_id, "kind": kind, "reason": "sender_or_kind_not_allowed"})
 			return
 		_handle_host_control(sender_peer_id, kind, payload)
 	else:
@@ -641,6 +650,10 @@ func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary
 	if str(payload.get("round_id", "")) != _round_id and kind not in ["CLOCK_PING", "HEARTBEAT"]:
 		return
 	match kind:
+		"PREPARE_REJECTED":
+			var reason := str(payload.get("reason", "guest_rejected_prepare"))
+			diagnostics.record_event("prepare_rejected_by_guest", {"peer_id": sender_peer_id, "round_id": _round_id, "reason": reason})
+			_round_coordinator.cancel("guest_prepare_rejected:%s" % reason)
 		"PREPARED":
 			_round_coordinator.acknowledge_prepared(sender_peer_id, _round_id, Time.get_ticks_usec())
 		"START_ACK":
@@ -681,6 +694,9 @@ func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 			descriptor.merge({"room_id": str(room_state.get("room_id", "")), "room_session_id": str(room_state.get("room_session_id", "")), "seed": int(room_state.get("seed", 1)), "course_length_px": int(room_state.get("course_length_px", 45000)), "players": room_state.get("members", []).duplicate(true)}, true)
 			if _round_coordinator.receive_prepare_as_guest(descriptor):
 				round_prepare_requested.emit(descriptor)
+			else:
+				diagnostics.record_event("prepare_rejected_locally", {"round_id": str(payload.get("round_id", "")), "reason": "coordinator_busy", "state": _round_coordinator.state, "current_round_id": _round_coordinator.round_id, "incoming_generation": incoming_generation, "current_generation": _round_coordinator.lobby_generation})
+				send_control(1, "PREPARE_REJECTED", {"round_id": str(payload.get("round_id", "")), "reason": "coordinator_busy"})
 		"COMMIT_START":
 			if not _round_coordinator.receive_commit_as_guest(payload):
 				round_failed.emit("The start commit was invalid or the guest clock is not synchronized.")
@@ -692,6 +708,7 @@ func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 				return
 			room_state = next_room.duplicate(true)
 			room_state["network_mode"] = "v2"
+			_round_coordinator.reset_for_lobby()
 			_round_id = ""
 			terminal_status.clear()
 			_result_committed = false
@@ -906,6 +923,12 @@ func _set_backend_phase(phase: String) -> void:
 	_pending_lobby_context = context
 	_lobby_contexts[context] = "set_phase"
 	_lobby_provider.set_phase(str(room_state.get("room_id", "")), phase, _identity_adapter.token(), context)
+
+func _on_coordinator_round_failed(reason: String) -> void:
+	diagnostics.record_event("round_prepare_or_start_failed", {"reason": reason, "role": str(session.get("role", "")), "round_id": _round_id})
+	round_failed.emit(reason)
+	if is_room_owner() and has_room() and str(room_state.get("phase", "")) in ["PREPARING_COURSE", "RUNNING"]:
+		call_deferred("return_to_lobby")
 
 func return_to_lobby() -> void:
 	if is_room_owner() and has_room():

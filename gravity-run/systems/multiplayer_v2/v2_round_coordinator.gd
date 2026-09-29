@@ -7,6 +7,8 @@ signal round_failed(reason: String)
 
 const START_LEAD_USEC := 2_500_000
 const ACK_MARGIN_USEC := 500_000
+const PREPARE_RETRY_USEC := 1_000_000
+const PREPARE_TIMEOUT_USEC := 15_000_000
 
 enum State { IDLE, PREPARING, COMMITTING, RUNNING, CANCELLED }
 
@@ -16,6 +18,8 @@ var lobby_generation := 0
 var manifest_hash := ""
 var host_start_usec := -1
 var start_ack_deadline_usec := -1
+var prepare_started_usec := -1
+var prepare_last_sent_usec := -1
 var is_host := false
 var peer_ids: Array[int] = []
 var prepared_peers: Dictionary = {}
@@ -29,14 +33,19 @@ func prepare_as_host(descriptor: Dictionary, peers: Array[int], now_usec: int) -
 	_reset_round(descriptor, peers, true)
 	state = State.PREPARING
 	prepared_peers[1] = false
-	for peer_id in peer_ids:
-		control_requested.emit(peer_id, "PREPARE_ROUND", _control_payload())
+	prepare_started_usec = now_usec
+	_send_prepare_to_pending_peers(now_usec)
 	_try_commit(now_usec)
 	return true
 
 func receive_prepare_as_guest(descriptor: Dictionary) -> bool:
+	var incoming_round_id := str(descriptor.get("round_id", ""))
+	var incoming_generation := int(descriptor.get("lobby_generation", -1))
+	if state == State.PREPARING and incoming_round_id == round_id:
+		return true
 	if state not in [State.IDLE, State.CANCELLED, State.RUNNING]:
-		return false
+		if incoming_generation <= lobby_generation:
+			return false
 	_reset_round(descriptor, [], false)
 	state = State.PREPARING
 	return true
@@ -76,6 +85,11 @@ func acknowledge_start(peer_id: int, received_round_id: String, now_usec: int) -
 
 func process(now_usec: int) -> void:
 	if is_host and state == State.PREPARING:
+		if now_usec - prepare_started_usec >= PREPARE_TIMEOUT_USEC:
+			cancel("prepare_timeout")
+			return
+		if not _all_peers(prepared_peers) and now_usec - prepare_last_sent_usec >= PREPARE_RETRY_USEC:
+			_send_prepare_to_pending_peers(now_usec)
 		_try_commit(now_usec)
 	elif state == State.COMMITTING:
 		if is_host and not _all_peers(start_acks) and now_usec >= start_ack_deadline_usec:
@@ -88,8 +102,16 @@ func process(now_usec: int) -> void:
 
 func cancel(reason: String) -> void:
 	state = State.CANCELLED
-	control_requested.emit(0 if is_host else 1, "CANCEL_START", {"round_id": round_id, "reason": reason})
+	var payload := {"round_id": round_id, "reason": reason}
+	if is_host:
+		for peer_id in peer_ids:
+			control_requested.emit(peer_id, "CANCEL_START", payload)
+	else:
+		control_requested.emit(1, "CANCEL_START", payload)
 	round_failed.emit(reason)
+
+func reset_for_lobby() -> void:
+	_reset_round({}, [], false)
 
 func _reset_round(descriptor: Dictionary, peers: Array[int], host: bool) -> void:
 	state = State.IDLE
@@ -104,6 +126,14 @@ func _reset_round(descriptor: Dictionary, peers: Array[int], host: bool) -> void
 	clock.reset_round()
 	host_start_usec = -1
 	start_ack_deadline_usec = -1
+	prepare_started_usec = -1
+	prepare_last_sent_usec = -1
+
+func _send_prepare_to_pending_peers(now_usec: int) -> void:
+	prepare_last_sent_usec = now_usec
+	for peer_id in peer_ids:
+		if not bool(prepared_peers.get(peer_id, false)):
+			control_requested.emit(peer_id, "PREPARE_ROUND", _control_payload())
 
 func _try_commit(now_usec: int) -> void:
 	if not is_host or state != State.PREPARING or not _all_peers(prepared_peers):
