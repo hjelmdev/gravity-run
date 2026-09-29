@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="sv">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+	<meta name="theme-color" content="#101827">
+	<link rel="manifest" href="./gravity-run.manifest.json">
+	<link rel="apple-touch-icon" href="./game/index.180x180.png">
+	<title>Gravity Run – Multiplayer V2 Test</title>
+	<style>
+		html, body {
+			width: 100%;
+			height: 100%;
+			margin: 0;
+			overflow: hidden;
+			background: #101827;
+		}
+		body {
+			display: grid;
+			place-items: center;
+		}
+		#game-shell {
+			width: min(100vw, 177.7778vh, 1920px);
+			height: min(56.25vw, 100vh, 1080px);
+			width: min(100vw, 177.7778dvh, 1920px);
+			height: min(56.25vw, 100dvh, 1080px);
+			aspect-ratio: 16 / 9;
+			overflow: hidden;
+			background: #101827;
+		}
+		@media (pointer: coarse) {
+			#game-shell {
+				width: 100vw;
+				height: 100vh;
+				width: 100dvw;
+				height: 100dvh;
+				max-width: none;
+				max-height: none;
+				aspect-ratio: auto;
+			}
+		}
+		/* In portrait, keep the iframe's own coordinate space landscape-sized and rotate the entire surface. */
+		html.phone-portrait #game-shell {
+			position: fixed;
+			left: 50%;
+			top: 50%;
+			width: 100vh;
+			height: 100vw;
+			width: 100dvh;
+			height: 100dvw;
+			transform: translate(-50%, -50%) rotate(90deg);
+		}
+		#game-frame {
+			display: block;
+			width: 100%;
+			height: 100%;
+			border: 0;
+			background: #101827;
+		}
+		#rotate-prompt {
+			display: none;
+			position: fixed;
+			inset: 0;
+			z-index: 10;
+			box-sizing: border-box;
+			align-items: center;
+			justify-content: center;
+			flex-direction: column;
+			gap: 20px;
+			padding: max(24px, env(safe-area-inset-top)) 28px max(24px, env(safe-area-inset-bottom));
+			text-align: center;
+			color: #edf3ff;
+			background: #101827;
+			font-family: Arial, sans-serif;
+		}
+		#rotate-prompt .rotate-icon {
+			width: 72px;
+			height: 72px;
+			border: 3px solid #42d6c5;
+			border-radius: 18px;
+			position: relative;
+		}
+		#rotate-prompt .rotate-icon::before {
+			content: "";
+			position: absolute;
+			width: 28px;
+			height: 48px;
+			left: 19px;
+			top: 9px;
+			border: 3px solid #edf3ff;
+			border-radius: 5px;
+		}
+		#rotate-prompt strong {
+			font-size: clamp(22px, 6vw, 30px);
+			letter-spacing: 0.04em;
+		}
+		#rotate-prompt span {
+			max-width: 320px;
+			font-size: 16px;
+			line-height: 1.5;
+			color: #b9c8dc;
+		}
+		html.phone-portrait #rotate-prompt {
+			display: flex;
+		}
+		#mobile-text-entry {
+			position: fixed;
+			z-index: 20;
+			box-sizing: border-box;
+			padding: 8px 12px 10px;
+			padding-left: max(12px, env(safe-area-inset-left));
+			padding-right: max(12px, env(safe-area-inset-right));
+			border: 2px solid #42d6c5;
+			border-radius: 12px;
+			background: #18243a;
+			color: #edf3ff;
+			font-family: Arial, sans-serif;
+			box-shadow: 0 4px 18px #0008;
+		}
+		#mobile-text-entry[hidden] { display: none; }
+		#mobile-text-label { display: block; margin-bottom: 5px; font-size: 15px; }
+		#mobile-text-form > div { display: flex; gap: 8px; }
+		#mobile-text-input {
+			min-width: 0;
+			flex: 1;
+			box-sizing: border-box;
+			padding: 8px;
+			border: 1px solid #8292aa;
+			border-radius: 6px;
+			background: #111b2c;
+			color: #edf3ff;
+			font-size: 18px;
+		}
+		#mobile-text-form button {
+			padding: 0 18px;
+			border: 0;
+			border-radius: 6px;
+			background: #42d6c5;
+			color: #101827;
+			font-size: 17px;
+			font-weight: 700;
+		}
+	</style>
+</head>
+<body>
+	<main id="game-shell">
+		<iframe id="game-frame" src="./game/index.html" title="Gravity Run" allow="fullscreen; autoplay" allowfullscreen></iframe>
+	</main>
+	<script>
+	(() => {
+		const params = new URLSearchParams(window.location.search);
+		if (!window.opener) return;
+		if (params.has('code')) {
+			window.opener.postMessage('gravity-run-oauth|code|' + encodeURIComponent(params.get('code')), window.location.origin);
+			window.close();
+		} else if (params.has('error')) {
+			window.opener.postMessage('gravity-run-oauth|error|' + encodeURIComponent(params.get('error_description') || params.get('error')), window.location.origin);
+			window.close();
+		}
+	})();
+	</script>
+	<aside id="rotate-prompt" role="status" aria-live="polite">
+		<div class="rotate-icon" aria-hidden="true"></div>
+		<strong>VÄND SKÄRMEN</strong>
+		<span>Gravity Run spelas i liggande läge. Vänd mobilen för att fortsätta.</span>
+	</aside>
+	<div id="mobile-text-entry" hidden>
+		<form id="mobile-text-form">
+			<label id="mobile-text-label" for="mobile-text-input"></label>
+			<div><input id="mobile-text-input" type="text" autocomplete="off" spellcheck="false"><button type="submit">Klar</button></div>
+		</form>
+	</div>
+	<script src="./mobile_text_entry.js"></script>
+	<script>
+	(() => {
+		// Retire an older root-scoped Godot worker. The game export in ./game owns its own cache.
+		if ('serviceWorker' in navigator) {
+			const scope = new URL('./', location.href).href;
+			navigator.serviceWorker.getRegistrations().then((registrations) => {
+				const oldRootWorkers = registrations.filter((registration) => registration.scope === scope);
+				if (oldRootWorkers.length === 0) return;
+				Promise.all(oldRootWorkers.map((registration) => registration.unregister())).then(() => {
+					const key = 'gravity-run-root-worker-retired-v1';
+					if (!sessionStorage.getItem(key)) {
+						sessionStorage.setItem(key, '1');
+						location.reload();
+					}
+				});
+			}).catch(() => {});
+		}
+	})();
+	</script>
+</body>
+</html>
