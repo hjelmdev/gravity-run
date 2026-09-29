@@ -11,8 +11,19 @@ const World := preload("res://systems/multiplayer_v2/v2_world_simulation.gd")
 const Runner := preload("res://systems/multiplayer_v2/v2_local_runner.gd")
 const Coordinator := preload("res://systems/multiplayer_v2/v2_round_coordinator.gd")
 const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_export.gd")
+const V2Service := preload("res://systems/multiplayer_v2/multiplayer_v2_service.gd")
 
 func _initialize() -> void:
+	var numeric_roster := [
+		{"user_id": "host-user", "player_slot": 1.0},
+		{"user_id": "guest-user", "player_slot": 2.0}
+	]
+	var numeric_peer_map: Dictionary = V2Service._peer_map_for_roster(numeric_roster)
+	_assert(numeric_peer_map == {"1": "host-user", "2": "guest-user"}, "peer map normalizes Supabase float slots to integer IDs")
+	_assert(V2Service.room_snapshot_rejection_reason({"room_id": "room", "room_session_id": "session", "lobby_generation": 5, "phase": "PREPARING_COURSE"}, {"room_id": "room", "room_session_id": "session", "lobby_generation": 4, "phase": "OPEN"}, "refresh_room") == "older_generation", "stale room polling cannot roll back a newer generation")
+	_assert(V2Service.room_snapshot_rejection_reason({"room_id": "room", "room_session_id": "session", "lobby_generation": 5, "phase": "PREPARING_COURSE"}, {"room_id": "room", "room_session_id": "session", "lobby_generation": 5, "phase": "OPEN"}, "refresh_room") == "phase_regression", "room polling cannot regress phase within one generation")
+	_assert(V2Service.room_snapshot_rejection_reason({"room_id": "room", "room_session_id": "session", "lobby_generation": 5, "phase": "PREPARING_COURSE"}, {"room_id": "room", "room_session_id": "session", "lobby_generation": 6, "phase": "OPEN"}, "refresh_room").is_empty(), "a newer return-to-lobby generation can reopen the room")
+
 	var oversized_report := {"session": {"round_id": "export-test"}, "frames": [], "events": []}
 	var large_frame_data := "x".repeat(256 * 1024)
 	for _index in 40:

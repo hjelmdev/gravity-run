@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="Gravity Run"
-config/version="2026.09.29-v2-start-course-r2"
+config/version="2026.09.29-v2-start-course-r3"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.svg"
 run/main_scene="res://ui/main_menu.tscn"

@@ -4,6 +4,7 @@ extends Node
 const Config := preload("res://systems/leaderboard_config.gd")
 
 signal request_finished(action: String, success: bool, data: Variant, message: String, context: String)
+signal request_timing(action: String, context: String, queue_usec: int, request_usec: int)
 
 var _request: HTTPRequest
 var _queue: Array[Dictionary] = []
@@ -59,7 +60,7 @@ func _call(action: String, rpc_name: String, payload: Dictionary, token: String,
 	if token.is_empty():
 		request_finished.emit(action, false, null, tr("A multiplayer identity is required."), context)
 		return
-	var call := {"action": action, "rpc_name": rpc_name, "payload": payload, "token": token, "context": context}
+	var call := {"action": action, "rpc_name": rpc_name, "payload": payload, "token": token, "context": context, "queued_at_usec": Time.get_ticks_usec()}
 	if _request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
 		if _queue.size() < 64:
 			_queue.append(call)
@@ -69,11 +70,13 @@ func _call(action: String, rpc_name: String, payload: Dictionary, token: String,
 	_start(call)
 
 func _start(call: Dictionary) -> void:
+	call["started_at_usec"] = Time.get_ticks_usec()
 	_active = call
 	var headers := PackedStringArray(["apikey: " + Config.PUBLISHABLE_KEY, "Authorization: Bearer " + str(call.token), "Content-Type: application/json", "Accept: application/json"])
 	var url := "%s/rest/v1/rpc/%s" % [Config.PROJECT_URL, str(call.rpc_name)]
 	var error := _request.request(url, headers, HTTPClient.METHOD_POST, JSON.stringify(call.payload))
 	if error != OK:
+		request_timing.emit(str(call.action), str(call.context), int(call.started_at_usec) - int(call.queued_at_usec), 0)
 		request_finished.emit(str(call.action), false, null, tr("Could not start a V2 lobby request (code %d).") % error, str(call.context))
 		_active.clear()
 		_dispatch_next.call_deferred()
@@ -81,6 +84,8 @@ func _start(call: Dictionary) -> void:
 func _on_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	var call := _active
 	_active = {}
+	var completed_at_usec := Time.get_ticks_usec()
+	request_timing.emit(str(call.get("action", "")), str(call.get("context", "")), int(call.get("started_at_usec", completed_at_usec)) - int(call.get("queued_at_usec", completed_at_usec)), completed_at_usec - int(call.get("started_at_usec", completed_at_usec)))
 	var parsed: Variant = JSON.parse_string(body.get_string_from_utf8()) if not body.is_empty() else null
 	if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300:
 		var detail := str(parsed.get("message", parsed.get("details", ""))) if parsed is Dictionary else ""

@@ -51,6 +51,7 @@ func _ready() -> void:
 	MultiplayerV2Service.lobby_request_finished.connect(_on_request_finished)
 	MultiplayerV2Service.signaling_state_changed.connect(_on_signaling_state)
 	MultiplayerV2Service.transport_state_changed.connect(_on_transport_state)
+	MultiplayerV2Service.start_failure_changed.connect(_on_start_failure_changed)
 	MultiplayerV2Service.round_prepare_requested.connect(_on_round_prepare_requested)
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 	_on_viewport_size_changed()
@@ -345,6 +346,8 @@ func _on_room_changed(room: Dictionary) -> void:
 			_status.text = tr("Mark yourself ready when you are ready.")
 		else:
 			_status.text = tr("Room ready. Waiting for players.")
+	if not MultiplayerV2Service.last_start_failure.is_empty():
+		_status.text = tr("Last start attempt failed: %s") % MultiplayerV2Service.last_start_failure
 
 func _clear_members() -> void:
 	if not is_instance_valid(_players):
@@ -384,6 +387,12 @@ func _on_request_finished(action: String, success: bool, message: String) -> voi
 	elif action in ["create_room", "join_room", "set_ready", "set_skin"]:
 		_status.text = ""
 	_refresh_controls()
+
+func _on_start_failure_changed(message: String) -> void:
+	if not message.is_empty():
+		_status.text = tr("Last start attempt failed: %s") % message
+	elif not _room.is_empty():
+		_on_room_changed(_room)
 
 func _refresh_controls() -> void:
 	var in_room := not _room.is_empty()

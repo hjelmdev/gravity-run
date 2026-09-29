@@ -29,6 +29,7 @@ signal signaling_state_changed(connected: bool, message: String)
 signal round_prepare_requested(descriptor: Dictionary)
 signal round_started(round_id: String, descriptor: Dictionary)
 signal round_failed(reason: String)
+signal start_failure_changed(message: String)
 signal world_event_committed(commit: Dictionary)
 signal world_baseline_received(baseline: Dictionary)
 signal world_interaction_resolved(request_id: String, accepted: bool, message: String, commit: Dictionary)
@@ -58,6 +59,8 @@ var _pending_identity_action := ""
 var _pending_identity_arguments: Dictionary = {}
 var _pending_lobby_context := ""
 var _lobby_contexts: Dictionary = {}
+var _lobby_request_meta: Dictionary = {}
+var _lobby_request_sequence := 0
 var _lobby_poll_elapsed := 0.0
 var _last_sample_by_peer: Dictionary = {}
 var _last_seen_tick_by_peer: Dictionary = {}
@@ -93,6 +96,10 @@ var _world_divergence_reported := false
 var _prepare_scene_requested_round_id := ""
 var _peer_mapping_verified_sample := false
 var _last_host_heartbeat_usec := -1
+var _start_attempt_id := ""
+var _start_in_flight := false
+var _room_refresh_in_flight := false
+var last_start_failure := ""
 const DISCONNECT_GRACE_USEC := 10_000_000
 const HEARTBEAT_INTERVAL_SECONDS := 1.0
 
@@ -156,6 +163,7 @@ func _create_lobby_services() -> void:
 	_lobby_provider = LobbyProviderScript.new()
 	_lobby_provider.name = "LobbyProvider"
 	_lobby_provider.request_finished.connect(_on_lobby_request_finished)
+	_lobby_provider.request_timing.connect(_on_lobby_request_timing)
 	add_child(_lobby_provider)
 	_signaling_transport = SignalingTransportScript.new()
 	_signaling_transport.name = "Signaling"
@@ -205,11 +213,13 @@ func list_public_rooms() -> void:
 	_begin_identity_action("list_rooms", {})
 
 func refresh_room() -> void:
-	if has_room():
+	if has_room() and not _room_refresh_in_flight:
+		_room_refresh_in_flight = true
 		_begin_identity_action("refresh_room", {"room_id": str(room_state.get("room_id", ""))})
 
 func set_ready(ready: bool) -> void:
 	if has_room() and local_peer_mapping_valid():
+		_clear_start_failure()
 		_begin_identity_action("set_ready", {"room_id": str(room_state.get("room_id", "")), "ready": ready})
 
 func set_skin_id(skin_id: int) -> void:
@@ -217,14 +227,39 @@ func set_skin_id(skin_id: int) -> void:
 		_begin_identity_action("set_skin", {"room_id": str(room_state.get("room_id", "")), "skin_id": posmod(skin_id, 4)})
 
 func request_start() -> void:
+	if _start_in_flight:
+		diagnostics.record_event("start_click_ignored", {"attempt_id": _start_attempt_id, "reason": "attempt_already_in_flight"})
+		return
+	_start_attempt_id = Crypto.new().generate_random_bytes(12).hex_encode()
+	_start_in_flight = true
+	last_start_failure = ""
+	diagnostics.session["attempt_id"] = _start_attempt_id
+	diagnostics.record_event("start_attempt_requested", {"attempt_id": _start_attempt_id, "phase": str(room_state.get("phase", "")), "generation": int(room_state.get("lobby_generation", -1)), "room_id": str(room_state.get("room_id", ""))})
 	if not is_room_owner():
-		lobby_request_finished.emit("prepare_round", false, tr("Only the V2 host can start the round."))
+		_fail_start_attempt("not_host", tr("Only the V2 host can start the round."), false)
 		return
 	var blockers := get_start_blockers()
 	if not blockers.is_empty():
-		lobby_request_finished.emit("prepare_round", false, tr("V2 cannot start yet: %s") % ", ".join(blockers))
+		_fail_start_attempt("blocked:" + ",".join(blockers), tr("V2 cannot start yet: %s") % ", ".join(blockers), false)
 		return
-	_begin_identity_action("prepare_round", {"room_id": str(room_state.get("room_id", ""))})
+	_begin_identity_action("prepare_round", {"room_id": str(room_state.get("room_id", "")), "attempt_id": _start_attempt_id})
+
+func _fail_start_attempt(reason: String, display_message: String, notify_peers: bool = true) -> void:
+	var attempt_id := _start_attempt_id
+	last_start_failure = "%s (attempt %s)" % [reason, attempt_id.left(8)]
+	_start_in_flight = false
+	diagnostics.record_event("start_attempt_failed", {"attempt_id": attempt_id, "reason": reason, "round_id": _round_id, "phase": str(room_state.get("phase", "")), "generation": int(room_state.get("lobby_generation", -1))})
+	start_failure_changed.emit(last_start_failure)
+	if notify_peers and is_room_owner():
+		for peer_id in connected_peer_ids():
+			send_control(int(peer_id), "START_ABORT", {"attempt_id": attempt_id, "reason": reason, "round_id": _round_id, "lobby_generation": int(room_state.get("lobby_generation", 0)), "manifest_hash": str(room_state.get("manifest_hash", ""))})
+	lobby_request_finished.emit("prepare_round", false, display_message)
+
+func _clear_start_failure() -> void:
+	if last_start_failure.is_empty():
+		return
+	last_start_failure = ""
+	start_failure_changed.emit("")
 
 func get_start_blockers() -> PackedStringArray:
 	var blockers := PackedStringArray()
@@ -288,7 +323,16 @@ func _begin_identity_action(action: String, arguments: Dictionary) -> void:
 		return
 	_pending_identity_action = action
 	_pending_identity_arguments = arguments.duplicate(true)
-	_pending_lobby_context = "%s:%d" % [action, Time.get_ticks_msec()]
+	_lobby_request_sequence += 1
+	_pending_lobby_context = "%s:%d:%d" % [action, Time.get_ticks_msec(), _lobby_request_sequence]
+	_lobby_request_meta[_pending_lobby_context] = {
+		"started_usec": Time.get_ticks_usec(),
+		"attempt_id": str(arguments.get("attempt_id", _start_attempt_id if action == "prepare_round" else "")),
+		"room_id": str(room_state.get("room_id", "")),
+		"room_session_id": str(room_state.get("room_session_id", "")),
+		"generation": int(room_state.get("lobby_generation", -1)),
+		"phase": str(room_state.get("phase", ""))
+	}
 	_identity_adapter.ensure_identity(str(arguments.get("display_name", "Runner")), _pending_lobby_context)
 
 func _on_identity_ready(user_id: String, _token: String, anonymous: bool, context: String) -> void:
@@ -324,12 +368,23 @@ func _on_identity_failed(message: String, context: String) -> void:
 	if context == _pending_lobby_context:
 		_pending_identity_action = ""
 		_pending_identity_arguments.clear()
-		lobby_request_finished.emit("identity", false, message)
+		_lobby_request_meta.erase(context)
+		if context.begins_with("refresh_room:"):
+			_room_refresh_in_flight = false
+		if _start_in_flight:
+			_fail_start_attempt("identity_failed:%s" % message, message, false)
+		else:
+			lobby_request_finished.emit("identity", false, message)
 
 func _on_lobby_request_finished(action: String, success: bool, data: Variant, message: String, context: String) -> void:
 	if not _lobby_contexts.has(context):
 		return
 	_lobby_contexts.erase(context)
+	var request_meta: Dictionary = _lobby_request_meta.get(context, {})
+	_lobby_request_meta.erase(context)
+	diagnostics.record_event("lobby_rpc_response", {"action": action, "success": success, "context": context, "attempt_id": str(request_meta.get("attempt_id", "")), "request_elapsed_usec": Time.get_ticks_usec() - int(request_meta.get("started_usec", Time.get_ticks_usec())), "generation_at_dispatch": int(request_meta.get("generation", -1)), "phase_at_dispatch": str(request_meta.get("phase", "")), "generation_at_response": int(room_state.get("lobby_generation", -1)), "phase_at_response": str(room_state.get("phase", ""))})
+	if action == "refresh_room":
+		_room_refresh_in_flight = false
 	if action in ["set_manifest", "ack_manifest"]:
 		_manifest_action_pending = ""
 	if action == "list_rooms":
@@ -346,6 +401,9 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 		return
 	if action == "prepare_round" and success and data is Dictionary:
 		var next_room: Dictionary = data.get("room", data)
+		if not _accept_room_snapshot(next_room, action, context):
+			_fail_start_attempt("stale_prepare_response", "V2 ignored an outdated prepare response. The room has a newer state.", false)
+			return
 		room_state = next_room.duplicate(true)
 		room_changed.emit(room_state.duplicate(true))
 		var peers := PackedInt32Array()
@@ -355,21 +413,21 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 		session["round_id"] = _round_id
 		diagnostics.session["round_id"] = _round_id
 		session["roster_revision"] = int(room_state.get("lobby_generation", 0))
-		var descriptor := {"round_id": _round_id, "room_id": str(room_state.get("room_id", "")), "room_session_id": str(room_state.get("room_session_id", "")), "lobby_generation": int(room_state.get("lobby_generation", 0)), "roster_revision": int(room_state.get("lobby_generation", 0)), "manifest_hash": str(room_state.get("manifest_hash", "")), "seed": int(room_state.get("seed", 1)), "course_length_px": int(room_state.get("course_length_px", 45000)), "players": room_state.get("members", []).duplicate(true)}
+		var descriptor := {"attempt_id": _start_attempt_id, "round_id": _round_id, "room_id": str(room_state.get("room_id", "")), "room_session_id": str(room_state.get("room_session_id", "")), "lobby_generation": int(room_state.get("lobby_generation", 0)), "roster_revision": int(room_state.get("lobby_generation", 0)), "manifest_hash": str(room_state.get("manifest_hash", "")), "seed": int(room_state.get("seed", 1)), "course_length_px": int(room_state.get("course_length_px", 45000)), "players": room_state.get("members", []).duplicate(true)}
 		descriptor["peer_map"] = _peer_map_for_roster(descriptor.players)
 		var descriptor_error := _validate_round_descriptor(descriptor)
 		if not descriptor_error.is_empty():
 			diagnostics.record_event("host_round_descriptor_rejected", {"round_id": _round_id, "reason": descriptor_error, "generation": int(descriptor.lobby_generation), "manifest_hash": str(descriptor.manifest_hash)})
-			lobby_request_finished.emit(action, false, "V2 could not freeze the round roster: %s" % descriptor_error)
+			_fail_start_attempt("round_descriptor:%s" % descriptor_error, "V2 could not freeze the round roster: %s" % descriptor_error)
 			call_deferred("return_to_lobby")
 			return
 		_round_roster_revision = int(descriptor.roster_revision)
 		if not _round_coordinator.prepare_as_host(descriptor, Array(peers), Time.get_ticks_usec()):
 			diagnostics.record_event("host_prepare_coordinator_rejected", {"round_id": _round_id, "state": _round_coordinator.state})
-			lobby_request_finished.emit(action, false, "V2 could not start the round preparation. Return to the lobby and try again.")
+			_fail_start_attempt("coordinator:%s" % str(_round_coordinator.state), "V2 could not start the round preparation.")
 			call_deferred("return_to_lobby")
 			return
-		diagnostics.record_event("backend_prepare_accepted", {"round_id": _round_id, "phase": str(room_state.get("phase", "")), "generation": int(descriptor.lobby_generation), "room_session_id": str(descriptor.room_session_id), "manifest_hash": str(descriptor.manifest_hash), "peer_ids": Array(peers)})
+		diagnostics.record_event("backend_prepare_accepted", {"attempt_id": _start_attempt_id, "round_id": _round_id, "phase": str(room_state.get("phase", "")), "generation": int(descriptor.lobby_generation), "room_session_id": str(descriptor.room_session_id), "manifest_hash": str(descriptor.manifest_hash), "peer_ids": Array(peers)})
 		if peers.is_empty():
 			_on_coordinator_prepare_received()
 		lobby_request_finished.emit(action, true, "")
@@ -377,6 +435,9 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 	if success and data is Dictionary:
 		var next_room: Dictionary = data.get("room", data)
 		if next_room is Dictionary and not next_room.is_empty():
+			if not _accept_room_snapshot(next_room, action, context):
+				lobby_request_finished.emit(action, true, "Ignored an outdated room response.")
+				return
 			room_state = next_room.duplicate(true)
 			room_state["network_mode"] = "v2"
 			if action not in ["create_room", "join_room"]:
@@ -412,7 +473,56 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 		if action == "prepare_round" and message.contains("room_not_preparable"):
 			display_message = tr("The room changed before the race could start. Lobby state refreshed.")
 			refresh_room.call_deferred()
-		lobby_request_finished.emit(action, success, display_message)
+		if action == "prepare_round":
+			_fail_start_attempt("backend_prepare_rejected:%s" % message, display_message, false)
+		else:
+			lobby_request_finished.emit(action, success, display_message)
+
+func _accept_room_snapshot(next_room: Dictionary, action: String, context: String) -> bool:
+	var reason := room_snapshot_rejection_reason(room_state, next_room, action)
+	if reason.is_empty():
+		return true
+	var meta: Dictionary = _lobby_request_meta.get(context, {})
+	diagnostics.record_event("room_snapshot_rejected", {
+		"action": action,
+		"reason": reason,
+		"attempt_id": str(meta.get("attempt_id", _start_attempt_id)),
+		"current_generation": int(room_state.get("lobby_generation", -1)),
+		"response_generation": int(next_room.get("lobby_generation", -1)),
+		"current_phase": str(room_state.get("phase", "")),
+		"response_phase": str(next_room.get("phase", "")),
+		"context": context
+	})
+	return false
+
+func _on_lobby_request_timing(action: String, context: String, queue_usec: int, request_usec: int) -> void:
+	var meta: Dictionary = _lobby_request_meta.get(context, {})
+	diagnostics.record_event("lobby_rpc_timing", {"action": action, "context": context, "attempt_id": str(meta.get("attempt_id", _start_attempt_id if action == "prepare_round" else "")), "queue_usec": queue_usec, "http_usec": request_usec, "generation_at_queue": int(meta.get("generation", -1)), "phase_at_queue": str(meta.get("phase", ""))})
+
+static func room_snapshot_rejection_reason(current_room: Dictionary, next_room: Dictionary, action: String = "") -> String:
+	if current_room.is_empty() or action in ["create_room", "join_room"]:
+		return ""
+	if str(current_room.get("room_id", "")) != str(next_room.get("room_id", "")):
+		return "room_id_mismatch"
+	var current_session := str(current_room.get("room_session_id", ""))
+	var response_session := str(next_room.get("room_session_id", ""))
+	if not current_session.is_empty() and not response_session.is_empty() and current_session != response_session:
+		return "room_session_id_mismatch"
+	var current_generation := int(current_room.get("lobby_generation", -1))
+	var next_generation := int(next_room.get("lobby_generation", -1))
+	if next_generation < current_generation:
+		return "older_generation"
+	if next_generation == current_generation and _phase_order(str(next_room.get("phase", ""))) < _phase_order(str(current_room.get("phase", ""))):
+		return "phase_regression"
+	return ""
+
+static func _phase_order(phase: String) -> int:
+	match phase:
+		"OPEN": return 0
+		"PREPARING_COURSE": return 1
+		"RUNNING": return 2
+		"FINISHED", "CLOSED": return 3
+		_: return -1
 
 func _on_signaling_state_changed(connected: bool, message: String) -> void:
 	signaling_state_changed.emit(connected, message)
@@ -564,8 +674,8 @@ func send_interaction(request: Dictionary) -> void:
 
 func send_control(peer_id: int, kind: String, payload: Dictionary) -> void:
 	if _active:
-		if kind in ["PREPARE_ROUND", "PREPARE_RECEIVED", "PREPARE_REJECTED", "PREPARED", "COMMIT_START", "START_ACK", "CANCEL_START"]:
-			diagnostics.record_event("control_sent", {"kind": kind, "peer_id": peer_id, "round_id": str(payload.get("round_id", _round_id)), "generation": int(payload.get("lobby_generation", room_state.get("lobby_generation", -1))), "manifest_hash": str(payload.get("manifest_hash", ""))})
+		if kind in ["PREPARE_ROUND", "PREPARE_RECEIVED", "PREPARE_REJECTED", "PREPARED", "COMMIT_START", "START_ACK", "CANCEL_START", "START_ABORT"]:
+			diagnostics.record_event("control_sent", {"kind": kind, "peer_id": peer_id, "attempt_id": str(payload.get("attempt_id", _start_attempt_id)), "round_id": str(payload.get("round_id", _round_id)), "generation": int(payload.get("lobby_generation", room_state.get("lobby_generation", -1))), "manifest_hash": str(payload.get("manifest_hash", ""))})
 		var packet := _session_envelope()
 		packet.merge(payload, true)
 		rpc_endpoint.send_control(peer_id, kind, packet)
@@ -690,9 +800,9 @@ func _on_world_interaction_rpc(sender_peer_id: int, request: Dictionary) -> void
 func _on_control_rpc(sender_peer_id: int, kind: String, payload: Dictionary) -> void:
 	if not _active:
 		return
-	var packet_error := _packet_session_error(payload, kind in ["PREPARE_ROUND", "PREPARE_REJECTED", "RETURN_TO_LOBBY"])
+	var packet_error := _packet_session_error(payload, kind in ["PREPARE_ROUND", "PREPARE_REJECTED", "RETURN_TO_LOBBY", "START_ABORT"])
 	if not packet_error.is_empty():
-		diagnostics.record_event("control_rejected", {"peer_id": sender_peer_id, "kind": kind, "reason": packet_error, "round_id": str(payload.get("round_id", "")), "generation": int(payload.get("lobby_generation", -1)), "manifest_hash": str(payload.get("manifest_hash", ""))})
+		diagnostics.record_event("control_rejected", {"peer_id": sender_peer_id, "kind": kind, "reason": packet_error, "attempt_id": str(payload.get("attempt_id", _start_attempt_id)), "round_id": str(payload.get("round_id", "")), "generation": int(payload.get("lobby_generation", -1)), "manifest_hash": str(payload.get("manifest_hash", ""))})
 		return
 	if str(session.get("role", "")) == "host":
 		if sender_peer_id != 1 and (not _is_roster_peer(sender_peer_id) or kind not in ["PREPARE_RECEIVED", "PREPARED", "PREPARE_REJECTED", "START_ACK", "CLOCK_PING", "HEARTBEAT", "WORLD_EVENT_ACK", "RESULT_ACK", "TERMINAL_ACK", "WORLD_HASH"]):
@@ -702,6 +812,16 @@ func _on_control_rpc(sender_peer_id: int, kind: String, payload: Dictionary) -> 
 	else:
 		if sender_peer_id != 1:
 			return
+		if kind == "START_ABORT":
+			_start_attempt_id = str(payload.get("attempt_id", ""))
+			diagnostics.session["attempt_id"] = _start_attempt_id
+			last_start_failure = "%s (attempt %s)" % [str(payload.get("reason", "host_aborted_start")), _start_attempt_id.left(8)]
+			diagnostics.record_event("start_attempt_failed", {"attempt_id": _start_attempt_id, "reason": str(payload.get("reason", "host_aborted_start")), "round_id": str(payload.get("round_id", "")), "phase": str(room_state.get("phase", "")), "generation": int(payload.get("lobby_generation", -1)), "reported_by": "host"})
+			var incoming_generation := int(payload.get("lobby_generation", -1))
+			if incoming_generation > int(room_state.get("lobby_generation", -1)):
+				room_state["lobby_generation"] = incoming_generation
+				room_state["phase"] = "PREPARING_COURSE"
+			start_failure_changed.emit(last_start_failure)
 		_handle_guest_control(kind, payload)
 
 func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary) -> void:
@@ -742,9 +862,13 @@ func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary
 
 func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 	match kind:
+		"START_ABORT":
+			pass
 		"PREPARE_ROUND":
+			_start_attempt_id = str(payload.get("attempt_id", ""))
+			diagnostics.session["attempt_id"] = _start_attempt_id
 			diagnostics.session["round_id"] = str(payload.get("round_id", ""))
-			diagnostics.record_event("prepare_rpc_received", {"round_id": str(payload.get("round_id", "")), "generation": int(payload.get("lobby_generation", -1)), "manifest_hash": str(payload.get("manifest_hash", "")), "sender_peer_id": 1})
+			diagnostics.record_event("prepare_rpc_received", {"attempt_id": _start_attempt_id, "round_id": str(payload.get("round_id", "")), "generation": int(payload.get("lobby_generation", -1)), "manifest_hash": str(payload.get("manifest_hash", "")), "sender_peer_id": 1})
 			var incoming_generation := int(payload.get("lobby_generation", -1))
 			var current_generation := int(room_state.get("lobby_generation", -2))
 			var reject_reason := ""
@@ -850,6 +974,7 @@ func mark_local_prepared() -> void:
 		_round_coordinator.mark_local_prepared(Time.get_ticks_usec())
 
 func _on_round_started(round_id: String, descriptor: Dictionary) -> void:
+	_start_in_flight = false
 	_round_id = round_id
 	_round_roster_revision = int(descriptor.get("roster_revision", 0))
 	_round_coordinator.clock.commit_start(Time.get_ticks_usec())
@@ -1011,7 +1136,10 @@ func _set_backend_phase(phase: String) -> void:
 	_lobby_provider.set_phase(str(room_state.get("room_id", "")), phase, _identity_adapter.token(), context)
 
 func _on_coordinator_round_failed(reason: String) -> void:
-	diagnostics.record_event("round_prepare_or_start_failed", {"reason": reason, "role": str(session.get("role", "")), "round_id": _round_id})
+	_start_in_flight = false
+	last_start_failure = "%s (attempt %s)" % [reason, _start_attempt_id.left(8)]
+	start_failure_changed.emit(last_start_failure)
+	diagnostics.record_event("round_prepare_or_start_failed", {"attempt_id": _start_attempt_id, "reason": reason, "role": str(session.get("role", "")), "round_id": _round_id})
 	round_failed.emit(reason)
 	if is_room_owner() and has_room() and str(room_state.get("phase", "")) in ["PREPARING_COURSE", "RUNNING"]:
 		call_deferred("return_to_lobby")
@@ -1022,15 +1150,19 @@ func _on_coordinator_prepare_received() -> void:
 		_prepare_scene_requested_round_id = _round_id
 		round_prepare_requested.emit(_round_coordinator.round_descriptor.duplicate(true))
 
-func _peer_map_for_roster(roster: Array) -> Dictionary:
+static func _peer_map_for_roster(roster: Array) -> Dictionary:
 	var peer_map := {}
 	for member_value in roster:
 		if member_value is Dictionary:
 			var member: Dictionary = member_value
-			peer_map[str(member.get("player_slot", -1))] = str(member.get("user_id", ""))
+			# JSON numbers can arrive as floats (for example 1.0); all protocol
+			# peer IDs are integers, so normalize before constructing map keys.
+			peer_map[str(int(member.get("player_slot", -1)))] = str(member.get("user_id", ""))
 	return peer_map
 
 func _validate_round_descriptor(descriptor: Dictionary) -> String:
+	if str(descriptor.get("attempt_id", "")).is_empty():
+		return "attempt_id_missing"
 	var round := str(descriptor.get("round_id", ""))
 	var members: Variant = descriptor.get("players", null)
 	var peer_map: Variant = descriptor.get("peer_map", null)
