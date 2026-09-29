@@ -1025,6 +1025,11 @@ func _ensure_manifest() -> void:
 		_pending_lobby_context = context
 		_lobby_contexts[context] = "set_manifest"
 		_lobby_provider.set_manifest(str(room_state.room_id), int(room_state.seed), int(room_state.course_length_px), local_hash, _identity_adapter.token(), context)
+	elif expected_hash.is_empty():
+		# A guest can join before the owner has published the room manifest. This
+		# is a normal startup state, not a hash mismatch; a later room refresh
+		# will retry once the owner's hash is available.
+		return
 	elif expected_hash == local_hash:
 		if str(_member_for_user(identity_user_id).get("loaded_manifest_hash", "")) != expected_hash:
 			if _manifest_action_pending == "ack_manifest":
