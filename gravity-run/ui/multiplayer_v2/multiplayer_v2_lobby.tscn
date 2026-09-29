@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://ui/multiplayer_v2/multiplayer_v2_lobby.gd" id="1"]
+
+[node name="MultiplayerV2Lobby" type="Control"]
+script = ExtResource("1")
