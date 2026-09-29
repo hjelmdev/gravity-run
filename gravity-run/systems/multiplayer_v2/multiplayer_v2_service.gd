@@ -34,6 +34,7 @@ signal world_baseline_received(baseline: Dictionary)
 signal world_interaction_resolved(request_id: String, accepted: bool, message: String, commit: Dictionary)
 signal results_received(result: Dictionary)
 
+const V2_GAME_VERSION := "2.1.20260929.1"
 const MAX_PLAYERS := 5
 const POSITION_RATE_HZ := 30
 
@@ -281,9 +282,9 @@ func _on_identity_ready(user_id: String, _token: String, anonymous: bool, contex
 	_lobby_contexts[context] = action
 	match action:
 		"create_room":
-			_lobby_provider.create_room(str(arguments.display_name), bool(arguments.is_public), "2", CourseGeneratorScript.GENERATOR_VERSION, int(arguments.seed), int(arguments.course_length_px), token, context)
+			_lobby_provider.create_room(str(arguments.display_name), bool(arguments.is_public), V2_GAME_VERSION, CourseGeneratorScript.GENERATOR_VERSION, int(arguments.seed), int(arguments.course_length_px), token, context)
 		"join_room":
-			_lobby_provider.join_room(str(arguments.room_code), str(arguments.display_name), "2", CourseGeneratorScript.GENERATOR_VERSION, token, context)
+			_lobby_provider.join_room(str(arguments.room_code), str(arguments.display_name), V2_GAME_VERSION, CourseGeneratorScript.GENERATOR_VERSION, token, context)
 		"list_rooms":
 			_lobby_provider.list_rooms(token, context)
 		"refresh_room":
@@ -364,7 +365,11 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 				room_changed.emit(room_state.duplicate(true))
 		lobby_request_finished.emit(action, success, message)
 	else:
-		lobby_request_finished.emit(action, success, message)
+		var display_message := message
+		if action == "prepare_round" and message.contains("room_not_preparable"):
+			display_message = tr("The room changed before the race could start. Lobby state refreshed.")
+			refresh_room.call_deferred()
+		lobby_request_finished.emit(action, success, display_message)
 
 func _on_signaling_state_changed(connected: bool, message: String) -> void:
 	signaling_state_changed.emit(connected, message)
@@ -1017,7 +1022,7 @@ func _ensure_manifest() -> void:
 		current_manifest = built.manifest
 	var local_hash := str(current_manifest.manifest_hash)
 	var expected_hash := str(room_state.get("manifest_hash", ""))
-	if is_room_owner() and expected_hash.is_empty():
+	if is_room_owner() and expected_hash != local_hash:
 		if _manifest_action_pending == "set_manifest":
 			return
 		_manifest_action_pending = "set_manifest"
@@ -1040,7 +1045,7 @@ func _ensure_manifest() -> void:
 			_lobby_contexts[context] = "ack_manifest"
 			_lobby_provider.ack_manifest(str(room_state.room_id), local_hash, _identity_adapter.token(), context)
 	else:
-		lobby_request_finished.emit("manifest", false, tr("This client generated a different V2 course hash."))
+		lobby_request_finished.emit("manifest", false, tr("This client generated a different V2 course hash (local %s, room %s; seed %d, generator %d, length %d px).") % [local_hash.left(12), expected_hash.left(12), expected_seed, expected_generator, expected_length])
 
 func _is_roster_peer(peer_id: int) -> bool:
 	if peer_id == 1 and is_room_owner():
