@@ -2,7 +2,7 @@ extends Node
 
 const Config := preload("res://systems/leaderboard_config.gd")
 
-signal request_finished(action: String, success: bool, data: Variant, message: String, context: String)
+signal request_finished(action: String, success: bool, data: Variant, message: String, context: String, error_code: String, http_status: int, rpc_name: String)
 
 var _request: HTTPRequest
 var _active_action := ""
@@ -82,7 +82,7 @@ func advance_match_phase(room_id: String, phase: String, token: String, context:
 
 func _call(action: String, rpc_name: String, payload: Dictionary, token: String, context: String) -> void:
 	if token.is_empty():
-		request_finished.emit(action, false, null, tr("A multiplayer identity is required."), context)
+		request_finished.emit(action, false, null, tr("A multiplayer identity is required."), context, "not_authenticated", 0, "")
 		return
 	var call := {
 		"action": action,
@@ -101,7 +101,7 @@ func _call(action: String, rpc_name: String, payload: Dictionary, token: String,
 				return
 	if _request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED or not _pending_calls.is_empty():
 		if _pending_calls.size() >= 64:
-			request_finished.emit(action, false, null, tr("The multiplayer request queue is full. Wait a moment and retry."), context)
+			request_finished.emit(action, false, null, tr("The multiplayer request queue is full. Wait a moment and retry."), context, "request_queue_full", 0, "")
 			return
 		if action == "leave_room":
 			_pending_calls.push_front(call)
@@ -142,7 +142,7 @@ func _start_call(call: Dictionary) -> void:
 		_active_action = ""
 		_active_context = ""
 		_log_rpc_result(failed_action, failed_context, "request_start_failed", error)
-		request_finished.emit(failed_action, false, null, tr("Could not start the lobby request (code %d).") % error, failed_context)
+		request_finished.emit(failed_action, false, null, tr("Could not start the lobby request (code %d).") % error, failed_context, "request_start_failed", 0, str(_active_call.get("rpc_name", "")))
 		call_deferred("_dispatch_pending_call")
 
 func _on_request_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
@@ -155,18 +155,19 @@ func _on_request_completed(result: int, response_code: int, _headers: PackedStri
 	if result != HTTPRequest.RESULT_SUCCESS:
 		_log_rpc_result(action, context, "network_error_%d" % result, response_code)
 		_schedule_safe_retry()
-		request_finished.emit(action, false, null, tr("Network error while contacting the lobby service (code %d).") % result, context)
+		request_finished.emit(action, false, null, tr("Network error while contacting the lobby service (code %d).") % result, context, "network_error_%d" % result, response_code, str(_active_call.get("rpc_name", "")))
 		call_deferred("_dispatch_pending_call")
 		return
 	if response_code < 200 or response_code >= 300:
-		_log_rpc_result(action, context, "http_error", response_code)
+		var error_code := _extract_error_code(parsed, response_code)
+		_log_rpc_result(action, context, "http_error", response_code, error_code)
 		if response_code >= 500:
 			_schedule_safe_retry()
-		request_finished.emit(action, false, null, _friendly_error(parsed, response_code), context)
+		request_finished.emit(action, false, null, _friendly_error(parsed, response_code), context, error_code, response_code, str(_active_call.get("rpc_name", "")))
 		call_deferred("_dispatch_pending_call")
 		return
 	_log_rpc_result(action, context, "ok", response_code)
-	request_finished.emit(action, true, parsed, "", context)
+	request_finished.emit(action, true, parsed, "", context, "", response_code, str(_active_call.get("rpc_name", "")))
 	call_deferred("_dispatch_pending_call")
 
 func _dispatch_pending_call() -> void:
@@ -174,9 +175,9 @@ func _dispatch_pending_call() -> void:
 		return
 	_start_call(_pending_calls.pop_front())
 
-func _log_rpc_result(action: String, context: String, outcome: String, response_code: int) -> void:
+func _log_rpc_result(action: String, context: String, outcome: String, response_code: int, error_code: String = "") -> void:
 	var elapsed_msec := maxi(0, Time.get_ticks_msec() - _active_started_msec)
-	print("[MP_DIAG] ", JSON.stringify({"event": "lobby_rpc_done", "action": action, "context": context, "outcome": outcome, "http": response_code, "elapsed_ms": elapsed_msec}))
+	print("[MP_DIAG] ", JSON.stringify({"event": "lobby_rpc_done", "action": action, "rpc": str(_active_call.get("rpc_name", "")), "context": context, "outcome": outcome, "error_code": error_code, "http": response_code, "elapsed_ms": elapsed_msec}))
 
 
 func _schedule_safe_retry() -> void:
@@ -213,9 +214,27 @@ func _friendly_error(response: Variant, response_code: int) -> String:
 	var detail := ""
 	if response is Dictionary:
 		detail = str(response.get("message", response.get("details", ""))).to_lower()
-	for code in ["room_not_found", "room_not_open", "room_full", "version_mismatch", "not_room_owner", "not_room_member", "not_enough_players", "players_not_ready", "manifest_hash_mismatch", "manifest_not_available", "invalid_display_name"]:
-		if code in detail:
-			return tr("Lobby request rejected: %s") % code.replace("_", " ")
+	var error_code := _extract_error_code(response, response_code)
+	if not error_code.is_empty() and not error_code.begins_with("http_"):
+		return tr("Lobby request rejected: %s") % error_code.replace("_", " ")
 	if response_code == 401 or response_code == 403 or "not_authenticated" in detail:
 		return tr("Your multiplayer session expired. Rejoin the room.")
 	return tr("Lobby request failed (HTTP %d).") % response_code
+
+func _extract_error_code(response: Variant, response_code: int) -> String:
+	if response_code == 401 or response_code == 403:
+		return "not_authenticated"
+	var searchable := ""
+	var direct_code := ""
+	if response is Dictionary:
+		direct_code = str(response.get("error_code", response.get("code", ""))).to_lower().strip_edges()
+		searchable = " ".join([str(response.get("message", "")), str(response.get("details", "")), str(response.get("hint", ""))]).to_lower()
+	else:
+		searchable = str(response).to_lower()
+	var known_codes := ["room_not_found", "room_expired", "room_closed", "room_not_open", "room_full", "version_mismatch", "not_room_owner", "not_room_member", "players_not_ready", "not_enough_players", "manifest_hash_mismatch", "manifest_not_available", "invalid_display_name", "invalid_match_phase_transition", "not_authenticated"]
+	if direct_code in known_codes:
+		return direct_code
+	for code in known_codes:
+		if code in searchable:
+			return code
+	return "http_%d" % response_code if response_code >= 400 else ""

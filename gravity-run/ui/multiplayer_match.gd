@@ -304,7 +304,6 @@ func _process(delta: float) -> void:
 					_snapshot = _build_authoritative_snapshot()
 					_log_terminal_snapshot("host_simulation_finished", _snapshot)
 					_trace_match_event("finish_decision", {"tick": int(event.get("tick", -1)), "finish_reason": _finish_reason, "finish_revision": _finish_revision, "players": _snapshot.get("players", []), "terminal_transitions": event.get("terminal_transitions", [])})
-					_dump_match_trace()
 					_send_reliable_match_finished(_snapshot)
 					MultiplayerService.advance_match_phase("FINISHED")
 			if not bool(_snapshot.get("finished", false)):
@@ -649,9 +648,18 @@ func _trace_match_event(event_name: String, details: Dictionary = {}) -> void:
 func _dump_match_trace() -> void:
 	if _match_trace_ring.is_empty() and _start_trace_ring.is_empty():
 		return
-	var start_first_ms := int(_start_trace_ring.front().get("at_ms", -1)) if not _start_trace_ring.is_empty() else -1
-	var start_last_ms := int(_start_trace_ring.back().get("at_ms", -1)) if not _start_trace_ring.is_empty() else -1
-	_record_match_diag("match_trace_dump", {"finish_tick": _finish_tick, "finish_reason": _finish_reason, "events": _match_trace_ring.duplicate(true), "start_trace": _start_trace_ring.duplicate(true), "start_trace_retained_count": _start_trace_ring.size(), "start_trace_dropped_count": _start_trace_events_dropped, "start_trace_first_at_ms": start_first_ms, "start_trace_last_at_ms": start_last_ms, "start_trace_coverage_ms": maxi(start_last_ms - start_first_ms, 0)})
+	var trace_started_usec := Time.get_ticks_usec()
+	var match_events: Array = _match_trace_ring.duplicate()
+	var start_events: Array = _start_trace_ring.duplicate()
+	var processed := 0
+	for trace_kind in [{"name": "match", "items": match_events}, {"name": "start", "items": start_events}]:
+		var items: Array = trace_kind.items
+		for offset in range(0, items.size(), 32):
+			var batch := items.slice(offset, mini(offset + 32, items.size()))
+			MultiplayerDiagnostics.record_post_match_event("%s_trace_chunk" % trace_kind.name, {"finish_tick": _finish_tick, "finish_reason": _finish_reason, "offset": offset, "items": batch})
+			processed += batch.size()
+			await get_tree().process_frame
+	MultiplayerDiagnostics.record_post_match_event("match_trace_dump_completed", {"finish_tick": _finish_tick, "match_trace_count": match_events.size(), "start_trace_count": start_events.size(), "start_trace_dropped_count": _start_trace_events_dropped, "processed_samples": processed, "elapsed_usec": Time.get_ticks_usec() - trace_started_usec})
 
 static func match_state_error(snapshot: Variant, expected_user_ids: Array, minimum_finish_revision: int = 0) -> String:
 	if not snapshot is Dictionary:
@@ -790,6 +798,7 @@ func _apply_terminal_overlays(snapshot: Dictionary) -> void:
 	snapshot["players"] = updated_states
 
 func _accept_reliable_match_finished(payload: Dictionary) -> void:
+	var handler_started_usec := Time.get_ticks_usec()
 	if str(payload.get("room_id", "")) != MultiplayerService.get_room_id() or str(payload.get("course_identity", "")) != str(_manifest.get("course_identity")):
 		_record_match_diag("reliable_finish_rejected", {"reason": "room_or_course_mismatch"})
 		return
@@ -829,6 +838,8 @@ func _accept_reliable_match_finished(payload: Dictionary) -> void:
 	if not finish_error.is_empty() or incoming_tick < _last_authoritative_tick:
 		_record_match_diag("reliable_finish_rejected", {"reason": finish_error if not finish_error.is_empty() else "finish_tick_older_than_authority", "tick": incoming_tick, "latest_tick": _last_authoritative_tick})
 		return
+	var validation_usec := Time.get_ticks_usec() - handler_started_usec
+	var state_apply_started_usec := Time.get_ticks_usec()
 	_remember_snapshot_terminal_states(terminal)
 	_authoritative_snapshot = terminal.duplicate(true)
 	_authoritative_snapshot["match_generation"] = _start_generation
@@ -845,8 +856,10 @@ func _accept_reliable_match_finished(payload: Dictionary) -> void:
 	_snapshot_buffer.clear()
 	_log_terminal_snapshot("guest_received_reliable_finish", terminal)
 	_trace_match_event("finish_decision_received", {"tick": incoming_tick, "finish_revision": incoming_revision, "finish_reason": _finish_reason})
-	_dump_match_trace()
+	var state_apply_usec := Time.get_ticks_usec() - state_apply_started_usec
+	var ack_started_usec := Time.get_ticks_usec()
 	MultiplayerService.queue_reliable_peer_message(_owner_user_id, {"kind": "match_finished_ack", "room_id": MultiplayerService.get_room_id(), "match_generation": _start_generation, "finish_revision": incoming_revision, "tick": incoming_tick})
+	_record_match_diag("terminal_handler_timing", {"validation_usec": validation_usec, "state_apply_usec": state_apply_usec, "ack_queue_usec": Time.get_ticks_usec() - ack_started_usec, "total_usec": Time.get_ticks_usec() - handler_started_usec})
 
 func _accept_authoritative_snapshot(snapshot: Variant) -> bool:
 	if not snapshot is Dictionary:
@@ -931,7 +944,6 @@ func _accept_authoritative_snapshot(snapshot: Variant) -> bool:
 		_finish_tick = _accepted_finish_tick
 		_finish_reason = str(snapshot.get("finish_reason", ""))
 		_trace_match_event("finish_decision_received", {"tick": _finish_tick, "finish_revision": _finish_revision, "finish_reason": _finish_reason})
-		_dump_match_trace()
 	# Publish the new authority/timing anchor only after restore and replay succeeded.
 	_last_authoritative_tick = incoming_tick
 	_authoritative_snapshot = snapshot.duplicate(true)
@@ -2084,7 +2096,8 @@ func _record_match_diag(event_name: String, details: Dictionary) -> void:
 	_diagnostic_lines.append(line)
 	while _diagnostic_lines.size() > 160:
 		_diagnostic_lines.pop_front()
-	print(line)
+	if event_name != "match_trace_dump":
+		print(line)
 	if is_instance_valid(_diagnostic_text) and is_instance_valid(_diagnostic_panel) and _diagnostic_panel.visible:
 		_diagnostic_text.text = "\n".join(_diagnostic_lines)
 		_diagnostic_text.scroll_vertical = _diagnostic_text.get_line_count()
@@ -2283,6 +2296,7 @@ func _build_hud() -> void:
 	close_button.pressed.connect(_toggle_diagnostics)
 	diagnostic_actions.add_child(close_button)
 func _show_results() -> void:
+	var results_build_started_usec := Time.get_ticks_usec()
 	if _results_panel.visible:
 		return
 	# Local prediction must never decide the outcome on a guest. Only the
@@ -2379,10 +2393,12 @@ func _show_results() -> void:
 		_results_frame_event_pending = true
 		RenderingServer.frame_post_draw.connect(_on_results_frame_rendered, CONNECT_ONE_SHOT)
 	MultiplayerDiagnostics.finish_match("finished")
+	MultiplayerDiagnostics.record_post_match_event("results_panel_built", {"elapsed_usec": Time.get_ticks_usec() - results_build_started_usec, "player_count": states.size()})
 
 func _on_results_frame_rendered() -> void:
 	_results_frame_event_pending = false
 	MultiplayerDiagnostics.record_post_match_event("results_frame_rendered", {"tick": int(_snapshot.get("tick", -1)), "frame": Engine.get_process_frames()})
+	_dump_match_trace()
 
 func _return_to_lobby() -> void:
 	if _return_requested:

@@ -79,7 +79,7 @@ func _ready() -> void:
 	assert(frozen_large_capture.loss.get("capture_detail_samples_reduced", false), "post-match reduction is explicitly marked")
 	var singleton_oversized := {"report_id": "single-sample", "totals": {}, "loss": {}, "detail_samples": [{"padding": "x".repeat(DiagnosticsScript.MAX_LOCAL_BYTES + 2048)}], "browser_samples": [], "events": [], "windows": [], "incidents": [], "start_samples": [], "after_match_trace": []}
 	var singleton_reduced: Dictionary = await recorder._enforce_capture_memory_budget(singleton_oversized)
-	assert(singleton_reduced.detail_samples.is_empty(), "an oversized single detail sample must be removed rather than slice to itself")
+	assert(singleton_reduced.get("detail_samples", []).is_empty(), "an oversized single detail sample must be removed rather than slice to itself")
 	assert(int(singleton_reduced.totals.diagnostics_size_reduction_iterations) <= 12 and singleton_reduced.totals.diagnostics_size_budget_met, "single-item reductions must make bounded progress to the exact report budget")
 	recorder._capture = {"phase": "running", "start_samples": [], "loss": {}, "totals": {}}
 	recorder._started_usec = Time.get_ticks_usec()
@@ -107,8 +107,25 @@ func _ready() -> void:
 	assert(recorder._incident_capture.frame_samples[0].sample.user_id == "guest-uuid", "raw frame samples stay local until report finalization")
 	recorder._capture.incidents.append(recorder._incident_capture)
 	var frozen_incident: Dictionary = recorder._capture.duplicate(true)
-	recorder._sanitize_incident_frames(frozen_incident)
+	await recorder._sanitize_incident_frames(frozen_incident)
 	assert(frozen_incident.incidents[0].frame_samples[0].sample.user_id == "p1", "frozen incident samples are anonymized after the race")
+	var analysis_report := {"totals": {}, "loss": {}, "detail_samples": [], "browser_samples": [], "events": [], "windows": [], "incidents": [{"label": "large_incident", "pre_frame_samples": [], "frame_samples": []}], "start_samples": [], "after_match_trace": []}
+	for index in 400:
+		analysis_report.detail_samples.append({"t_ms": index * 50, "metrics": {"padding": "d".repeat(1100)}})
+		analysis_report.incidents[0].frame_samples.append({"t_ms": index * 16, "sample": {"padding": "i".repeat(7500)}})
+	for event_name in ["snapshot_quality", "camera_state_changed", "render_buffer_seeded", "race_start_commit_received"]:
+		analysis_report.events.append({"event": event_name, "important": true, "details": {"tick": 42}})
+	for index in 76:
+		analysis_report.events.append({"event": "ordinary_event_%d" % index, "important": false, "details": {"padding": "e".repeat(300)}})
+	analysis_report.start_samples.append({"t_ms": 0, "sample": {"event": "shared_start_anchor", "world_x": 180}})
+	var reduced_analysis_report := await recorder._enforce_capture_memory_budget(analysis_report)
+	assert(reduced_analysis_report.totals.diagnostics_size_budget_met, "a report with a large incident, dense details and events must fit the local budget")
+	assert(reduced_analysis_report.incidents[0].frame_samples.size() < 400, "large incident samples are reduced before important core events")
+	assert(reduced_analysis_report.start_samples.size() == 1, "the shared start anchor is retained ahead of expendable samples")
+	for event_name in ["snapshot_quality", "camera_state_changed", "render_buffer_seeded", "race_start_commit_received"]:
+		assert(reduced_analysis_report.events.any(func(event: Dictionary) -> bool: return str(event.get("event", "")) == event_name), "core event should survive report reduction: " + event_name)
+	assert(int(reduced_analysis_report.loss.get("diagnostics_removed_incident_frames", 0)) > 0, "report loss precisely records removed incident frames")
+	assert(int(reduced_analysis_report.totals.diagnostics_size_check_count) < int(reduced_analysis_report.totals.diagnostics_size_reduction_iterations), "size checks are batched rather than serializing after every sample reduction")
 	recorder._capture = {"phase": "results", "schema_version": 1, "report_id": "deferred-report-test", "match_generation": "test-generation", "terminal_state": "running", "windows": [], "detail_samples": [], "start_samples": [{"t_ms": 0, "sample": {"user_id": "guest-uuid", "frame_id": 0}}], "events": [], "incidents": [], "browser_samples": [], "timings": {}, "totals": {"process_frames": 0}, "loss": {}}
 	recorder._started_usec = Time.get_ticks_usec()
 	recorder._window_started_usec = recorder._started_usec

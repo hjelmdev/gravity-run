@@ -373,18 +373,22 @@ func _finalize_completed_report(completed: Dictionary) -> void:
 	var incident_sanitize_started_usec := Time.get_ticks_usec()
 	var detail_write_index := int(completed.get("_detail_sample_write_index", 0))
 	completed.erase("_detail_sample_write_index")
-	_sanitize_incident_frames(completed, detail_write_index)
-	completed.totals.diagnostics_incident_sanitize_usec = Time.get_ticks_usec() - incident_sanitize_started_usec
+	var sanitize_metrics: Dictionary = await _sanitize_incident_frames(completed, detail_write_index)
+	completed.totals.diagnostics_incident_sanitize_cpu_usec = int(sanitize_metrics.get("cpu_usec", 0))
+	completed.totals.diagnostics_incident_sanitize_elapsed_usec = int(sanitize_metrics.get("elapsed_usec", 0))
 	completed = await _enforce_capture_memory_budget(completed)
-	completed.totals.diagnostics_finalize_usec = Time.get_ticks_usec() - finalize_started_usec
+	completed.totals.diagnostics_finalize_pre_save_elapsed_usec = Time.get_ticks_usec() - finalize_started_usec
 	_reports.append(completed)
 	while _reports.size() > 2:
 		_reports.pop_front()
 		_save_loss_marker()
 	await get_tree().process_frame
+	var save_started_usec := Time.get_ticks_usec()
 	await _save_local()
+	completed.totals.diagnostics_local_save_elapsed_usec = Time.get_ticks_usec() - save_started_usec
+	completed.totals.diagnostics_finalize_elapsed_usec = Time.get_ticks_usec() - finalize_started_usec
 	_pending_report_finalizations = maxi(_pending_report_finalizations - 1, 0)
-	record_post_match_event("report_finalization_completed", {"report_id": str(completed.get("report_id", "")), "elapsed_ms": float(completed.totals.get("diagnostics_finalize_usec", 0)) / 1000.0, "size_reduction_iterations": int(completed.totals.get("diagnostics_size_reduction_iterations", 0))})
+	record_post_match_event("report_finalization_completed", {"report_id": str(completed.get("report_id", "")), "elapsed_usec": int(completed.totals.get("diagnostics_finalize_elapsed_usec", 0)), "save_elapsed_usec": int(completed.totals.get("diagnostics_local_save_elapsed_usec", 0)), "size_reduction_iterations": int(completed.totals.get("diagnostics_size_reduction_iterations", 0)), "size_budget_met": bool(completed.totals.get("diagnostics_size_budget_met", false))})
 	report_changed.emit("Multiplayer report saved locally.")
 
 func record_post_match_event(event_name: String, details: Dictionary = {}) -> void:
@@ -409,11 +413,19 @@ func record_post_match_event(event_name: String, details: Dictionary = {}) -> vo
 	elif not _after_match_generation.is_empty():
 		_after_match_traces[_after_match_generation] = trace
 
-func _sanitize_incident_frames(report: Dictionary, detail_write_index: int = 0) -> void:
+func _sanitize_incident_frames(report: Dictionary, detail_write_index: int = 0) -> Dictionary:
+	var started_usec := Time.get_ticks_usec()
+	var cpu_usec := 0
+	var processed := 0
 	var start_samples: Array = []
 	for sample in report.get("start_samples", []):
 		if sample is Dictionary:
+			var sanitize_started_usec := Time.get_ticks_usec()
 			start_samples.append({"t_ms": sample.get("t_ms", 0), "sample": _sanitize(sample.get("sample", {}))})
+			cpu_usec += Time.get_ticks_usec() - sanitize_started_usec
+		processed += 1
+		if processed % 48 == 0:
+			await get_tree().process_frame
 	report.start_samples = start_samples
 	var incidents: Array = report.get("incidents", [])
 	for incident_index in range(incidents.size()):
@@ -422,7 +434,12 @@ func _sanitize_incident_frames(report: Dictionary, detail_write_index: int = 0) 
 			var clean_samples: Array = []
 			for sample in incident.get(sample_key, []):
 				if sample is Dictionary:
+					var sanitize_started_usec := Time.get_ticks_usec()
 					clean_samples.append({"t_ms": sample.get("t_ms", 0), "sample": _sanitize(sample.get("sample", {}))})
+					cpu_usec += Time.get_ticks_usec() - sanitize_started_usec
+					processed += 1
+					if processed % 48 == 0:
+						await get_tree().process_frame
 			incident[sample_key] = clean_samples
 		incidents[incident_index] = incident
 	report.incidents = incidents
@@ -430,6 +447,7 @@ func _sanitize_incident_frames(report: Dictionary, detail_write_index: int = 0) 
 	if detail_samples.size() == MAX_DETAIL_SAMPLES and detail_write_index > 0:
 		detail_samples = detail_samples.slice(detail_write_index) + detail_samples.slice(0, detail_write_index)
 	report.detail_samples = detail_samples
+	return {"cpu_usec": cpu_usec, "elapsed_usec": Time.get_ticks_usec() - started_usec}
 
 func _ordered_detail_samples() -> Array:
 	var samples: Array = _capture.get("detail_samples", [])
@@ -595,58 +613,132 @@ func _enforce_capture_memory_budget(report: Dictionary) -> Dictionary:
 	var bytes := JSON.stringify(report).to_utf8_buffer().size()
 	var bytes_before := bytes
 	var categories: Array[String] = []
-	while bytes > MAX_LOCAL_BYTES - 512 and reductions < 24:
-		reductions += 1
-		var category := _reduce_capture_once(report)
-		if category.is_empty():
-			report = _minimal_report_for_export(report, "local_capture")
-			category = "minimal_metadata_fallback"
-		categories.append(category)
-		if not category.begins_with("minimal_"):
-			report.loss["capture_%s_reduced" % category] = true
-		# Each reduction makes progress; yield so lobby, transport and rematch
-		# updates continue while the report is reduced and rechecked.
+	var check_count := 0
+	var reduction_cpu_usec := 0
+	var max_size_check_usec := 0
+	while bytes > MAX_LOCAL_BYTES - 512 and reductions < 48:
+		# Make four real reductions between expensive whole-report encodes.
+		# Incident frame arrays are reduced first because they dominate large
+		# reports; diagnostic events, startup anchors and loss counters survive.
+		var metadata_fallback_applied := false
+		for _batch_index in 4:
+			if bytes <= MAX_LOCAL_BYTES - 512 or reductions >= 48:
+				break
+			reductions += 1
+			var reduction_started_usec := Time.get_ticks_usec()
+			var category := _reduce_capture_once(report)
+			reduction_cpu_usec += Time.get_ticks_usec() - reduction_started_usec
+			if category.is_empty():
+				# The last batch may have removed the only oversized item. Confirm
+				# before discarding the report's remaining useful metadata.
+				var confirmation_bytes := JSON.stringify(report).to_utf8_buffer().size()
+				if confirmation_bytes <= MAX_LOCAL_BYTES - 512:
+					bytes = confirmation_bytes
+					break
+				report = _minimal_report_for_export(report, "local_capture")
+				category = "minimal_metadata_fallback"
+				metadata_fallback_applied = true
+			categories.append(category)
+			var removed := _reduction_removed_count(report, category)
+			report.loss["diagnostics_removed_%s" % category] = int(report.loss.get("diagnostics_removed_%s" % category, 0)) + removed
+			if not category.begins_with("minimal_"):
+				report.loss["capture_%s_reduced" % category] = true
+			if category == "minimal_metadata_fallback":
+				break
+		# One serialized size check per batch, with input/network available between.
 		await get_tree().process_frame
 		var size_check_started_usec := Time.get_ticks_usec()
 		bytes = JSON.stringify(report).to_utf8_buffer().size()
-		report.totals.diagnostics_size_check_usec = int(report.totals.get("diagnostics_size_check_usec", 0)) + Time.get_ticks_usec() - size_check_started_usec
-		if category == "minimal_metadata_fallback" and bytes > MAX_LOCAL_BYTES - 512:
+		check_count += 1
+		var size_check_usec := Time.get_ticks_usec() - size_check_started_usec
+		report.totals.diagnostics_size_check_usec = int(report.totals.get("diagnostics_size_check_usec", 0)) + size_check_usec
+		max_size_check_usec = maxi(max_size_check_usec, size_check_usec)
+		if metadata_fallback_applied and bytes > MAX_LOCAL_BYTES - 512:
 			break
 	report.totals.diagnostics_size_bytes_before = bytes_before
 	report.totals.diagnostics_size_bytes_after = bytes
 	report.totals.diagnostics_size_reduction_iterations = reductions
+	report.totals.diagnostics_size_check_count = check_count + 1
+	report.totals.diagnostics_size_check_max_usec = max_size_check_usec
 	report.totals.diagnostics_size_reduction_categories = categories
 	report.totals.diagnostics_size_budget_met = bytes <= MAX_LOCAL_BYTES - 512
-	report.totals.diagnostics_size_reduction_usec = Time.get_ticks_usec() - guard_started_usec
+	report.totals.diagnostics_size_reduction_elapsed_usec = Time.get_ticks_usec() - guard_started_usec
+	report.totals.diagnostics_size_reduction_cpu_usec = reduction_cpu_usec
 	return report
 
 func _reduce_capture_once(report: Dictionary) -> String:
+	if _incident_frame_count(report) > 96:
+		report["_reduction_before_count"] = _incident_frame_count(report)
+		if _halve_incident_samples(report.incidents):
+			return "incident_frames"
 	if not report.detail_samples.is_empty():
 		var detail_size: int = report.detail_samples.size()
+		report["_reduction_before_count"] = detail_size
 		report.detail_samples = report.detail_samples.slice(detail_size / 2) if detail_size > 1 else []
 		return "detail_samples"
 	if not report.browser_samples.is_empty():
 		var browser_size: int = report.browser_samples.size()
+		report["_reduction_before_count"] = browser_size
 		report.browser_samples = report.browser_samples.slice(browser_size / 2) if browser_size > 1 else []
 		return "browser_samples"
-	if not report.events.is_empty():
-		var events: Array = _prioritize_events(report.events)
-		var event_size := events.size()
-		report.events = events.slice(0, maxi(1, event_size / 2)) if event_size > 8 else (events.slice(0, event_size - 1) if event_size > 1 else [])
-		return "events"
 	if not report.windows.is_empty():
 		var window_size: int = report.windows.size()
+		report["_reduction_before_count"] = window_size
 		report.windows = report.windows.slice(window_size / 2) if window_size > 4 else (report.windows.slice(0, window_size - 1) if window_size > 1 else [])
 		return "windows"
 	if not report.incidents.is_empty():
+		report["_reduction_before_count"] = _incident_frame_count(report)
 		if not _halve_incident_samples(report.incidents):
 			report.incidents.pop_back()
-		return "incidents"
+		return "incident_frames"
+	if not report.events.is_empty():
+		var events: Array = report.events.duplicate()
+		report["_reduction_before_count"] = events.size()
+		var expendable_index := -1
+		for index in range(events.size()):
+			if not _is_protected_diagnostic_event(events[index]):
+				expendable_index = index
+				break
+		if expendable_index >= 0:
+			events.remove_at(expendable_index)
+		else:
+			var event_size := events.size()
+			events = events.slice(0, event_size - 1) if event_size > 1 else []
+		report.events = events
+		return "events"
 	if not report.start_samples.is_empty():
 		var start_size: int = report.start_samples.size()
+		report["_reduction_before_count"] = start_size
 		report.start_samples = report.start_samples.slice(0, start_size / 2) if start_size > 1 else []
 		return "start_samples"
 	return ""
+
+func _incident_frame_count(report: Dictionary) -> int:
+	var count := 0
+	for incident in report.get("incidents", []):
+		if incident is Dictionary:
+			for key in ["frame_samples", "pre_frame_samples", "samples", "pre_samples"]:
+				count += (incident.get(key, []) as Array).size() if incident.get(key, []) is Array else 0
+	return count
+
+func _reduction_removed_count(report: Dictionary, category: String) -> int:
+	var after_count := 0
+	if category == "incident_frames":
+		after_count = _incident_frame_count(report)
+	else:
+		var value: Variant = report.get(category, [])
+		after_count = value.size() if value is Array else 0
+	var before_count := int(report.get("_reduction_before_count", after_count + 1))
+	report.erase("_reduction_before_count")
+	return maxi(1, before_count - after_count)
+
+func _is_protected_diagnostic_event(event: Variant) -> bool:
+	if not event is Dictionary:
+		return false
+	var name := str(event.get("event", ""))
+	if name in ["snapshot_quality", "camera_state_changed", "render_buffer_seeded", "race_start_commit_received", "simulation_started", "match_terminal_snapshot", "reliable_finish_ack", "results_visible_requested", "terminal_handler_timing", "finish_decision_received"]:
+		return true
+	return bool(event.get("important", false)) and name.contains("terminal")
 
 func _phase_gap_stats() -> Dictionary:
 	var result := {}
@@ -769,37 +861,60 @@ func _prioritize_events(events: Array) -> Array:
 
 func _save_local() -> void:
 	var local := {"reports": _reports, "saved_at": Time.get_datetime_string_from_system(true)}
-	var serialization_started_usec := Time.get_ticks_usec()
+	var save_started_usec := Time.get_ticks_usec()
+	var serialization_cpu_usec := 0
+	var max_serialization_usec := 0
 	await get_tree().process_frame
+	var serialization_started_usec := Time.get_ticks_usec()
 	var serialized := JSON.stringify(local)
+	var serialization_usec := Time.get_ticks_usec() - serialization_started_usec
+	serialization_cpu_usec += serialization_usec
+	max_serialization_usec = maxi(max_serialization_usec, serialization_usec)
 	if serialized.to_utf8_buffer().size() > MAX_LOCAL_BYTES and _reports.size() > 1:
 		var latest: Dictionary = _reports.back()
 		latest.loss.previous_reports_pruned_locally = _reports.size() - 1
 		_reports = [latest]
 		local.reports = _reports
 		await get_tree().process_frame
+		serialization_started_usec = Time.get_ticks_usec()
 		serialized = JSON.stringify(local)
+		serialization_usec = Time.get_ticks_usec() - serialization_started_usec
+		serialization_cpu_usec += serialization_usec
+		max_serialization_usec = maxi(max_serialization_usec, serialization_usec)
 	if serialized.to_utf8_buffer().size() > MAX_LOCAL_BYTES and not _reports.is_empty():
 		_reports[_reports.size() - 1] = _reduce_local_report(_reports.back())
 		local.reports = _reports
 		await get_tree().process_frame
+		serialization_started_usec = Time.get_ticks_usec()
 		serialized = JSON.stringify(local)
+		serialization_usec = Time.get_ticks_usec() - serialization_started_usec
+		serialization_cpu_usec += serialization_usec
+		max_serialization_usec = maxi(max_serialization_usec, serialization_usec)
 	if serialized.to_utf8_buffer().size() > MAX_LOCAL_BYTES:
 		if _reports.is_empty():
 			return
 		_reports[_reports.size() - 1] = _minimal_report_for_export(_reports.back(), "local_save")
 		local.reports = _reports
 		await get_tree().process_frame
+		serialization_started_usec = Time.get_ticks_usec()
 		serialized = JSON.stringify(local)
+		serialization_usec = Time.get_ticks_usec() - serialization_started_usec
+		serialization_cpu_usec += serialization_usec
+		max_serialization_usec = maxi(max_serialization_usec, serialization_usec)
 	var final_bytes := serialized.to_utf8_buffer().size()
 	if final_bytes > MAX_LOCAL_BYTES:
 		return
 	var file := FileAccess.open(LOCAL_FILE, FileAccess.WRITE)
+	var disk_write_started_usec := Time.get_ticks_usec()
 	if file != null:
 		file.store_string(serialized)
+	var disk_write_usec := Time.get_ticks_usec() - disk_write_started_usec
 	if not _reports.is_empty():
-		_reports.back().totals.diagnostics_report_serialization_usec = Time.get_ticks_usec() - serialization_started_usec
+		_reports.back().totals.diagnostics_report_serialization_cpu_usec = serialization_cpu_usec
+		_reports.back().totals.diagnostics_report_serialization_max_usec = max_serialization_usec
 		_reports.back().totals.diagnostics_report_serialized_bytes = final_bytes
+		_reports.back().totals.diagnostics_report_disk_write_usec = disk_write_usec
+		_reports.back().totals.diagnostics_report_save_elapsed_usec = Time.get_ticks_usec() - save_started_usec
 
 func _load_local() -> void:
 	if not FileAccess.file_exists(LOCAL_FILE):

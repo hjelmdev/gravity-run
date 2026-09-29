@@ -370,9 +370,11 @@ func _on_identity_request_completed(result: int, response_code: int, _headers: P
 	identity_is_anonymous = true
 	_dispatch_pending_action()
 
-func _on_lobby_request_finished(action: String, success: bool, data: Variant, message: String, context: String) -> void:
+func _on_lobby_request_finished(action: String, success: bool, data: Variant, message: String, context: String, error_code: String, http_status: int, rpc_name: String) -> void:
 	if context != _lobby_context():
 		return
+	if not success:
+		print("[MP_DIAG] ", JSON.stringify({"event": "lobby_rpc_structured_error", "action": action, "rpc": rpc_name, "error_code": error_code, "http": http_status, "room_id": get_room_id(), "phase": str(room_state.get("phase", "")), "generation": _room_generation}))
 	if action == "list_public_rooms":
 		public_rooms_loaded.emit(data if success and data is Array else [], message if not success else "")
 		return
@@ -383,14 +385,14 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 	if action not in ["create_room", "join_room", "leave_room"] and not has_room():
 		return
 	if not success:
-		if action == "leave_room" and ("room_not_found" in message.to_lower() or "room_not_member" in message.to_lower()):
+		if action == "leave_room" and error_code in ["room_not_found", "room_expired", "not_room_member"]:
 			request_finished.emit(action, true, tr("You left the room."))
 			return
-		if has_room() and ("room_not_found" in message.to_lower() or "room_not_member" in message.to_lower()):
+		if has_room() and error_code in ["room_not_found", "room_expired", "not_room_member"]:
 			_clear_local_room()
 			request_finished.emit(action, false, tr("The room is no longer available. You have been returned to the lobby menu."))
 			return
-		if action == "set_ready" and "room_not_open" in message.to_lower():
+		if action == "set_ready" and error_code in ["room_not_open", "room_not_finished"]:
 			refresh_room()
 		request_finished.emit(action, false, message)
 		return

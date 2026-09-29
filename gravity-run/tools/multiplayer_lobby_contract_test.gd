@@ -1,5 +1,7 @@
 extends SceneTree
 
+const LobbyProviderScript := preload("res://systems/supabase_lobby_provider.gd")
+
 var failures := 0
 
 func _initialize() -> void:
@@ -11,6 +13,13 @@ func _initialize() -> void:
 	var match_source := FileAccess.get_file_as_string("res://ui/multiplayer_match.gd")
 	var transport_source := FileAccess.get_file_as_string("res://systems/webrtc_match_transport.gd")
 	var lobby_ui_source := FileAccess.get_file_as_string("res://ui/multiplayer_lobby.gd")
+	var lobby_provider_source := FileAccess.get_file_as_string("res://systems/supabase_lobby_provider.gd")
+	var diagnostics_source := FileAccess.get_file_as_string("res://systems/multiplayer_diagnostics.gd")
+	var lobby_provider := LobbyProviderScript.new()
+	_check(lobby_provider._extract_error_code({"message": "ERROR: room_not_found"}, 400) == "room_not_found", "machine-readable room_not_found should be extracted from PostgREST error text")
+	_check(lobby_provider._extract_error_code({"code": "not_room_member", "message": "membership required"}, 400) == "not_room_member", "structured SQL codes should be preserved independently of UI text")
+	_check(lobby_provider._extract_error_code({"message": "unexpected failure"}, 400) == "http_400", "unknown HTTP errors should retain their status without being misclassified")
+	lobby_provider.free()
 	var navigation_source := FileAccess.get_file_as_string("res://systems/app_navigation.gd")
 	_check(not payload_sql.is_empty(), "payload migration should be present")
 	_check(payload_sql.contains("'skin_id', m.skin_id"), "lobby payload should preserve player skins")
@@ -34,6 +43,10 @@ func _initialize() -> void:
 	_check(lobby_ui_source.contains("manifest_request") and lobby_ui_source.contains("_request_host_manifest(\"retry\")") and lobby_ui_source.contains("manifest_application_ack_received"), "guests should retry an idempotent manifest request until application verification is acknowledged")
 	_check(lobby_ui_source.contains("ready_blocked") and lobby_ui_source.contains("ready_available"), "the report trace should record why guest Ready is disabled and when it becomes usable")
 	_check(match_source.contains("results_requested") and match_source.contains("results_visible_requested") and match_source.contains("results_frame_rendered"), "results timing must distinguish intent, visibility request, and a rendered engine frame")
+	_check(match_source.contains("terminal_handler_timing") and match_source.contains("%s_trace_chunk") and match_source.contains("MultiplayerDiagnostics.record_post_match_event(\"%s_trace_chunk\""), "finish handling ACKs before trace serialization, and dumps raw trace in post-render batches")
+	_check(diagnostics_source.contains("diagnostics_size_check_count") and diagnostics_source.contains("diagnostics_removed_%s") and diagnostics_source.contains("_is_protected_diagnostic_event"), "report reduction batches size checks, preserves core events and counts removed samples")
+	_check(lobby_provider_source.contains("error_code: String, http_status: int, rpc_name: String") and lobby_provider_source.contains("func _extract_error_code") and lobby_provider_source.contains("_log_rpc_result(action, context, \"http_error\", response_code, error_code)"), "lobby provider exposes structured backend errors separately from display messages")
+	_check(service_source.contains("error_code in [\"room_not_found\", \"room_expired\", \"not_room_member\"]") and service_source.contains("lobby_rpc_structured_error"), "service clears stale room state by machine-readable code and logs sanitized RPC context")
 	_check(FileAccess.get_file_as_string("res://systems/multiplayer_diagnostics.gd").contains("diagnostics_size_reduction_iterations") and FileAccess.get_file_as_string("res://systems/multiplayer_diagnostics.gd").contains("record_post_match_event"), "post-match reports should expose bounded reduction progress and lobby handoff events")
 	_check(lobby_ui_source.contains("_manifest_verified_peers[peer_user_id] = true") and lobby_ui_source.contains("_manifest_transfer_last_sent_msec"), "manifest retries should stop after guest verification and be rate-limited")
 	_check(match_source.contains("if bool(_authoritative_snapshot.get(\"finished\", false)):\n\t\treturn") and match_source.contains("tied_for_lead"), "results should use terminal host state and avoid arbitrary winners on exact ties")
