@@ -3,16 +3,10 @@ extends Node2D
 const PlayerScene := preload("res://player/player.tscn")
 const SimulationScript := preload("res://systems/multiplayer_simulation.gd")
 const LocalPredictionScript := preload("res://systems/multiplayer_local_prediction.gd")
-const SpikeScene := preload("res://hazards/spikes.tscn")
-const BlockScene := preload("res://hazards/block.tscn")
-const BarrelScene := preload("res://hazards/barrel.tscn")
-const SlopeScene := preload("res://terrain/slope.tscn")
-const LedgeScene := preload("res://terrain/ledge.tscn")
-const TrackGapScript := preload("res://terrain/track_gap.gd")
 const CourseGenerator := preload("res://systems/course_generator.gd")
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const TerminalEventRules := preload("res://systems/multiplayer_terminal_event.gd")
-const CourseSurfaceRenderer := preload("res://systems/course_surface_renderer.gd")
+const CoursePresentationScript := preload("res://systems/race_course_presentation.gd")
 const ResultMedalScript := preload("res://ui/result_medal.gd")
 
 const WORLD_HEIGHT := 540.0
@@ -130,9 +124,7 @@ var _results_frame_event_pending := false
 var _results_list: VBoxContainer
 var _return_lobby_button: Button
 var _course_root: Node2D
-var _course_nodes: Dictionary = {}
-var _terrain_events: Array[Dictionary] = []
-var _gap_events: Array[Dictionary] = []
+var _course_presentation: Node2D
 var _touch_index := -1
 var _touch_start := Vector2.ZERO
 var _run_banner_until := 0.0
@@ -174,6 +166,9 @@ func _ready() -> void:
 	_course_root = Node2D.new()
 	_course_root.name = "SharedCourse"
 	add_child(_course_root)
+	_course_presentation = CoursePresentationScript.new()
+	_course_presentation.name = "RaceCoursePresentation"
+	_course_root.add_child(_course_presentation)
 	MultiplayerService.peer_data_received.connect(_on_peer_data_received)
 	MultiplayerService.peer_connection_state_changed.connect(_on_peer_connection_state_changed)
 	MultiplayerService.room_changed.connect(_on_room_changed)
@@ -1755,125 +1750,20 @@ func _authoritative_player_state(user_id: String) -> Dictionary:
 	return {}
 
 func _build_course_view() -> void:
-	_course_nodes.clear()
-	_terrain_events.clear()
-	_gap_events.clear()
-	var floor_y := float(_manifest.get("initial_floor_y"))
-	var ceiling_y := float(_manifest.get("initial_ceiling_y"))
-	for event in _manifest.get("events"):
-		if str(event.get("kind", "")) in ["step", "slope"]:
-			_terrain_events.append(event)
-		elif str(event.get("kind", "")) == "gap":
-			_gap_events.append(event)
-		var event_id := str(event.get("event_id", ""))
-		var kind := str(event.get("kind", ""))
-		var x := float(event.get("x", 0.0))
-		var from_ceiling := bool(event.get("from_ceiling", false))
-		var surface_y := ceiling_y if from_ceiling else floor_y
-		match kind:
-			"spikes":
-				var start_x := float(event.get("start_x", x))
-				for index in range(int(event.get("count", 1))):
-					var spike := SpikeScene.instantiate() as Node2D
-					spike.position = Vector2(start_x + float(index) * float(event.get("spacing", 32.0)), float(event.get("y", surface_y)))
-					spike.call("configure", Vector2(CourseGenerator.SPIKE_WIDTH, CourseGenerator.SPIKE_HEIGHT), from_ceiling)
-					spike.name = "Spike_%s_%d" % [event_id, index]
-					_course_root.add_child(spike)
-					_course_nodes["%s_%d" % [event_id, index]] = spike
-			"block":
-				var block := BlockScene.instantiate() as Node2D
-				block.position = Vector2(x, float(event.get("y", surface_y)))
-				block.call("configure", Vector2(float(event.get("width", 48.0)), float(event.get("height", 72.0))), from_ceiling)
-				block.name = "Block_%s" % event_id
-				_course_root.add_child(block)
-				_course_nodes[event_id] = block
-			"barrels":
-				var count := int(event.get("count", 1))
-				var spacing := float(event.get("spacing", HazardRules.BARREL_CHAIN_SPACING))
-				var chain_width := float(count - 1) * spacing
-				var speed_multiplier := float(event.get("motion_speed_multiplier", 1.0))
-				var spawn_offset := float(event.get("spawn_lead_distance", 820.0)) * (speed_multiplier - 1.0)
-				for index in range(count):
-					var barrel_id := "%s_%d" % [event_id, index]
-					var barrel := BarrelScene.instantiate() as Node2D
-					barrel.position = Vector2(x + spawn_offset - chain_width * 0.5 + float(index) * spacing, float(event.get("y", floor_y)))
-					barrel.call("configure", Vector2(HazardRules.BARREL_WIDTH, float(event.get("height", HazardRules.BARREL_WIDTH))), false)
-					barrel.call("set_motion_speed_multiplier", speed_multiplier)
-					barrel.name = "Barrel_%s" % barrel_id
-					_course_root.add_child(barrel)
-					_course_nodes[barrel_id] = barrel
-			"gap":
-				var gap := TrackGapScript.new() as Node2D
-				gap.position = Vector2(x, 0.0)
-				gap.call("configure", float(event.get("width", 160.0)), from_ceiling)
-				gap.name = "Gap_%s" % event_id
-				_course_root.add_child(gap)
-				_course_nodes[event_id] = gap
-			"step":
-				var step := LedgeScene.instantiate() as Node2D
-				var start_y := float(event.get("start_y", surface_y))
-				var end_y := float(event.get("end_y", start_y))
-				step.position = Vector2(x, 0.0)
-				step.call("configure_step", start_y, end_y, from_ceiling, bool(event.get("spiked", false)))
-				step.name = "Step_%s" % event_id
-				_course_root.add_child(step)
-				_course_nodes[event_id] = step
-				if from_ceiling:
-					ceiling_y = end_y
-				else:
-					floor_y = end_y
-			"slope":
-				var slope := SlopeScene.instantiate() as Node2D
-				var start_y := float(event.get("start_y", surface_y))
-				var end_y := float(event.get("end_y", start_y))
-				slope.position.x = float(event.get("start_x", x - 220.0))
-				slope.call("configure", start_y, end_y, from_ceiling)
-				slope.name = "Slope_%s" % event_id
-				_course_root.add_child(slope)
-				_course_nodes[event_id] = slope
-				if from_ceiling:
-					ceiling_y = end_y
-				else:
-					floor_y = end_y
+	var error := str(_course_presentation.call("load_manifest", _manifest))
+	if not error.is_empty():
+		_show_failure(tr("The shared race presentation failed: %s") % error)
 
 func _sync_course_view() -> void:
 	var world_hazards: Variant = _snapshot.get("world_hazards", {})
 	if not world_hazards is Dictionary:
 		return
-	var barrels: Variant = world_hazards.get("barrels", [])
-	if barrels is Array:
-		for barrel_state in barrels:
-			if not barrel_state is Dictionary:
-				continue
-			var barrel_id := str(barrel_state.get("entity_id", ""))
-			var barrel_value: Variant = _course_nodes.get(barrel_id)
-			# A barrel node can have completed its destruction animation and been
-			# queue_freed while its ID remains in _course_nodes. Validate the raw
-			# reference before casting it to Node2D.
-			if not is_instance_valid(barrel_value) or not barrel_value is Node2D:
-				continue
-			var barrel: Node2D = barrel_value
-			barrel.call("apply_replicated_motion",
-				Vector2(float(barrel_state.get("x", barrel.position.x)), float(barrel_state.get("y", barrel.position.y))),
-				float(barrel_state.get("roll_angle", 0.0)),
-				float(barrel_state.get("rotation", 0.0)),
-				bool(barrel_state.get("spawned", false))
-			)
-			if bool(barrel_state.get("destroyed", false)) and not bool(barrel.call("is_destroying_now")):
-				barrel.call("destroy")
-		var destroyed: Variant = world_hazards.get("destroyed_event_ids", [])
-		if destroyed is Array:
-			for event_id in destroyed:
-				var node_value: Variant = _course_nodes.get(str(event_id))
-				if not is_instance_valid(node_value) or not node_value is Node2D:
-					continue
-				var node: Node2D = node_value
-				if not bool(node.call("is_destroying_now")):
-					node.call("destroy")
+	_course_presentation.call("set_world_state", world_hazards)
 
 func _sync_player_views() -> void:
 	var camera_left := _camera_left()
 	_course_root.position.x = -camera_left
+	_course_presentation.call("set_camera_left", camera_left)
 	_sync_course_view()
 	var states: Variant = _snapshot.get("players", [])
 	if not states is Array:
@@ -2457,42 +2347,3 @@ func _draw() -> void:
 	for index in range(18):
 		var star_x := fposmod(float(index * 83) + camera_left * 0.12, view_size.x)
 		draw_circle(Vector2(star_x, 58.0 + float((index * 47) % 390)), 1.5, Color("26364b"))
-	_draw_course_surfaces(camera_left, view_size)
-	var finish_screen_x := float(_manifest.get("finish_x")) - camera_left if _manifest != null else -1.0
-	if finish_screen_x >= 0.0 and finish_screen_x <= view_size.x:
-		draw_line(Vector2(finish_screen_x, 0), Vector2(finish_screen_x, WORLD_HEIGHT), Color("f5d45e"), 4.0)
-
-func _draw_course_surfaces(camera_left: float, view_size: Vector2) -> void:
-	if _manifest == null:
-		return
-	var gaps: Array[Dictionary] = []
-	for event in _gap_events:
-		var half_width := float(event.get("width", 0.0)) * 0.5
-		gaps.append({"start": float(event.get("x", 0.0)) - half_width, "end": float(event.get("x", 0.0)) + half_width, "ceiling": bool(event.get("from_ceiling", false))})
-	var boundaries: Array[float] = []
-	var steps: Array[float] = []
-	for event in _terrain_events:
-		if str(event.get("kind", "")) == "slope":
-			boundaries.append(float(event.get("start_x", 0.0)))
-			boundaries.append(float(event.get("end_x", 0.0)))
-		else:
-			steps.append(float(event.get("x", 0.0)))
-	CourseSurfaceRenderer.draw_track(self, camera_left, view_size, gaps, boundaries, steps, Callable(self, "_manifest_surface_y_at"), camera_left)
-
-func _manifest_surface_y_at(x: float, ceiling: bool) -> float:
-	var y := float(_manifest.get("initial_ceiling_y")) if ceiling else float(_manifest.get("initial_floor_y"))
-	for event in _terrain_events:
-		if bool(event.get("from_ceiling", false)) != ceiling:
-			continue
-		match str(event.get("kind", "")):
-			"step":
-				if x >= float(event.get("x", 0.0)):
-					y = float(event.get("end_y", y))
-			"slope":
-				var start_x := float(event.get("start_x", 0.0))
-				var end_x := float(event.get("end_x", start_x))
-				if x >= start_x and x <= end_x and end_x > start_x:
-					y = lerpf(float(event.get("start_y", y)), float(event.get("end_y", y)), (x - start_x) / (end_x - start_x))
-				elif x > end_x:
-					y = float(event.get("end_y", y))
-	return y

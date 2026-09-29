@@ -5,8 +5,8 @@ const WorldSimulationScript := preload("res://systems/multiplayer_v2/v2_world_si
 const RemoteTrackScript := preload("res://systems/multiplayer_v2/v2_remote_track.gd")
 const PlayerScene := preload("res://player/player.tscn")
 const Motion := preload("res://systems/runner_motion.gd")
-const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
-const CourseGeneratorScript := preload("res://systems/course_generator.gd")
+const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_export.gd")
+const CoursePresentationScript := preload("res://systems/race_course_presentation.gd")
 
 const FIXED_DELTA := 1.0 / 60.0
 const CAMERA_PLAYER_X := 250.0
@@ -26,6 +26,8 @@ var _remote_terminal: Dictionary = {}
 var _remote_locomotion: Dictionary = {}
 var _slot_by_peer: Dictionary = {}
 var _player_views: Dictionary = {}
+var _course_root: Node2D
+var _course_presentation: Node2D
 var _camera_left := 0.0
 var _spectator_peer_id := 0
 var _last_spectator_event_peer_id := -1
@@ -50,8 +52,21 @@ func _ready() -> void:
 	if not world_error.is_empty():
 		_show_failure(tr("The V2 course could not be initialized: %s") % world_error)
 		return
+	_course_root = Node2D.new()
+	_course_root.name = "SharedCourseRoot"
+	add_child(_course_root)
+	_course_presentation = CoursePresentationScript.new()
+	_course_presentation.name = "RaceCoursePresentation"
+	_course_root.add_child(_course_presentation)
+	var presentation_error := str(_course_presentation.call("load_manifest", _manifest))
+	if not presentation_error.is_empty():
+		_show_failure(tr("The shared race presentation failed: %s") % presentation_error)
+		return
 	var local_peer := int(MultiplayerV2Service.session.get("local_peer_id", 1))
-	_runner.configure(_round_id, local_peer, float(_manifest.start_x), float(_manifest.initial_floor_y))
+	var loadout_snapshot: Resource = InventoryService.create_run_loadout_snapshot(PlayerProfile.get_character_stats())
+	var resolved_stats: Dictionary = loadout_snapshot.get_resolved_stats() if loadout_snapshot != null and loadout_snapshot.has_method("is_valid") and bool(loadout_snapshot.call("is_valid")) else {}
+	_runner.configure(_round_id, local_peer, float(_manifest.start_x), float(_manifest.initial_floor_y), resolved_stats)
+	MultiplayerV2Service.diagnostics.record_event("local_loadout_frozen", {"run_speed_percent": int(resolved_stats.get("run_speed_percent", 10000)), "flip_cooldown_percent": int(resolved_stats.get("flip_cooldown_percent", 10000))})
 	MultiplayerV2Service.configure_world_simulation(_world)
 	_build_overlay()
 	_build_peer_slots()
@@ -132,12 +147,12 @@ func _build_overlay() -> void:
 	actions.add_child(back)
 
 func _build_peer_slots() -> void:
-	for member in MultiplayerV2Service.get_members():
+	for member in MultiplayerV2Service.get_active_round_roster():
 		var peer_id := int(member.get("player_slot", 1))
 		_slot_by_peer[peer_id] = peer_id - 1
 		var runner := PlayerScene.instantiate() as Node2D
 		runner.name = "Runner_%d" % peer_id
-		add_child(runner)
+		_course_root.add_child(runner)
 		runner.call("set_input_enabled", false)
 		runner.call("set_skin_id", int(member.get("skin_id", 0)))
 		_player_views[peer_id] = runner
@@ -168,6 +183,9 @@ func _physics_process(delta: float) -> void:
 		MultiplayerV2Service.diagnostics.record_event("local_physics_backlog", {"seconds": _accumulator})
 		_accumulator = fmod(_accumulator, FIXED_DELTA)
 	_update_spectator_camera()
+	_course_root.position.x = -_camera_left
+	_course_presentation.call("set_camera_left", _camera_left)
+	_course_presentation.call("set_world_state", {"barrels": _world.barrels, "entities": _world.entity_ledger.entities})
 	_update_hud()
 	_sync_player_views()
 	MultiplayerV2Service.diagnostics.record_frame({"tick": _runner.simulation_tick, "world_tick": _world.tick, "x": float(_runner.player_state.get("world_x", 0.0)), "y": float(_runner.player_state.get("y", 0.0)), "camera_left": _camera_left, "render_fraction": _accumulator / FIXED_DELTA, "physics_delta_ms": delta * 1000.0, "fps": Engine.get_frames_per_second(), "window_focused": DisplayServer.window_is_focused()})
@@ -186,7 +204,7 @@ func _step_local_round() -> void:
 	if str(_runner.player_state.get("state", "")) != "running":
 		return
 	var state: Dictionary = _runner.player_state
-	var candidate_x := minf(float(state.get("world_x", 0.0)) + Motion.BASE_RUN_SPEED * FIXED_DELTA, float(_manifest.finish_x))
+	var candidate_x := minf(float(state.get("world_x", 0.0)) + Motion.distance_for_delta(FIXED_DELTA, _runner.run_speed_multiplier), float(_manifest.finish_x))
 	var candidate := state.duplicate(true)
 	candidate["world_x"] = candidate_x
 	var contact: Dictionary = _world.player_contact(candidate)
@@ -354,82 +372,18 @@ func _update_hud() -> void:
 func _draw() -> void:
 	if _manifest == null:
 		return
-	draw_rect(Rect2(Vector2.ZERO, get_viewport_rect().size), Color("101a29"))
-	_draw_course_surface(false)
-	_draw_course_surface(true)
-	_draw_hazards()
+	var view_size := get_viewport_rect().size
+	draw_rect(Rect2(Vector2.ZERO, view_size), Color("101827"))
+	for index in range(18):
+		var star_x := fposmod(float(index * 83) + _camera_left * 0.12, view_size.x)
+		draw_circle(Vector2(star_x, 58.0 + float((index * 47) % 390)), 1.5, Color("26364b"))
 	_draw_players()
 
-func _draw_course_surface(ceiling: bool) -> void:
-	var base_y := float(_manifest.initial_ceiling_y) if ceiling else float(_manifest.initial_floor_y)
-	var color := Color("6683a5") if ceiling else Color("42d6c5")
-	var x := float(_manifest.start_x)
-	var y := base_y
-	for event in _manifest.events:
-		if bool(event.get("from_ceiling", false)) != ceiling:
-			continue
-		var kind := str(event.get("kind", ""))
-		if kind == "slope":
-			var sx := float(event.get("start_x", x))
-			var sy := float(event.get("start_y", y))
-			var ex := float(event.get("end_x", sx))
-			var ey := float(event.get("end_y", sy))
-			draw_line(Vector2(x - _camera_left, y), Vector2(sx - _camera_left, sy), color, 8.0, true)
-			draw_line(Vector2(sx - _camera_left, sy), Vector2(ex - _camera_left, ey), color, 8.0, true)
-			x = ex
-			y = ey
-		elif kind == "step":
-			var sx := float(event.get("x", x))
-			var ey := float(event.get("end_y", y))
-			draw_line(Vector2(x - _camera_left, y), Vector2(sx - _camera_left, y), color, 8.0, true)
-			draw_line(Vector2(sx - _camera_left, y), Vector2(sx - _camera_left, ey), color, 8.0, true)
-			x = sx
-			y = ey
-		elif kind == "gap":
-			var sx := float(event.get("x", x)) - float(event.get("width", 0.0)) * 0.5
-			var ex := sx + float(event.get("width", 0.0))
-			draw_line(Vector2(x - _camera_left, y), Vector2(sx - _camera_left, y), color, 8.0, true)
-			x = ex
-	draw_line(Vector2(x - _camera_left, y), Vector2(float(_manifest.finish_x) - _camera_left, y), color, 8.0, true)
-
-func _draw_hazards() -> void:
-	for event in _manifest.events:
-		var event_id := str(event.get("event_id", ""))
-		if event_id in _world.entity_ledger.entities and not _world.entity_ledger.is_active(event_id):
-			continue
-		match str(event.get("kind", "")):
-			"spikes":
-				var triangles := HazardRules.spike_group_triangles(float(event.get("start_x", event.get("x", 0.0))), float(event.get("y", 0.0)), int(event.get("count", 1)), float(event.get("spacing", CourseGeneratorScript.SPIKE_GROUP_SPACING)), CourseGeneratorScript.SPIKE_WIDTH, CourseGeneratorScript.SPIKE_HEIGHT, bool(event.get("from_ceiling", false)))
-				for triangle in triangles:
-					var screen_points := PackedVector2Array()
-					for point in triangle:
-						screen_points.append(Vector2(point.x - _camera_left, point.y))
-					draw_colored_polygon(screen_points, Color("f27878"))
-			"block":
-				var height := float(event.get("height", 72.0))
-				var edge_y := float(event.get("y", 0.0))
-				var block_y := edge_y - height if not bool(event.get("from_ceiling", false)) else edge_y
-				draw_rect(Rect2(Vector2(float(event.get("x", 0.0)) - float(event.get("width", 48.0)) * 0.5 - _camera_left, block_y), Vector2(float(event.get("width", 48.0)), height)), Color("7d90ac"))
-			"step":
-				if bool(event.get("spiked", false)):
-					var triangles := HazardRules.step_spike_triangles(float(event.get("x", 0.0)), float(event.get("start_y", 0.0)), float(event.get("end_y", 0.0)), bool(event.get("from_ceiling", false)))
-					for triangle in triangles:
-						var screen_points := PackedVector2Array()
-						for point in triangle:
-							screen_points.append(Vector2(point.x - _camera_left, point.y))
-						draw_colored_polygon(screen_points, Color("f27878"))
-	for barrel in _world.barrels:
-		if not bool(barrel.get("spawned", false)) or bool(barrel.get("destroyed", false)):
-			continue
-		var center := HazardRules.barrel_center(Vector2(float(barrel.x), float(barrel.y)), float(barrel.width), float(barrel.height))
-		draw_circle(Vector2(center.x - _camera_left, center.y), HazardRules.barrel_radius(float(barrel.width), float(barrel.height)), Color("d59154"))
-		draw_arc(Vector2(center.x - _camera_left, center.y), 11.0, 0.0, TAU, 24, Color("7a452b"), 2.0, true)
-
 func _draw_players() -> void:
-	for member in MultiplayerV2Service.get_members():
+	for member in MultiplayerV2Service.get_active_round_roster():
 		var peer_id := int(member.get("player_slot", 1))
 		var pose := _player_render_pose(member)
-		var screen_position: Vector2 = pose.position
+		var screen_position: Vector2 = pose.position - Vector2(_camera_left, 0.0)
 		draw_string(ThemeDB.fallback_font, screen_position + Vector2(-16.0, -Motion.SIZE.y * 0.5 - 8.0), str(member.get("display_name", "Runner")), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("edf3ff"))
 
 func _player_render_pose(member: Dictionary) -> Dictionary:
@@ -455,10 +409,10 @@ func _player_render_pose(member: Dictionary) -> Dictionary:
 		if str(_remote_terminal.get(peer_id, "running")) != "running":
 			locomotion = str(_remote_terminal[peer_id])
 	var offset := float(slot) * 18.0
-	return {"position": Vector2(world_x - _camera_left + offset, y), "gravity": gravity, "locomotion": locomotion}
+	return {"position": Vector2(world_x + offset, y), "gravity": gravity, "locomotion": locomotion}
 
 func _sync_player_views() -> void:
-	for member in MultiplayerV2Service.get_members():
+	for member in MultiplayerV2Service.get_active_round_roster():
 		var peer_id := int(member.get("player_slot", 1))
 		var runner_value: Variant = _player_views.get(peer_id)
 		if not is_instance_valid(runner_value) or not runner_value is Node2D:
@@ -467,7 +421,8 @@ func _sync_player_views() -> void:
 		var runner: Node2D = runner_value
 		var screen_position: Vector2 = pose.position
 		runner.position = screen_position
-		runner.visible = screen_position.x > -80.0 and screen_position.x < get_viewport_rect().size.x + 80.0
+		var screen_x := screen_position.x - _camera_left
+		runner.visible = screen_x > -80.0 and screen_x < get_viewport_rect().size.x + 80.0
 		var sprite := runner.get_node_or_null("AnimatedSprite2D") as AnimatedSprite2D
 		if sprite == null:
 			continue
@@ -512,14 +467,7 @@ func _return_to_lobby() -> void:
 
 func _save_diagnostics() -> void:
 	var report := MultiplayerV2Service.diagnostics.export_report()
-	var path := "user://multiplayer_v2_%d.json" % Time.get_unix_time_from_system()
-	var file := FileAccess.open(path, FileAccess.WRITE)
-	if file == null:
-		_status_label.text = tr("Could not save diagnostics: %s") % error_string(FileAccess.get_open_error())
-		return
-	file.store_string(JSON.stringify(report, "\t"))
-	file.close()
-	_status_label.text = tr("V2 diagnostics saved to %s") % ProjectSettings.globalize_path(path)
+	_status_label.text = DiagnosticsExport.save_report(report, DiagnosticsExport.make_filename(report, "match"))
 
 func _leave_v2() -> void:
 	MultiplayerV2Service.leave_room()

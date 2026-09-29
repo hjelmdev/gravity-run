@@ -3,6 +3,7 @@ extends Control
 const ReadyIndicatorScript := preload("res://ui/ready_indicator.gd")
 const RunnerFrames := preload("res://assets/character/run_frames.tres")
 const SkinPalette := preload("res://player/skin_palette.gd")
+const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_export.gd")
 
 signal back_requested
 signal match_start_requested
@@ -27,6 +28,7 @@ var _room_summary: Label
 var _players: VBoxContainer
 var _ready_button: Button
 var _start_button: Button
+var _diagnostics_button: Button
 var _reconnect_button: Button
 var _create_button: Button
 var _join_button: Button
@@ -83,6 +85,9 @@ func _build_ui() -> void:
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_layout.add_child(_status)
+	_diagnostics_button = _button(tr("Download V2 diagnostics"))
+	_diagnostics_button.pressed.connect(_download_diagnostics)
+	_layout.add_child(_diagnostics_button)
 	_display_name = LineEdit.new()
 	_display_name.placeholder_text = tr("Display name")
 	_display_name.max_length = 16
@@ -194,6 +199,12 @@ func _build_ui() -> void:
 	_reconnect_button = _button(tr("Reconnect to host"))
 	_reconnect_button.pressed.connect(MultiplayerV2Service.begin_peer_connection)
 	_room_view.add_child(_reconnect_button)
+	var build_label := Label.new()
+	build_label.text = tr("V2 build %s") % str(ProjectSettings.get_setting("application/config/version", "unknown"))
+	build_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	build_label.add_theme_font_size_override("font_size", 10)
+	build_label.add_theme_color_override("font_color", Color("8798af"))
+	_layout.add_child(build_label)
 	_show_view("home")
 
 func _new_view() -> VBoxContainer:
@@ -311,13 +322,19 @@ func _on_room_changed(room: Dictionary) -> void:
 			local_ready = bool(member.get("is_ready", false))
 			local_manifest_ready = str(member.get("loaded_manifest_hash", "")) == local_manifest_hash and not local_manifest_hash.is_empty()
 	_ready_button.text = tr("Not ready") if local_ready else tr("Ready")
-	_ready_button.disabled = str(room.get("phase", "")) != "OPEN" or not local_manifest_ready
+	_ready_button.disabled = str(room.get("phase", "")) != "OPEN" or not local_manifest_ready or not MultiplayerV2Service.local_peer_mapping_valid()
 	_start_button.visible = MultiplayerV2Service.is_room_owner()
 	var blockers := MultiplayerV2Service.get_start_blockers()
 	_start_button.disabled = not blockers.is_empty()
 	_start_button.tooltip_text = _start_blocker_message(blockers)
 	_reconnect_button.visible = not MultiplayerV2Service.is_room_owner() and not _has_host_connection()
-	if str(room.get("manifest_hash", "")).is_empty():
+	if not MultiplayerV2Service.local_peer_mapping_valid():
+		_status.text = tr("The assigned player slot does not match this connection. Reconnect before readying.")
+	elif str(room.get("phase", "")) == "PREPARING_COURSE":
+		_status.text = tr("The race is preparing. Waiting for every player to accept the same round.")
+	elif str(room.get("phase", "")) == "RUNNING":
+		_status.text = tr("The race is already in progress. Rejoin the room to continue.")
+	elif str(room.get("manifest_hash", "")).is_empty():
 		_status.text = tr("Preparing the shared course…")
 	else:
 		if not _has_host_connection() and not MultiplayerV2Service.is_room_owner():
@@ -375,7 +392,7 @@ func _refresh_controls() -> void:
 	if is_instance_valid(_join_button):
 		_join_button.disabled = _busy or in_room
 	if is_instance_valid(_ready_button):
-		_ready_button.disabled = not in_room or str(_room.get("phase", "")) != "OPEN"
+		_ready_button.disabled = not in_room or str(_room.get("phase", "")) != "OPEN" or not MultiplayerV2Service.local_peer_mapping_valid()
 	if is_instance_valid(_start_button):
 		_start_button.visible = in_room and MultiplayerV2Service.is_room_owner()
 		_start_button.disabled = not in_room or not MultiplayerV2Service.get_start_blockers().is_empty()
@@ -406,6 +423,8 @@ func _start_blocker_message(blockers: PackedStringArray) -> String:
 	if blockers.is_empty():
 		return tr("Start the race when everyone is ready.")
 	for blocker in blockers:
+		if str(blocker) == "local_peer_id_mismatch":
+			return tr("The assigned player slot does not match this connection. Reconnect before starting.")
 		if str(blocker).begins_with("transport_missing"):
 			return tr("Waiting for all players to connect directly.")
 		if str(blocker).begins_with("member_not_ready"):
@@ -416,6 +435,10 @@ func _start_blocker_message(blockers: PackedStringArray) -> String:
 
 func _on_round_prepare_requested(_descriptor: Dictionary) -> void:
 	match_start_requested.emit()
+
+func _download_diagnostics() -> void:
+	var report := MultiplayerV2Service.diagnostics.export_report()
+	_status.text = DiagnosticsExport.save_report(report, DiagnosticsExport.make_filename(report, "lobby"))
 
 func _name_value() -> String:
 	var value := _display_name.text.strip_edges()

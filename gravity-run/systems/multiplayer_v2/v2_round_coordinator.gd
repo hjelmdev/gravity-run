@@ -4,6 +4,7 @@ class_name MultiplayerV2RoundCoordinator
 signal control_requested(peer_id: int, kind: String, payload: Dictionary)
 signal round_started(round_id: String, descriptor: Dictionary)
 signal round_failed(reason: String)
+signal all_prepare_received
 
 const START_LEAD_USEC := 2_500_000
 const ACK_MARGIN_USEC := 500_000
@@ -23,6 +24,8 @@ var prepare_last_sent_usec := -1
 var is_host := false
 var peer_ids: Array[int] = []
 var prepared_peers: Dictionary = {}
+var prepare_received_peers: Dictionary = {}
+var prepare_received_emitted := false
 var start_acks: Dictionary = {}
 var clock := MultiplayerV2RoundClock.new()
 var round_descriptor: Dictionary = {}
@@ -33,6 +36,7 @@ func prepare_as_host(descriptor: Dictionary, peers: Array[int], now_usec: int) -
 	_reset_round(descriptor, peers, true)
 	state = State.PREPARING
 	prepared_peers[1] = false
+	prepare_received_peers[1] = true
 	prepare_started_usec = now_usec
 	_send_prepare_to_pending_peers(now_usec)
 	_try_commit(now_usec)
@@ -64,6 +68,15 @@ func acknowledge_prepared(peer_id: int, received_round_id: String, now_usec: int
 		return false
 	prepared_peers[peer_id] = true
 	_try_commit(now_usec)
+	return true
+
+func acknowledge_prepare_received(peer_id: int, received_round_id: String) -> bool:
+	if not is_host or state != State.PREPARING or received_round_id != round_id or peer_id not in peer_ids:
+		return false
+	prepare_received_peers[peer_id] = true
+	if _all_peers(prepare_received_peers) and not prepare_received_emitted:
+		prepare_received_emitted = true
+		all_prepare_received.emit()
 	return true
 
 func receive_commit_as_guest(descriptor: Dictionary) -> bool:
@@ -122,6 +135,8 @@ func _reset_round(descriptor: Dictionary, peers: Array[int], host: bool) -> void
 	peer_ids = peers.duplicate()
 	is_host = host
 	prepared_peers.clear()
+	prepare_received_peers.clear()
+	prepare_received_emitted = false
 	start_acks.clear()
 	clock.reset_round()
 	host_start_usec = -1
@@ -154,7 +169,9 @@ func _all_peers(values: Dictionary) -> bool:
 	return true
 
 func _control_payload() -> Dictionary:
-	return {"round_id": round_id, "lobby_generation": lobby_generation, "manifest_hash": manifest_hash, "start_at_host_usec": host_start_usec}
+	var payload := round_descriptor.duplicate(true)
+	payload.merge({"round_id": round_id, "lobby_generation": lobby_generation, "manifest_hash": manifest_hash, "start_at_host_usec": host_start_usec}, true)
+	return payload
 
 func _start() -> void:
 	state = State.RUNNING

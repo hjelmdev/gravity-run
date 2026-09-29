@@ -13,8 +13,10 @@ var sample_sequence := 0
 var owner_peer_id := 0
 var round_id := ""
 var active := false
+var run_speed_multiplier := 1.0
+var flip_cooldown_multiplier := 1.0
 
-func configure(round_identifier: String, local_peer_id: int, spawn_x: float, floor_y: float, start_time_usec: int = 0) -> void:
+func configure(round_identifier: String, local_peer_id: int, spawn_x: float, floor_y: float, resolved_stats: Dictionary = {}) -> void:
 	round_id = round_identifier
 	owner_peer_id = local_peer_id
 	simulation_tick = 0
@@ -24,6 +26,8 @@ func configure(round_identifier: String, local_peer_id: int, spawn_x: float, flo
 	previous_render_state = player_state.duplicate(true)
 	current_render_state = player_state.duplicate(true)
 	active = true
+	run_speed_multiplier = clampf(float(resolved_stats.get("run_speed_percent", 10000)) / 10000.0, 0.95, 1.05)
+	flip_cooldown_multiplier = clampf(float(resolved_stats.get("flip_cooldown_percent", 10000)) / 10000.0, 0.9, 1.1)
 
 func step(flip_direction: int, floor_y: float, ceiling_y: float, floor_supported: bool = true, ceiling_supported: bool = true, advance_horizontal: bool = true, next_world_x: float = -1.0) -> Dictionary:
 	if not active:
@@ -31,11 +35,11 @@ func step(flip_direction: int, floor_y: float, ceiling_y: float, floor_supported
 	previous_render_state = player_state.duplicate(true)
 	if flip_direction != 0:
 		input_sequence += 1
-		Motion.try_flip(player_state, flip_direction)
+		Motion.try_flip(player_state, flip_direction, flip_cooldown_multiplier)
 	if next_world_x >= 0.0:
 		player_state.world_x = next_world_x
 	elif advance_horizontal:
-		player_state.world_x = float(player_state.world_x) + Motion.distance_for_delta(FIXED_DELTA, 1.0, bool(player_state.get("blocked", false)))
+		player_state.world_x = float(player_state.world_x) + Motion.distance_for_delta(FIXED_DELTA, run_speed_multiplier, bool(player_state.get("blocked", false)))
 	Motion.advance_vertical(player_state, FIXED_DELTA, floor_y, ceiling_y, floor_supported, ceiling_supported)
 	simulation_tick += 1
 	current_render_state = player_state.duplicate(true)
@@ -50,7 +54,7 @@ func render_state(fraction: float) -> Dictionary:
 
 func make_sample() -> Dictionary:
 	sample_sequence += 1
-	return {"round_id": round_id, "owner_peer_id": owner_peer_id, "sample_seq": sample_sequence, "simulation_tick": simulation_tick, "world_x": float(player_state.get("world_x", 0.0)), "y": float(player_state.get("y", 0.0)), "velocity_x": Motion.BASE_RUN_SPEED if not bool(player_state.get("blocked", false)) else 0.0, "velocity_y": float(player_state.get("vertical_speed", 0.0)), "gravity_direction": int(player_state.get("gravity_direction", 1)), "locomotion_state": str(player_state.get("state", "running")), "last_input_seq": input_sequence}
+	return {"round_id": round_id, "owner_peer_id": owner_peer_id, "sample_seq": sample_sequence, "simulation_tick": simulation_tick, "world_x": float(player_state.get("world_x", 0.0)), "y": float(player_state.get("y", 0.0)), "velocity_x": Motion.speed_for_multiplier(run_speed_multiplier) if not bool(player_state.get("blocked", false)) else 0.0, "velocity_y": float(player_state.get("vertical_speed", 0.0)), "gravity_direction": int(player_state.get("gravity_direction", 1)), "locomotion_state": str(player_state.get("state", "running")), "last_input_seq": input_sequence}
 
 func set_blocked(blocked: bool) -> void:
 	player_state["blocked"] = blocked

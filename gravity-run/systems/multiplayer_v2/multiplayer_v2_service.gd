@@ -90,6 +90,8 @@ var _terminal_delivery_elapsed := 0.0
 var _received_terminal_events: Dictionary = {}
 var _world_hash_reports: Dictionary = {}
 var _world_divergence_reported := false
+var _prepare_scene_requested_round_id := ""
+var _peer_mapping_verified_sample := false
 var _last_host_heartbeat_usec := -1
 const DISCONNECT_GRACE_USEC := 10_000_000
 const HEARTBEAT_INTERVAL_SECONDS := 1.0
@@ -168,6 +170,7 @@ func _create_lobby_services() -> void:
 	_round_coordinator.control_requested.connect(send_control)
 	_round_coordinator.round_started.connect(_on_round_started)
 	_round_coordinator.round_failed.connect(_on_coordinator_round_failed)
+	_round_coordinator.all_prepare_received.connect(_on_coordinator_prepare_received)
 
 func has_room() -> bool:
 	return not room_state.is_empty()
@@ -177,6 +180,20 @@ func is_room_owner() -> bool:
 
 func get_members() -> Array:
 	return room_state.get("members", [])
+
+func get_active_round_descriptor() -> Dictionary:
+	return _round_coordinator.round_descriptor.duplicate(true)
+
+func get_active_round_roster() -> Array:
+	var players: Variant = _round_coordinator.round_descriptor.get("players", [])
+	return players.duplicate(true) if players is Array and not players.is_empty() else get_members().duplicate(true)
+
+func local_peer_mapping_valid() -> bool:
+	if not _active or network_api == null:
+		return false
+	var local_peer_id := int(session.get("local_peer_id", -1))
+	var member_slot := int(_member_for_user(identity_user_id).get("player_slot", -1))
+	return local_peer_id == network_api.get_unique_id() and (str(session.get("role", "")) == "host" and local_peer_id == 1 and member_slot == 1 or str(session.get("role", "")) == "guest" and local_peer_id == member_slot and member_slot >= 2 and member_slot <= MAX_PLAYERS)
 
 func create_room(display_name: String, is_public: bool = true, seed_value: int = -1, course_length_px: int = 45000) -> void:
 	_begin_identity_action("create_room", {"display_name": display_name, "is_public": is_public, "seed": seed_value if seed_value >= 1 else randi_range(1, 2_147_483_647), "course_length_px": course_length_px})
@@ -192,7 +209,7 @@ func refresh_room() -> void:
 		_begin_identity_action("refresh_room", {"room_id": str(room_state.get("room_id", ""))})
 
 func set_ready(ready: bool) -> void:
-	if has_room():
+	if has_room() and local_peer_mapping_valid():
 		_begin_identity_action("set_ready", {"room_id": str(room_state.get("room_id", "")), "ready": ready})
 
 func set_skin_id(skin_id: int) -> void:
@@ -211,6 +228,8 @@ func request_start() -> void:
 
 func get_start_blockers() -> PackedStringArray:
 	var blockers := PackedStringArray()
+	if not local_peer_mapping_valid():
+		blockers.append("local_peer_id_mismatch")
 	if not is_room_owner():
 		blockers.append("not_host")
 	if str(room_state.get("phase", "")) != "OPEN":
@@ -253,6 +272,9 @@ func begin_peer_connection() -> void:
 			return
 		if not is_room_owner():
 			activate_client_session(room_state)
+			if not _active:
+				lobby_request_finished.emit("connect", false, "Could not verify the guest peer slot. Rejoin the room.")
+				return
 	_webrtc_transport.configure(room_state, identity_user_id, webrtc_peer)
 	if is_room_owner():
 		_webrtc_transport.begin_connection()
@@ -331,11 +353,25 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 			peers.append(int(peer_id))
 		_round_id = Crypto.new().generate_random_bytes(16).hex_encode()
 		session["round_id"] = _round_id
+		diagnostics.session["round_id"] = _round_id
 		session["roster_revision"] = int(room_state.get("lobby_generation", 0))
 		var descriptor := {"round_id": _round_id, "room_id": str(room_state.get("room_id", "")), "room_session_id": str(room_state.get("room_session_id", "")), "lobby_generation": int(room_state.get("lobby_generation", 0)), "roster_revision": int(room_state.get("lobby_generation", 0)), "manifest_hash": str(room_state.get("manifest_hash", "")), "seed": int(room_state.get("seed", 1)), "course_length_px": int(room_state.get("course_length_px", 45000)), "players": room_state.get("members", []).duplicate(true)}
+		descriptor["peer_map"] = _peer_map_for_roster(descriptor.players)
+		var descriptor_error := _validate_round_descriptor(descriptor)
+		if not descriptor_error.is_empty():
+			diagnostics.record_event("host_round_descriptor_rejected", {"round_id": _round_id, "reason": descriptor_error, "generation": int(descriptor.lobby_generation), "manifest_hash": str(descriptor.manifest_hash)})
+			lobby_request_finished.emit(action, false, "V2 could not freeze the round roster: %s" % descriptor_error)
+			call_deferred("return_to_lobby")
+			return
 		_round_roster_revision = int(descriptor.roster_revision)
-		_round_coordinator.prepare_as_host(descriptor, Array(peers), Time.get_ticks_usec())
-		round_prepare_requested.emit(descriptor.duplicate(true))
+		if not _round_coordinator.prepare_as_host(descriptor, Array(peers), Time.get_ticks_usec()):
+			diagnostics.record_event("host_prepare_coordinator_rejected", {"round_id": _round_id, "state": _round_coordinator.state})
+			lobby_request_finished.emit(action, false, "V2 could not start the round preparation. Return to the lobby and try again.")
+			call_deferred("return_to_lobby")
+			return
+		diagnostics.record_event("backend_prepare_accepted", {"round_id": _round_id, "phase": str(room_state.get("phase", "")), "generation": int(descriptor.lobby_generation), "room_session_id": str(descriptor.room_session_id), "manifest_hash": str(descriptor.manifest_hash), "peer_ids": Array(peers)})
+		if peers.is_empty():
+			_on_coordinator_prepare_received()
 		lobby_request_finished.emit(action, true, "")
 		return
 	if success and data is Dictionary:
@@ -366,6 +402,7 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 					_signaling_transport.connect_room(str(room_state.get("signaling_topic", "")), _identity_adapter.token())
 					_webrtc_transport.begin_connection()
 					_ensure_manifest()
+					room_changed.emit(room_state.duplicate(true))
 		elif action in ["set_manifest", "refresh_room", "return_to_lobby"]:
 			if action == "ack_manifest":
 				room_changed.emit(room_state.duplicate(true))
@@ -421,11 +458,17 @@ func open_host(session_descriptor: Dictionary, max_clients: int = 4) -> Error:
 	session["protocol_version"] = 1
 	session["role"] = "host"
 	session["local_peer_id"] = 1
+	_peer_mapping_verified_sample = false
 	session["build_id"] = str(ProjectSettings.get_setting("application/config/version", "unknown"))
 	session["godot_version"] = Engine.get_version_info()
 	_round_id = ""
 	_active = true
+	_peer_mapping_verified_sample = false
 	diagnostics.begin_session(session)
+	if not _validate_local_peer_mapping("host_session_activated"):
+		_active = false
+		transport_state_changed.emit("failed", "Host peer ID does not match its room slot; rejoin before starting.")
+		return FAILED
 	transport_state_changed.emit("waiting", "V2 host is waiting for peer links.")
 	session_changed.emit(session.duplicate(true))
 	return OK
@@ -450,19 +493,27 @@ func configure_client_peer(assigned_peer_id: int) -> Error:
 		return error
 	network_api.multiplayer_peer = webrtc_peer
 	session["local_peer_id"] = assigned_peer_id
+	diagnostics.record_event("client_peer_configured", {"assigned_peer_id": assigned_peer_id, "network_peer_id": network_api.get_unique_id()})
 	return OK
 
 func activate_client_session(session_descriptor: Dictionary) -> void:
+	var assigned_peer_id := int(session.get("local_peer_id", 0))
 	session = session_descriptor.duplicate(true)
 	session["network_mode"] = "v2"
 	session["protocol_version"] = 1
 	session["role"] = "guest"
-	if not session.has("local_peer_id"):
-		session["local_peer_id"] = int(_member_for_user(identity_user_id).get("player_slot", 1)) + 1
+	if assigned_peer_id <= 1 and network_api != null:
+		assigned_peer_id = network_api.get_unique_id()
+	session["local_peer_id"] = assigned_peer_id
 	session["build_id"] = str(ProjectSettings.get_setting("application/config/version", "unknown"))
 	session["godot_version"] = Engine.get_version_info()
 	_active = true
+	_peer_mapping_verified_sample = false
 	diagnostics.begin_session(session)
+	if not _validate_local_peer_mapping("session_activated"):
+		_active = false
+		transport_state_changed.emit("failed", "Guest peer ID does not match its assigned room slot; reconnect before readying.")
+		return
 	_round_id = str(session.get("round_id", ""))
 	session_changed.emit(session.duplicate(true))
 
@@ -478,6 +529,11 @@ func get_snapshot_rate() -> int:
 func send_sample(sample: Dictionary) -> void:
 	if not _active or rpc_endpoint == null:
 		return
+	if not _peer_mapping_verified_sample:
+		if not _validate_local_peer_mapping("first_sample"):
+			_round_coordinator.cancel("peer_mapping_mismatch")
+			return
+		_peer_mapping_verified_sample = true
 	if _sample_accumulator < _sample_period:
 		return
 	_sample_accumulator = maxf(_sample_accumulator - _sample_period, 0.0)
@@ -508,6 +564,8 @@ func send_interaction(request: Dictionary) -> void:
 
 func send_control(peer_id: int, kind: String, payload: Dictionary) -> void:
 	if _active:
+		if kind in ["PREPARE_ROUND", "PREPARE_RECEIVED", "PREPARE_REJECTED", "PREPARED", "COMMIT_START", "START_ACK", "CANCEL_START"]:
+			diagnostics.record_event("control_sent", {"kind": kind, "peer_id": peer_id, "round_id": str(payload.get("round_id", _round_id)), "generation": int(payload.get("lobby_generation", room_state.get("lobby_generation", -1))), "manifest_hash": str(payload.get("manifest_hash", ""))})
 		var packet := _session_envelope()
 		packet.merge(payload, true)
 		rpc_endpoint.send_control(peer_id, kind, packet)
@@ -634,10 +692,10 @@ func _on_control_rpc(sender_peer_id: int, kind: String, payload: Dictionary) -> 
 		return
 	var packet_error := _packet_session_error(payload, kind in ["PREPARE_ROUND", "PREPARE_REJECTED", "RETURN_TO_LOBBY"])
 	if not packet_error.is_empty():
-		diagnostics.record_event("control_rejected", {"peer_id": sender_peer_id, "kind": kind, "reason": packet_error})
+		diagnostics.record_event("control_rejected", {"peer_id": sender_peer_id, "kind": kind, "reason": packet_error, "round_id": str(payload.get("round_id", "")), "generation": int(payload.get("lobby_generation", -1)), "manifest_hash": str(payload.get("manifest_hash", ""))})
 		return
 	if str(session.get("role", "")) == "host":
-		if sender_peer_id != 1 and (not _is_roster_peer(sender_peer_id) or kind not in ["PREPARED", "PREPARE_REJECTED", "START_ACK", "CLOCK_PING", "HEARTBEAT", "WORLD_EVENT_ACK", "RESULT_ACK", "TERMINAL_ACK", "WORLD_HASH"]):
+		if sender_peer_id != 1 and (not _is_roster_peer(sender_peer_id) or kind not in ["PREPARE_RECEIVED", "PREPARED", "PREPARE_REJECTED", "START_ACK", "CLOCK_PING", "HEARTBEAT", "WORLD_EVENT_ACK", "RESULT_ACK", "TERMINAL_ACK", "WORLD_HASH"]):
 			diagnostics.record_event("control_rejected", {"peer_id": sender_peer_id, "kind": kind, "reason": "sender_or_kind_not_allowed"})
 			return
 		_handle_host_control(sender_peer_id, kind, payload)
@@ -654,9 +712,14 @@ func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary
 			var reason := str(payload.get("reason", "guest_rejected_prepare"))
 			diagnostics.record_event("prepare_rejected_by_guest", {"peer_id": sender_peer_id, "round_id": _round_id, "reason": reason})
 			_round_coordinator.cancel("guest_prepare_rejected:%s" % reason)
+		"PREPARE_RECEIVED":
+			diagnostics.record_event("prepare_rpc_ack_received", {"peer_id": sender_peer_id, "round_id": _round_id})
+			_round_coordinator.acknowledge_prepare_received(sender_peer_id, _round_id)
 		"PREPARED":
+			diagnostics.record_event("scene_ready_received", {"peer_id": sender_peer_id, "round_id": _round_id})
 			_round_coordinator.acknowledge_prepared(sender_peer_id, _round_id, Time.get_ticks_usec())
 		"START_ACK":
+			diagnostics.record_event("start_ack_received", {"peer_id": sender_peer_id, "round_id": _round_id})
 			_round_coordinator.acknowledge_start(sender_peer_id, _round_id, Time.get_ticks_usec())
 		"CLOCK_PING":
 			var received := Time.get_ticks_usec()
@@ -680,25 +743,41 @@ func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary
 func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 	match kind:
 		"PREPARE_ROUND":
+			diagnostics.session["round_id"] = str(payload.get("round_id", ""))
+			diagnostics.record_event("prepare_rpc_received", {"round_id": str(payload.get("round_id", "")), "generation": int(payload.get("lobby_generation", -1)), "manifest_hash": str(payload.get("manifest_hash", "")), "sender_peer_id": 1})
 			var incoming_generation := int(payload.get("lobby_generation", -1))
 			var current_generation := int(room_state.get("lobby_generation", -2))
-			if str(payload.get("manifest_hash", "")) != str(room_state.get("manifest_hash", "")) or incoming_generation < current_generation or incoming_generation > current_generation + 1:
-				send_control(1, "PREPARE_REJECTED", {"round_id": str(payload.get("round_id", "")), "reason": "room_revision_mismatch"})
+			var reject_reason := ""
+			if str(payload.get("manifest_hash", "")) != str(room_state.get("manifest_hash", "")):
+				reject_reason = "manifest_hash_mismatch"
+			elif incoming_generation < current_generation or incoming_generation > current_generation + 1:
+				reject_reason = "room_generation_mismatch"
+			else:
+				reject_reason = _validate_round_descriptor(payload)
+			if not reject_reason.is_empty():
+				diagnostics.record_event("prepare_rpc_rejected", {"round_id": str(payload.get("round_id", "")), "reason": reject_reason, "incoming_generation": incoming_generation, "current_generation": current_generation, "incoming_manifest_hash": str(payload.get("manifest_hash", "")), "local_manifest_hash": str(room_state.get("manifest_hash", ""))})
+				send_control(1, "PREPARE_REJECTED", {"round_id": str(payload.get("round_id", "")), "reason": reject_reason})
 				return
 			room_state["lobby_generation"] = incoming_generation
 			room_state["phase"] = "PREPARING_COURSE"
 			_round_id = str(payload.get("round_id", ""))
 			session["round_id"] = _round_id
+			diagnostics.session["round_id"] = _round_id
 			session["roster_revision"] = incoming_generation
 			var descriptor := payload.duplicate(true)
-			descriptor.merge({"room_id": str(room_state.get("room_id", "")), "room_session_id": str(room_state.get("room_session_id", "")), "seed": int(room_state.get("seed", 1)), "course_length_px": int(room_state.get("course_length_px", 45000)), "players": room_state.get("members", []).duplicate(true)}, true)
 			if _round_coordinator.receive_prepare_as_guest(descriptor):
-				round_prepare_requested.emit(descriptor)
+				diagnostics.record_event("prepare_rpc_accepted", {"round_id": _round_id, "generation": incoming_generation, "manifest_hash": str(payload.get("manifest_hash", "")), "local_peer_id": int(session.get("local_peer_id", -1))})
+				send_control(1, "PREPARE_RECEIVED", {"round_id": _round_id})
+				if _prepare_scene_requested_round_id != _round_id:
+					_prepare_scene_requested_round_id = _round_id
+					round_prepare_requested.emit(descriptor)
 			else:
 				diagnostics.record_event("prepare_rejected_locally", {"round_id": str(payload.get("round_id", "")), "reason": "coordinator_busy", "state": _round_coordinator.state, "current_round_id": _round_coordinator.round_id, "incoming_generation": incoming_generation, "current_generation": _round_coordinator.lobby_generation})
 				send_control(1, "PREPARE_REJECTED", {"round_id": str(payload.get("round_id", "")), "reason": "coordinator_busy"})
 		"COMMIT_START":
-			if not _round_coordinator.receive_commit_as_guest(payload):
+			var commit_accepted := _round_coordinator.receive_commit_as_guest(payload)
+			diagnostics.record_event("commit_start_received", {"round_id": str(payload.get("round_id", "")), "accepted": commit_accepted, "coordinator_state": _round_coordinator.state, "clock_synchronized": _round_coordinator.clock.is_synchronized(), "start_at_host_usec": int(payload.get("start_at_host_usec", -1))})
+			if not commit_accepted:
 				round_failed.emit("The start commit was invalid or the guest clock is not synchronized.")
 		"CANCEL_START":
 			_round_coordinator.cancel(str(payload.get("reason", "host_cancelled")))
@@ -761,6 +840,10 @@ func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 func mark_local_prepared() -> void:
 	if not _active or _round_id.is_empty():
 		return
+	if not _validate_local_peer_mapping("scene_ready"):
+		_round_coordinator.cancel("peer_mapping_mismatch")
+		return
+	diagnostics.record_event("local_scene_ready", {"round_id": _round_id, "manifest_hash": str(current_manifest.manifest_hash) if current_manifest != null else "", "player_nodes": get_active_round_roster().size(), "world_entities": world_simulation.entity_ledger.entities.size() if world_simulation != null else 0})
 	_local_prepare_pending = true
 	if _round_coordinator.is_host or _round_coordinator.clock.is_synchronized():
 		_local_prepare_pending = false
@@ -785,6 +868,9 @@ func configure_world_simulation(world: MultiplayerV2WorldSimulation) -> void:
 
 func submit_local_terminal(state_name: String, reason: String, tick_value: int, world_x: float, y: float) -> void:
 	if state_name not in ["dead", "finished"] or _round_id.is_empty():
+		return
+	if not _validate_local_peer_mapping("terminal"):
+		_round_coordinator.cancel("peer_mapping_mismatch")
 		return
 	var report := _session_envelope()
 	report.merge({"owner_peer_id": int(session.get("local_peer_id", 1)), "simulation_tick": tick_value, "state": state_name, "reason": reason, "world_x": world_x, "y": y, "event_id": "%s:%d:%s" % [_round_id, int(session.get("local_peer_id", 1)), state_name]}, true)
@@ -929,6 +1015,58 @@ func _on_coordinator_round_failed(reason: String) -> void:
 	round_failed.emit(reason)
 	if is_room_owner() and has_room() and str(room_state.get("phase", "")) in ["PREPARING_COURSE", "RUNNING"]:
 		call_deferred("return_to_lobby")
+
+func _on_coordinator_prepare_received() -> void:
+	diagnostics.record_event("all_prepare_rpcs_received", {"round_id": _round_id})
+	if _prepare_scene_requested_round_id != _round_id:
+		_prepare_scene_requested_round_id = _round_id
+		round_prepare_requested.emit(_round_coordinator.round_descriptor.duplicate(true))
+
+func _peer_map_for_roster(roster: Array) -> Dictionary:
+	var peer_map := {}
+	for member_value in roster:
+		if member_value is Dictionary:
+			var member: Dictionary = member_value
+			peer_map[str(member.get("player_slot", -1))] = str(member.get("user_id", ""))
+	return peer_map
+
+func _validate_round_descriptor(descriptor: Dictionary) -> String:
+	var round := str(descriptor.get("round_id", ""))
+	var members: Variant = descriptor.get("players", null)
+	var peer_map: Variant = descriptor.get("peer_map", null)
+	if round.is_empty():
+		return "round_id_missing"
+	if str(descriptor.get("room_id", "")).is_empty():
+		return "room_id_missing"
+	if str(descriptor.get("room_session_id", "")).is_empty():
+		return "room_session_id_missing"
+	if not members is Array or members.is_empty():
+		return "player_roster_missing"
+	if not peer_map is Dictionary or peer_map.size() != members.size():
+		return "peer_map_size_mismatch"
+	for member_value in members:
+		if not member_value is Dictionary:
+			return "invalid_roster_member"
+		var member: Dictionary = member_value
+		var peer_id := int(member.get("player_slot", -1))
+		if peer_id < 1 or peer_id > MAX_PLAYERS:
+			return "invalid_player_slot:%s" % str(member.get("display_name", "runner"))
+		if str(member.get("user_id", "")).is_empty():
+			return "user_id_missing_for_slot:%d" % peer_id
+		if str(peer_map.get(str(peer_id), "")) != str(member.get("user_id", "")):
+			return "peer_map_mismatch_for_slot:%d" % peer_id
+	return ""
+
+func _validate_local_peer_mapping(stage: String) -> bool:
+	if not _active or network_api == null:
+		return false
+	var network_peer_id := network_api.get_unique_id()
+	var local_peer_id := int(session.get("local_peer_id", -1))
+	var member := _member_for_user(identity_user_id)
+	var member_slot := int(member.get("player_slot", -1))
+	var valid := local_peer_id == network_peer_id and (str(session.get("role", "")) == "host" and local_peer_id == 1 and member_slot == 1 or str(session.get("role", "")) == "guest" and local_peer_id == member_slot and member_slot >= 2 and member_slot <= MAX_PLAYERS)
+	diagnostics.record_event("peer_mapping_check", {"stage": stage, "valid": valid, "session_peer_id": local_peer_id, "network_peer_id": network_peer_id, "member_slot": member_slot})
+	return valid
 
 func return_to_lobby() -> void:
 	if is_room_owner() and has_room():

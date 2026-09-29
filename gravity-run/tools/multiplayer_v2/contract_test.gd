@@ -10,8 +10,18 @@ const CourseGenerator := preload("res://systems/course_generator.gd")
 const World := preload("res://systems/multiplayer_v2/v2_world_simulation.gd")
 const Runner := preload("res://systems/multiplayer_v2/v2_local_runner.gd")
 const Coordinator := preload("res://systems/multiplayer_v2/v2_round_coordinator.gd")
+const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_export.gd")
 
 func _initialize() -> void:
+	var oversized_report := {"session": {"round_id": "export-test"}, "frames": [], "events": []}
+	var large_frame_data := "x".repeat(256 * 1024)
+	for _index in 40:
+		oversized_report.frames.append({"sample": large_frame_data})
+	var bounded_report: Dictionary = DiagnosticsExport.prepare_report(oversized_report)
+	_assert(bool(bounded_report.get("export_truncated", false)), "oversized diagnostics explicitly record export truncation")
+	_assert(JSON.stringify(bounded_report).to_utf8_buffer().size() <= DiagnosticsExport.MAX_EXPORT_BYTES, "diagnostics export stays within the browser download size limit")
+	_assert(bounded_report.frames.size() < oversized_report.frames.size(), "diagnostics export trims the oldest frame samples first")
+
 	var expected := {"room_id": "room", "room_session_id": "session", "lobby_generation": 4, "round_id": "round"}
 	var envelope: Dictionary = Protocol.envelope("room", "session", 4, "round", "SAMPLE", 2, 1, {"world_x": 10.0})
 	_assert(Protocol.validate_envelope(envelope, expected).is_empty(), "protocol accepts matching room/session/generation")
@@ -27,9 +37,21 @@ func _initialize() -> void:
 	_assert(clock.advance(Clock.FIXED_DELTA * 3.0) == 3, "clock advances fixed simulation ticks")
 	var host_coordinator = Coordinator.new()
 	var started := [false]
+	var prepare_scene_requested := [false]
+	var sent_prepare: Dictionary = {}
 	host_coordinator.round_started.connect(func(_round_id: String, _descriptor: Dictionary) -> void: started[0] = true)
-	var round_descriptor := {"round_id": "barrier-round", "lobby_generation": 5, "manifest_hash": "hash"}
+	host_coordinator.all_prepare_received.connect(func() -> void: prepare_scene_requested[0] = true)
+	host_coordinator.control_requested.connect(func(_peer_id: int, kind: String, payload: Dictionary) -> void:
+		if kind == "PREPARE_ROUND": sent_prepare.merge(payload, true)
+	)
+	var round_descriptor := {"round_id": "barrier-round", "lobby_generation": 5, "manifest_hash": "hash", "seed": 4321, "players": [{"user_id": "host", "player_slot": 1}, {"user_id": "guest", "player_slot": 2}], "peer_map": {"1": "host", "2": "guest"}}
 	_assert(host_coordinator.prepare_as_host(round_descriptor, [2, 3], 3_000_000), "host starts round prepare")
+	_assert(sent_prepare.get("players", []).size() == 2 and sent_prepare.get("peer_map", {}).get("2", "") == "guest", "prepare RPC carries the host-frozen roster and peer map")
+	_assert(not prepare_scene_requested[0], "host waits for every guest to receive the frozen descriptor before changing scenes")
+	host_coordinator.acknowledge_prepare_received(2, "barrier-round")
+	_assert(not prepare_scene_requested[0], "one prepare receipt cannot move the host scene")
+	host_coordinator.acknowledge_prepare_received(3, "barrier-round")
+	_assert(prepare_scene_requested[0], "host moves to the match only after every guest confirms prepare receipt")
 	host_coordinator.mark_local_prepared(3_000_001)
 	_assert(host_coordinator.state == Coordinator.State.PREPARING, "start barrier waits for remote prepared acknowledgements")
 	host_coordinator.acknowledge_prepared(2, "barrier-round", 3_000_002)
@@ -108,7 +130,9 @@ func _initialize() -> void:
 		_assert(first.state_hash() == second.state_hash(), "world hashes match at same tick/revision")
 
 	var owner = Runner.new()
-	owner.configure("round", 2, 100.0, 460.0)
+	owner.configure("round", 2, 100.0, 460.0, {"run_speed_percent": 10200, "flip_cooldown_percent": 9500})
+	_assert(is_equal_approx(owner.run_speed_multiplier, 1.02), "V2 freezes the same resolved run speed multiplier as other game modes")
+	_assert(is_equal_approx(owner.flip_cooldown_multiplier, 0.95), "V2 freezes the same resolved flip cooldown as other game modes")
 	var before_x := float(owner.player_state.world_x)
 	owner.step(0, 460.0, 80.0)
 	var local_after := float(owner.player_state.world_x)
