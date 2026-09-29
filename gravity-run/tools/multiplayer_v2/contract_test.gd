@@ -23,6 +23,16 @@ func _initialize() -> void:
 	_assert(V2Service.room_snapshot_rejection_reason({"room_id": "room", "room_session_id": "session", "lobby_generation": 5, "phase": "PREPARING_COURSE"}, {"room_id": "room", "room_session_id": "session", "lobby_generation": 4, "phase": "OPEN"}, "refresh_room") == "older_generation", "stale room polling cannot roll back a newer generation")
 	_assert(V2Service.room_snapshot_rejection_reason({"room_id": "room", "room_session_id": "session", "lobby_generation": 5, "phase": "PREPARING_COURSE"}, {"room_id": "room", "room_session_id": "session", "lobby_generation": 5, "phase": "OPEN"}, "refresh_room") == "phase_regression", "room polling cannot regress phase within one generation")
 	_assert(V2Service.room_snapshot_rejection_reason({"room_id": "room", "room_session_id": "session", "lobby_generation": 5, "phase": "PREPARING_COURSE"}, {"room_id": "room", "room_session_id": "session", "lobby_generation": 6, "phase": "OPEN"}, "refresh_room").is_empty(), "a newer return-to-lobby generation can reopen the room")
+	var lobby_snapshot := {"room_id": "room", "room_session_id": "session", "lobby_generation": 6, "phase": "OPEN"}
+	_assert(V2Service.should_apply_return_to_lobby(lobby_snapshot, lobby_snapshot), "duplicate return-to-lobby packet is idempotently accepted at the same generation")
+	_assert(not V2Service.should_apply_return_to_lobby(lobby_snapshot, {"room_id": "room", "room_session_id": "session", "lobby_generation": 5, "phase": "OPEN"}), "old return-to-lobby packet cannot regress a newer lobby")
+	_assert(not V2Service.should_apply_return_to_lobby(lobby_snapshot, {"room_id": "room", "room_session_id": "other-session", "lobby_generation": 7, "phase": "OPEN"}), "return-to-lobby packet from another room session is rejected")
+	var diagnostics = preload("res://systems/multiplayer_v2/v2_diagnostics.gd").new()
+	var event_unix_before := int(Time.get_unix_time_from_system() * 1_000_000.0)
+	diagnostics.record_event("utc-test")
+	var event_unix := int(diagnostics.events.back().at_unix_usec)
+	var event_unix_after := int(Time.get_unix_time_from_system() * 1_000_000.0)
+	_assert(event_unix >= event_unix_before and event_unix <= event_unix_after, "diagnostic UTC uses wall-clock microseconds without monotonic-clock offset")
 
 	var oversized_report := {"session": {"round_id": "export-test"}, "frames": [], "events": []}
 	var large_frame_data := "x".repeat(256 * 1024)
@@ -50,13 +60,19 @@ func _initialize() -> void:
 	var started := [false]
 	var prepare_scene_requested := [false]
 	var sent_prepare: Dictionary = {}
+	var prepare_targets: Array[int] = []
 	host_coordinator.round_started.connect(func(_round_id: String, _descriptor: Dictionary) -> void: started[0] = true)
 	host_coordinator.all_prepare_received.connect(func() -> void: prepare_scene_requested[0] = true)
-	host_coordinator.control_requested.connect(func(_peer_id: int, kind: String, payload: Dictionary) -> void:
-		if kind == "PREPARE_ROUND": sent_prepare.merge(payload, true)
+	host_coordinator.control_requested.connect(func(peer_id: int, kind: String, payload: Dictionary) -> void:
+		if kind == "PREPARE_ROUND":
+			sent_prepare.merge(payload, true)
+			prepare_targets.append(peer_id)
 	)
 	var round_descriptor := {"round_id": "barrier-round", "lobby_generation": 5, "manifest_hash": "hash", "seed": 4321, "players": [{"user_id": "host", "player_slot": 1}, {"user_id": "guest", "player_slot": 2}], "peer_map": {"1": "host", "2": "guest"}}
-	_assert(host_coordinator.prepare_as_host(round_descriptor, [2, 3], 3_000_000), "host starts round prepare")
+	var production_peers: Array[int] = V2Service._typed_peer_ids_from_packed(PackedInt32Array([2, 3]))
+	_assert(production_peers.is_typed(), "production peer conversion preserves Array[int] at service boundary")
+	_assert(host_coordinator.prepare_as_host(round_descriptor, production_peers, 3_000_000), "service-converted peer array starts host round prepare")
+	_assert(prepare_targets == [2, 3], "service-converted peer array sends prepare to the exact connected peer IDs")
 	_assert(sent_prepare.get("players", []).size() == 2 and sent_prepare.get("peer_map", {}).get("2", "") == "guest", "prepare RPC carries the host-frozen roster and peer map")
 	_assert(not prepare_scene_requested[0], "host waits for every guest to receive the frozen descriptor before changing scenes")
 	host_coordinator.acknowledge_prepare_received(2, "barrier-round")
@@ -72,6 +88,29 @@ func _initialize() -> void:
 	host_coordinator.acknowledge_start(3, "barrier-round", 3_000_005)
 	host_coordinator.process(host_coordinator.host_start_usec + 1)
 	_assert(started[0], "round starts after host time anchor and start acknowledgements")
+
+	var solo_coordinator = Coordinator.new()
+	var solo_prepare_sends := [0]
+	solo_coordinator.control_requested.connect(func(_peer_id: int, kind: String, _payload: Dictionary) -> void:
+		if kind == "PREPARE_ROUND": solo_prepare_sends[0] += 1
+	)
+	var solo_peers: Array[int] = V2Service._typed_peer_ids_from_packed(PackedInt32Array())
+	_assert(solo_peers.is_typed() and solo_peers.is_empty(), "production peer conversion supports typed empty solo roster")
+	_assert(solo_coordinator.prepare_as_host({"round_id": "solo-round"}, solo_peers, 4_000_000), "solo host can prepare through production peer conversion")
+	_assert(solo_prepare_sends[0] == 0 and solo_coordinator.state == Coordinator.State.PREPARING, "solo prepare sends no guest RPC while its scene loads")
+	solo_coordinator.mark_local_prepared(4_000_001)
+	_assert(solo_coordinator.state == Coordinator.State.COMMITTING, "solo host advances to commit after the local scene is prepared")
+
+	var guest_cancel_coordinator = Coordinator.new()
+	var guest_cancel_packets: Array[String] = []
+	guest_cancel_coordinator.control_requested.connect(func(_peer_id: int, kind: String, _payload: Dictionary) -> void: guest_cancel_packets.append(kind))
+	_assert(guest_cancel_coordinator.receive_prepare_as_guest({"round_id": "abort-round", "attempt_id": "abort-attempt", "lobby_generation": 9}), "guest accepts descriptor before preparing-failure test")
+	guest_cancel_coordinator.cancel("scene_missing", "match_scene_ready")
+	_assert(guest_cancel_packets == ["PREPARE_FAILED"], "guest reports prepare failure using PREPARE_FAILED")
+	guest_cancel_packets.clear()
+	guest_cancel_coordinator.state = Coordinator.State.PREPARING
+	guest_cancel_coordinator.cancel("host_cancelled", "host_cancelled", false)
+	_assert(guest_cancel_packets.is_empty(), "guest does not echo host cancellation back to the host")
 
 	var retry_coordinator = Coordinator.new()
 	var prepare_sends := [0]

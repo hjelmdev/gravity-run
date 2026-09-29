@@ -113,14 +113,15 @@ func process(now_usec: int) -> void:
 		elif not is_host and now_usec >= clock.host_time_to_local_usec(host_start_usec):
 			_start()
 
-func cancel(reason: String) -> void:
+func cancel(reason: String, failure_phase: String = "coordinator", notify_peer: bool = true) -> void:
 	state = State.CANCELLED
-	var payload := {"round_id": round_id, "reason": reason}
-	if is_host:
+	var payload := _control_payload()
+	payload.merge({"attempt_id": str(round_descriptor.get("attempt_id", "")), "round_id": round_id, "reason": reason, "phase": failure_phase}, true)
+	if is_host and notify_peer:
 		for peer_id in peer_ids:
 			control_requested.emit(peer_id, "CANCEL_START", payload)
-	else:
-		control_requested.emit(1, "CANCEL_START", payload)
+	elif not is_host and notify_peer:
+		control_requested.emit(1, "PREPARE_FAILED", payload)
 	round_failed.emit(reason)
 
 func reset_for_lobby() -> void:

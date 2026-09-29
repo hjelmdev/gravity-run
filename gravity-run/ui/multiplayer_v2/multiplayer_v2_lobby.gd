@@ -447,6 +447,7 @@ func _on_round_prepare_requested(_descriptor: Dictionary) -> void:
 
 func _download_diagnostics() -> void:
 	var report := MultiplayerV2Service.diagnostics.export_report()
+	report["current_state"] = MultiplayerV2Service.current_diagnostic_state()
 	_status.text = DiagnosticsExport.save_report(report, DiagnosticsExport.make_filename(report, "lobby"))
 
 func _name_value() -> String:

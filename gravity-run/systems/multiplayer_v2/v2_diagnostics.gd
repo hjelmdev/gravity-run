@@ -31,7 +31,7 @@ func record_event(event_name: String, details: Dictionary = {}) -> void:
 	if events.size() >= MAX_EVENTS:
 		events.pop_front()
 		dropped_events += 1
-	events.append({"at_usec": Time.get_ticks_usec(), "at_unix_usec": Time.get_unix_time_from_system() * 1_000_000 + Time.get_ticks_usec() % 1_000_000, "round_id": str(session.get("round_id", "")), "name": event_name, "details": details.duplicate(true)})
+	events.append({"at_usec": Time.get_ticks_usec(), "at_unix_usec": int(Time.get_unix_time_from_system() * 1_000_000.0), "round_id": str(session.get("round_id", "")), "name": event_name, "details": details.duplicate(true)})
 
 func increment_metric(name: String, amount: int = 1) -> void:
 	metrics[name] = int(metrics.get(name, 0)) + amount

@@ -7,6 +7,7 @@ const PlayerScene := preload("res://player/player.tscn")
 const Motion := preload("res://systems/runner_motion.gd")
 const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_export.gd")
 const CoursePresentationScript := preload("res://systems/race_course_presentation.gd")
+const RoundCoordinatorScript := preload("res://systems/multiplayer_v2/v2_round_coordinator.gd")
 
 const FIXED_DELTA := 1.0 / 60.0
 const CAMERA_PLAYER_X := 250.0
@@ -17,6 +18,7 @@ var _runner
 var _world
 var _round_id := ""
 var _round_started := false
+var _round_aborted := false
 var _world_tick := 0
 var _accumulator := 0.0
 var _pending_flip_direction := 0
@@ -41,6 +43,7 @@ var _touch_index := -1
 
 func _ready() -> void:
 	set_process_unhandled_input(true)
+	MultiplayerV2Service.room_changed.connect(_on_room_changed_for_abort)
 	_manifest = MultiplayerV2Service.current_manifest
 	_round_id = str(MultiplayerV2Service.session.get("round_id", ""))
 	if _manifest == null:
@@ -309,10 +312,18 @@ func _on_results_received(result: Dictionary) -> void:
 	_status_label.text = tr("The host confirmed the result.")
 
 func _on_round_failed(reason: String) -> void:
+	_round_aborted = true
 	_round_started = false
 	_result_panel.visible = true
 	_result_text.clear()
 	_result_text.append_text("[center][b]V2 round aborted[/b][/center]\n\n%s" % reason)
+	_on_room_changed_for_abort(MultiplayerV2Service.room_state)
+
+func _on_room_changed_for_abort(room: Dictionary) -> void:
+	if not _round_aborted or str(room.get("phase", "")) != "OPEN":
+		return
+	AppNavigation.request_multiplayer_v2_lobby()
+	get_tree().change_scene_to_file("res://ui/main_menu.tscn")
 
 func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 	if round_id != _round_id:
@@ -467,6 +478,7 @@ func _return_to_lobby() -> void:
 
 func _save_diagnostics() -> void:
 	var report := MultiplayerV2Service.diagnostics.export_report()
+	report["current_state"] = MultiplayerV2Service.current_diagnostic_state()
 	_status_label.text = DiagnosticsExport.save_report(report, DiagnosticsExport.make_filename(report, "match"))
 
 func _leave_v2() -> void:
@@ -475,11 +487,15 @@ func _leave_v2() -> void:
 	get_tree().change_scene_to_file("res://ui/main_menu.tscn")
 
 func _show_failure(message: String) -> void:
+	if _round_started or MultiplayerV2Service._round_coordinator.state in [RoundCoordinatorScript.State.PREPARING, RoundCoordinatorScript.State.COMMITTING]:
+		_round_aborted = true
+		MultiplayerV2Service.report_local_prepare_failure(message, "match_scene_ready")
 	var label := Label.new()
 	label.text = message
 	label.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	add_child(label)
+	_on_room_changed_for_abort(MultiplayerV2Service.room_state)
 
 func status_style(label: Label) -> void:
 	label.add_theme_color_override("font_color", Color("edf3ff"))
