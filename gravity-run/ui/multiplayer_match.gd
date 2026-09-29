@@ -123,6 +123,9 @@ var _results_panel: PanelContainer
 var _results_frame_event_pending := false
 var _results_list: VBoxContainer
 var _return_lobby_button: Button
+const CameraScript := preload("res://systems/runner_camera.gd")
+var _render_camera: Camera2D
+var _host_render_snapshot: Dictionary = {}
 var _course_root: Node2D
 var _course_presentation: Node2D
 var _touch_index := -1
@@ -163,6 +166,8 @@ func _ready() -> void:
 	_local_user_id = MultiplayerService.identity_user_id
 	_owner_user_id = str(MultiplayerService.room_state.get("owner_user_id", ""))
 	_manifest = MultiplayerService.course_manifest
+	_render_camera = CameraScript.new()
+	add_child(_render_camera)
 	_course_root = Node2D.new()
 	_course_root.name = "SharedCourse"
 	add_child(_course_root)
@@ -344,6 +349,7 @@ func _process(delta: float) -> void:
 	_update_hud()
 	_update_authority_health(delta)
 	_camera_left_before_frame = _camera_left_cached
+	_host_render_snapshot = _simulation.get_render_snapshot() if MultiplayerService.is_room_owner() else {}
 	_refresh_camera_state()
 	_camera_delta_x_frame = _camera_left_cached - _camera_left_before_frame
 	_sync_player_views()
@@ -1767,14 +1773,16 @@ func _build_course_view() -> void:
 		_show_failure(tr("The shared race presentation failed: %s") % error)
 
 func _sync_course_view() -> void:
-	var world_hazards: Variant = _snapshot.get("world_hazards", {})
+	var world_hazards: Variant = _host_render_snapshot.get("world_hazards", _snapshot.get("world_hazards", {}))
 	if not world_hazards is Dictionary:
 		return
 	_course_presentation.call("set_world_state", world_hazards)
 
 func _sync_player_views() -> void:
 	var camera_left := _camera_left()
-	_course_root.position.x = -camera_left
+	if _render_camera != null:
+		_render_camera.configure(get_viewport_rect().size, CAMERA_LEAD)
+		_render_camera.follow(Vector2(camera_left + CAMERA_LEAD, 0.0), true)
 	_course_presentation.call("set_camera_left", camera_left)
 	_sync_course_view()
 	var states: Variant = _snapshot.get("players", [])
@@ -1841,6 +1849,10 @@ func _sync_player_views() -> void:
 		MultiplayerDiagnostics.record_start_sample({"frame_id": _render_frame_index, "sample_monotonic_usec": Time.get_ticks_usec(), "camera_left_before_frame": _camera_left_before_frame, "camera_left": camera_left, "camera_delta_x_frame": _camera_delta_x_frame, "snapshot_render_tick": _snapshot_render_tick, "remote_render_target_tick": _remote_render_target_tick, "remote_render_rate": _remote_render_rate, "remote_render_state": _remote_render_clock_state, "remote_sample_state": _remote_position_sample_state, "remote_sample_from_tick": _remote_position_sample_from_tick, "remote_sample_to_tick": _remote_position_sample_to_tick, "remote_sample_tick": _remote_position_sample_tick, "remote_render_clock_delta": _remote_render_clock_delta, "remote_position_hold_duration_ms": _remote_position_hold_duration_msec, "remote_buffer_headroom_ticks": float(_snapshot_buffer.back().get("tick", 0)) - _snapshot_render_tick if not _snapshot_buffer.is_empty() else -1.0, "authority_tick": _last_authoritative_tick, "simulation_tick": int(_simulation.get("tick")), "local_render_tick": _local_render_clock_tick, "local_render_clock_delta": _local_render_clock_delta, "render_frame_delta_seconds": _render_frame_delta_seconds, "local_render_history_start_tick": local_history_start, "local_render_history_end_tick": local_history_end, "local_render_phase_covered": bool(local_coverage.get("covered", false)), "local_render_resync_count": _local_render_resync_count, "visual_correction_before_frame": _visual_correction_before_frame, "visual_correction_after_frame": _visual_correction, "visual_correction_delta_frame": _visual_correction - _visual_correction_before_frame, "visual_correction": _visual_correction, "players": sample_players})
 
 func _visual_player_position(state: Dictionary, _states: Array) -> Vector2:
+	if MultiplayerService.is_room_owner():
+		for rendered in _host_render_snapshot.get("players", []):
+			if str(rendered.get("user_id", "")) == str(state.get("user_id", "")):
+				return Vector2(float(rendered.get("world_x", 0.0)), float(rendered.get("y", 0.0)))
 	# Roster spacing moved sprites away from their collision positions, making
 	# wall contact look like a collision with another runner.
 	return Vector2(float(state.get("world_x", 0.0)), float(state.get("y", 0.0)))
@@ -1951,6 +1963,8 @@ func _authoritative_result_snapshot() -> Dictionary:
 func _local_render_position() -> Vector2:
 	var local_state: Dictionary = _simulation.get_player(_local_user_id) if _simulation != null else {}
 	var current := Vector2(float(local_state.get("world_x", 180.0)), float(local_state.get("y", 0.0)))
+	if MultiplayerService.is_room_owner():
+		current = _visual_player_position(local_state, [])
 	if not MultiplayerService.is_room_owner() and not _local_render_history.is_empty():
 		current = interpolate_local_render_position(_local_render_history, _local_render_tick())
 	return current + _visual_correction
@@ -2358,8 +2372,8 @@ func _leave_match() -> void:
 
 func _draw() -> void:
 	var view_size := get_viewport_rect().size
-	draw_rect(Rect2(Vector2.ZERO, view_size), Color("101827"))
 	var camera_left := _camera_left()
+	draw_rect(Rect2(Vector2(camera_left, 0.0), view_size), Color("101827"))
 	for index in range(18):
 		var star_x := fposmod(float(index * 83) + camera_left * 0.12, view_size.x)
-		draw_circle(Vector2(star_x, 58.0 + float((index * 47) % 390)), 1.5, Color("26364b"))
+		draw_circle(Vector2(camera_left + star_x, 58.0 + float((index * 47) % 390)), 1.5, Color("26364b"))

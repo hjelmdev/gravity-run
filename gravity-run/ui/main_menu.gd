@@ -1535,6 +1535,9 @@ func _clear_menu_panel() -> void:
 	if is_instance_valid(_multiplayer_lobby):
 		_multiplayer_lobby.queue_free()
 		_multiplayer_lobby = null
+	if is_instance_valid(_multiplayer_v2_lobby):
+		_multiplayer_v2_lobby.queue_free()
+		_multiplayer_v2_lobby = null
 	if is_instance_valid(_inventory_screen):
 		_inventory_screen.queue_free()
 		_inventory_screen = null

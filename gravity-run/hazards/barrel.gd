@@ -7,6 +7,20 @@ var roll_angle := 0.0
 var fall_velocity := 0.0
 var is_falling := false
 var motion_speed_multiplier := 1.0
+var _local_render_motion := false
+var _previous_position := Vector2.ZERO
+var _previous_rotation := 0.0
+var _previous_roll := 0.0
+
+func _process(delta: float) -> void:
+	if is_destroying:
+		super._process(delta)
+	elif _local_render_motion:
+		queue_redraw()
+
+func freeze_render_motion() -> void:
+	_local_render_motion = false
+	queue_redraw()
 
 func configure(new_size: Vector2, attach_to_ceiling: bool) -> void:
 	super.configure(new_size, attach_to_ceiling)
@@ -29,6 +43,11 @@ func apply_replicated_motion(new_position: Vector2, new_roll_angle: float, new_r
 func advance_motion(delta: float, movement: float, _player_position: Vector2, floor_y_at: Callable, surface_angle_at: Callable, surface_supported_at: Callable = Callable()) -> void:
 	if is_destroying:
 		return
+	_local_render_motion = true
+	set_process(true)
+	_previous_position = position
+	_previous_rotation = rotation
+	_previous_roll = roll_angle
 	var state := {
 		"x": position.x,
 		"y": position.y,
@@ -62,16 +81,23 @@ func _draw() -> void:
 	if is_destroying:
 		_draw_destruction_fragments()
 		return
+	var rendered_roll := roll_angle
+	if _local_render_motion:
+		var fraction := Engine.get_physics_interpolation_fraction()
+		var rendered_position := _previous_position.lerp(position, fraction)
+		draw_set_transform((rendered_position - position).rotated(-rotation), lerp_angle(_previous_rotation, rotation, fraction) - rotation)
+		rendered_roll = lerpf(_previous_roll, roll_angle, fraction)
 	var radius := HazardRules.barrel_radius(size.x, size.y)
 	var center_y := radius if from_ceiling else -radius
 	draw_circle(Vector2(0.0, center_y), radius, Color("d98245"))
 	draw_arc(Vector2(0.0, center_y), radius - 8.0, 0.0, TAU, 24, Color("743e35"), 4.0)
-	var first_start := Vector2(-radius * 0.55, -radius * 0.45).rotated(roll_angle) + Vector2(0.0, center_y)
-	var first_end := Vector2(radius * 0.55, radius * 0.45).rotated(roll_angle) + Vector2(0.0, center_y)
-	var second_start := Vector2(radius * 0.55, -radius * 0.45).rotated(roll_angle) + Vector2(0.0, center_y)
-	var second_end := Vector2(-radius * 0.55, radius * 0.45).rotated(roll_angle) + Vector2(0.0, center_y)
+	var first_start := Vector2(-radius * 0.55, -radius * 0.45).rotated(rendered_roll) + Vector2(0.0, center_y)
+	var first_end := Vector2(radius * 0.55, radius * 0.45).rotated(rendered_roll) + Vector2(0.0, center_y)
+	var second_start := Vector2(radius * 0.55, -radius * 0.45).rotated(rendered_roll) + Vector2(0.0, center_y)
+	var second_end := Vector2(-radius * 0.55, radius * 0.45).rotated(rendered_roll) + Vector2(0.0, center_y)
 	draw_line(first_start, first_end, Color("743e35"), 4.0)
 	draw_line(second_start, second_end, Color("743e35"), 4.0)
+	draw_set_transform(Vector2.ZERO)
 
 func intersects_rect(rect: Rect2) -> bool:
 	var radius := HazardRules.barrel_radius(size.x, size.y)

@@ -7,7 +7,7 @@ signal terminal_report_received(peer_id: int, report: Dictionary)
 signal world_interaction_received(peer_id: int, request: Dictionary)
 signal control_received(peer_id: int, kind: String, payload: Dictionary)
 
-@rpc("any_peer", "call_remote", "unreliable_ordered", 1)
+@rpc("any_peer", "call_remote", "unreliable_ordered", 0)
 func submit_player_sample(sample: Dictionary) -> void:
 	var sender := multiplayer.get_remote_sender_id()
 	if sender <= 0:
@@ -42,11 +42,11 @@ func receive_control(kind: String, payload: Dictionary) -> void:
 		return
 	control_received.emit(sender, kind, payload.duplicate(true))
 
-func send_sample(sample: Dictionary) -> void:
-	submit_player_sample.rpc(sample)
+func send_sample(sample: Dictionary) -> Error:
+	return rpc("submit_player_sample", sample)
 
-func send_sample_to_peer(peer_id: int, sample: Dictionary) -> void:
-	submit_player_sample.rpc_id(peer_id, sample)
+func send_sample_to_peer(peer_id: int, sample: Dictionary) -> Error:
+	return rpc_id(peer_id, "submit_player_sample", sample)
 
 func send_audit(audit: Dictionary) -> void:
 	submit_input_audit.rpc_id(1, audit)

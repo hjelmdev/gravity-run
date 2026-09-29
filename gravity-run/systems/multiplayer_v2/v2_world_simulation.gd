@@ -10,6 +10,7 @@ const TICK_RATE := 60.0
 const FIXED_DELTA := 1.0 / TICK_RATE
 
 var manifest: Resource
+var _previous_render_barrels: Dictionary = {}
 var tick := 0
 var elapsed := 0.0
 var barrels: Array[Dictionary] = []
@@ -27,6 +28,7 @@ func configure(course_manifest: Resource) -> String:
 	tick = 0
 	elapsed = 0.0
 	barrels.clear()
+	_previous_render_barrels.clear()
 	_barrel_history.clear()
 	_entity_by_event.clear()
 	var entities: Array[Dictionary] = []
@@ -58,6 +60,9 @@ func configure(course_manifest: Resource) -> String:
 func step_to(next_tick: int) -> bool:
 	if manifest == null or next_tick != tick + 1:
 		return false
+	_previous_render_barrels.clear()
+	for barrel in barrels:
+		_previous_render_barrels[str(barrel.get("entity_id", ""))] = barrel.duplicate(true)
 	tick = next_tick
 	elapsed = float(tick) * FIXED_DELTA
 	for barrel in barrels:
@@ -77,6 +82,15 @@ func step_to(next_tick: int) -> bool:
 		var oldest: int = int(_barrel_history.keys().min())
 		_barrel_history.erase(oldest)
 	return true
+
+func render_state(fraction: float) -> Dictionary:
+	var rendered := barrels.duplicate(true)
+	for barrel in rendered:
+		var previous: Dictionary = _previous_render_barrels.get(str(barrel.get("entity_id", "")), barrel)
+		if bool(previous.get("spawned", false)) and not bool(barrel.get("destroyed", false)):
+			for key in ["x", "y", "roll_angle", "rotation"]:
+				barrel[key] = lerpf(float(previous.get(key, barrel.get(key, 0.0))), float(barrel.get(key, 0.0)), clampf(fraction, 0.0, 1.0))
+	return {"barrels": rendered, "entities": entity_ledger.entities}
 
 func surface_at(x: float, ceiling: bool) -> Dictionary:
 	var y := float(manifest.initial_ceiling_y) if ceiling else float(manifest.initial_floor_y)

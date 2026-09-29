@@ -18,6 +18,13 @@ var gap_events: Array[Dictionary] = []
 var _camera_left := 0.0
 var _world_height := 720.0
 
+static func create_hazard(scene: PackedScene, at_position: Vector2, size: Vector2, from_ceiling: bool, surface_rotation: float = 0.0) -> Node2D:
+	var hazard := scene.instantiate() as Node2D
+	hazard.position = at_position
+	hazard.call("configure", size, from_ceiling)
+	hazard.rotation = surface_rotation
+	return hazard
+
 func load_manifest(course_manifest: Resource) -> String:
 	reset()
 	manifest = course_manifest
@@ -47,16 +54,12 @@ func load_manifest(course_manifest: Resource) -> String:
 			"spikes":
 				var start_x := float(event.get("start_x", x))
 				for index in range(int(event.get("count", 1))):
-					var spike := SpikeScene.instantiate() as Node2D
-					spike.position = Vector2(start_x + float(index) * float(event.get("spacing", 32.0)), float(event.get("y", surface_y)))
-					spike.call("configure", Vector2(CourseGenerator.SPIKE_WIDTH, CourseGenerator.SPIKE_HEIGHT), from_ceiling)
+					var spike := create_hazard(SpikeScene, Vector2(start_x + float(index) * float(event.get("spacing", 32.0)), float(event.get("y", surface_y))), Vector2(CourseGenerator.SPIKE_WIDTH, CourseGenerator.SPIKE_HEIGHT), from_ceiling)
 					spike.name = "Spike_%s_%d" % [event_id, index]
 					add_child(spike)
 					event_nodes["%s_%d" % [event_id, index]] = spike
 			"block":
-				var block := BlockScene.instantiate() as Node2D
-				block.position = Vector2(x, float(event.get("y", surface_y)))
-				block.call("configure", Vector2(float(event.get("width", 48.0)), float(event.get("height", 72.0))), from_ceiling)
+				var block := create_hazard(BlockScene, Vector2(x, float(event.get("y", surface_y))), Vector2(float(event.get("width", 48.0)), float(event.get("height", 72.0))), from_ceiling)
 				block.name = "Block_%s" % event_id
 				add_child(block)
 				event_nodes[event_id] = block
@@ -68,9 +71,7 @@ func load_manifest(course_manifest: Resource) -> String:
 				var spawn_offset := float(event.get("spawn_lead_distance", 820.0)) * (speed_multiplier - 1.0)
 				for index in range(count):
 					var barrel_id := "%s_%d" % [event_id, index]
-					var barrel := BarrelScene.instantiate() as Node2D
-					barrel.position = Vector2(x + spawn_offset - chain_width * 0.5 + float(index) * spacing, float(event.get("y", floor_y)))
-					barrel.call("configure", Vector2(HazardRules.BARREL_WIDTH, float(event.get("height", HazardRules.BARREL_WIDTH))), false)
+					var barrel := create_hazard(BarrelScene, Vector2(x + spawn_offset - chain_width * 0.5 + float(index) * spacing, float(event.get("y", floor_y))), Vector2(HazardRules.BARREL_WIDTH, float(event.get("height", HazardRules.BARREL_WIDTH))), false)
 					barrel.call("set_motion_speed_multiplier", speed_multiplier)
 					barrel.name = "Barrel_%s" % barrel_id
 					add_child(barrel)
@@ -175,7 +176,7 @@ func _draw() -> void:
 	CourseSurfaceRenderer.draw_track(self, _camera_left, get_viewport_rect().size, gaps, boundaries, steps, Callable(self, "_surface_y_at"), 0.0)
 	var finish_screen_x := float(manifest.finish_x) - _camera_left
 	if finish_screen_x >= 0.0 and finish_screen_x <= get_viewport_rect().size.x:
-		draw_line(Vector2(finish_screen_x, 0.0), Vector2(finish_screen_x, _world_height), Color("f5d45e"), 4.0)
+		draw_line(Vector2(float(manifest.finish_x), 0.0), Vector2(float(manifest.finish_x), _world_height), Color("f5d45e"), 4.0)
 
 func _surface_y_at(x: float, ceiling: bool) -> float:
 	var y := float(manifest.initial_ceiling_y) if ceiling else float(manifest.initial_floor_y)

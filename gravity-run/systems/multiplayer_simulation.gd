@@ -19,6 +19,9 @@ var tick := 0
 var started := false
 var match_finished := false
 var _accumulator := 0.0
+var _previous_render_players: Dictionary = {}
+var _previous_render_barrels: Dictionary = {}
+const Presentation := preload("res://systems/runner_presentation.gd")
 var _players: Dictionary = {}
 var _placements: Array[Dictionary] = []
 var _last_flip_tick: Dictionary = {}
@@ -48,6 +51,8 @@ func configure(course_manifest: Resource, players: Array) -> String:
 	started = false
 	match_finished = false
 	_players.clear()
+	_previous_render_players.clear()
+	_previous_render_barrels.clear()
 	_placements.clear()
 	_last_flip_tick.clear()
 	_barrels.clear()
@@ -213,10 +218,28 @@ func advance_to_tick(target_tick: int, max_steps: int = MAX_CATCHUP_TICKS, simul
 	return events
 
 func _step_one_tick(events: Array[Dictionary], finish_when_all_inactive: bool, simulated_user_ids: Array = []) -> void:
+	_previous_render_players = _players.duplicate(true)
+	_previous_render_barrels.clear()
+	for barrel in _barrels:
+		_previous_render_barrels[str(barrel.get("entity_id", ""))] = barrel.duplicate(true)
 	tick += 1
 	_apply_queued_flip_inputs(tick)
 	_step_world_hazards()
 	_step_player_states(events, finish_when_all_inactive, simulated_user_ids)
+
+func get_render_snapshot() -> Dictionary:
+	var result := get_snapshot()
+	var fraction := clampf(_accumulator / FIXED_DELTA, 0.0, 1.0)
+	for index in range(result.players.size()):
+		var player: Dictionary = result.players[index]
+		if str(player.get("state", "running")) == "running":
+			result.players[index] = Presentation.interpolate_states(_previous_render_players.get(str(player.user_id), player), player, fraction)
+	for barrel in result.world_hazards.barrels:
+		var previous: Dictionary = _previous_render_barrels.get(str(barrel.get("entity_id", "")), barrel)
+		if bool(previous.get("spawned", false)) and not bool(barrel.get("destroyed", false)):
+			for key in ["x", "y", "roll_angle", "rotation"]:
+				barrel[key] = lerpf(float(previous.get(key, barrel.get(key, 0.0))), float(barrel.get(key, 0.0)), fraction)
+	return result
 
 func queue_flip(user_id: String, sequence: int, desired_gravity: int, target_tick: int) -> Dictionary:
 	if not started or match_finished or not _players.has(user_id):

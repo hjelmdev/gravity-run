@@ -10,7 +10,7 @@ func _initialize() -> void:
 	var capacity_sql := FileAccess.get_file_as_string("res://supabase/migrations/202609280001_multiplayer_five_player_rooms.sql")
 	var service_source := FileAccess.get_file_as_string("res://systems/multiplayer_service.gd")
 	var provider_source := FileAccess.get_file_as_string("res://systems/supabase_lobby_provider.gd")
-	var match_source := FileAccess.get_file_as_string("res://ui/multiplayer_match.gd")
+	var match_source := FileAccess.get_file_as_string("res://ui/multiplayer_match.gd").replace("\r\n", "\n")
 	var transport_source := FileAccess.get_file_as_string("res://systems/webrtc_match_transport.gd")
 	var lobby_ui_source := FileAccess.get_file_as_string("res://ui/multiplayer_lobby.gd")
 	var lobby_provider_source := FileAccess.get_file_as_string("res://systems/supabase_lobby_provider.gd")

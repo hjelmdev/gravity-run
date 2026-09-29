@@ -35,7 +35,7 @@ signal world_baseline_received(baseline: Dictionary)
 signal world_interaction_resolved(request_id: String, accepted: bool, message: String, commit: Dictionary)
 signal results_received(result: Dictionary)
 
-const V2_GAME_VERSION := "2.1.20260930.1"
+const V2_GAME_VERSION := "2.1.20260930.2"
 const MAX_PLAYERS := 5
 const POSITION_RATE_HZ := 30
 
@@ -606,7 +606,7 @@ func open_host(session_descriptor: Dictionary, max_clients: int = 4) -> Error:
 		return ERR_INVALID_PARAMETER
 	_reset_peer_liveness()
 	webrtc_peer = WebRTCMultiplayerPeer.new()
-	# WebRTCMultiplayerPeer takes ICE servers here; player limits are enforced by the V2 room roster.
+	# Extra channels_config goes here. ICE servers belong to WebRTCPeerConnection.
 	var error: Error = webrtc_peer.create_server([])
 	if error != OK:
 		webrtc_peer = null
@@ -708,7 +708,7 @@ func send_sample(sample: Dictionary) -> void:
 	if str(session.get("role", "")) == "host":
 		_on_player_sample_rpc(1, packet)
 	else:
-		rpc_endpoint.send_sample_to_peer(1, packet)
+		_send_position_sample(1, packet)
 
 func send_audit(audit: Dictionary) -> void:
 	if _active:
@@ -764,28 +764,44 @@ func begin_round(round_id: String, roster_revision: int) -> void:
 	# Contact and outage state belong to the peer session, not one individual round.
 	diagnostics.record_event("round_began", {"round_id": round_id, "roster_revision": roster_revision})
 
+func _send_position_sample(target: int, sample: Dictionary) -> void:
+	diagnostics.increment_metric("sample_send_attempts")
+	diagnostics.increment_metric("sample_send_attempts_target_%d" % target)
+	var error: Error = rpc_endpoint.send_sample_to_peer(target, sample)
+	if error == OK:
+		diagnostics.increment_metric("sample_send_ok")
+	else:
+		diagnostics.increment_metric("sample_send_errors")
+		if int(diagnostics.metrics.get("sample_send_errors", 0)) == 1:
+			diagnostics.record_event("sample_send_error", {"error": error, "target": target, "channel": 0, "mode": "unreliable_ordered", "round_id": _round_id, "sequence": int(sample.get("sample_seq", -1))})
+
 func _on_player_sample_rpc(sender_peer_id: int, sample: Dictionary) -> void:
+	var local_host_sample := str(session.get("role", "")) == "host" and sender_peer_id == 1
+	diagnostics.increment_metric("samples_local_host" if local_host_sample else "samples_received_network")
+	diagnostics.increment_metric("samples_received_owner_%d_sender_%d" % [int(sample.get("owner_peer_id", -1)), sender_peer_id])
 	if not _active or _round_id.is_empty():
 		return
 	var packet_error := _packet_session_error(sample, false)
 	if not packet_error.is_empty():
-		diagnostics.record_event("sample_rejected", {"peer_id": sender_peer_id, "reason": packet_error})
+		_record_sample_rejection(sender_peer_id, int(sample.get("owner_peer_id", -1)), {"peer_id": sender_peer_id, "reason": packet_error})
 		return
 	if _reconnect_sync_pending.has(sender_peer_id):
-		diagnostics.record_event("sample_rejected", {"peer_id": sender_peer_id, "reason": "reconnect_session_sync_pending"})
+		_record_sample_rejection(sender_peer_id, int(sample.get("owner_peer_id", -1)), {"peer_id": sender_peer_id, "reason": "reconnect_session_sync_pending"})
 		return
 	var owner_peer := int(sample.get("owner_peer_id", -1))
 	if str(session.get("role", "")) == "host":
 		if sender_peer_id != 1 and owner_peer != sender_peer_id:
+			_record_sample_rejection(sender_peer_id, owner_peer, {"reason": "owner_mismatch"})
 			diagnostics.record_event("sample_owner_mismatch", {"sender": sender_peer_id, "owner": owner_peer})
 			return
 		if not _is_roster_peer(owner_peer):
+			_record_sample_rejection(sender_peer_id, owner_peer, {"reason": "owner_not_in_roster"})
 			return
 		var previous_seq := int(_last_sample_by_peer.get(owner_peer, 0))
 		var previous_tick := int(_last_seen_tick_by_peer.get(owner_peer, 0))
 		var reason := ValidationScript.validate_sample(sample, _round_id, owner_peer, previous_seq, previous_tick)
 		if not reason.is_empty():
-			diagnostics.record_event("sample_rejected", {"peer_id": owner_peer, "reason": reason})
+			_record_sample_rejection(sender_peer_id, int(sample.get("owner_peer_id", -1)), {"peer_id": owner_peer, "reason": reason})
 			return
 		if sender_peer_id != 1:
 			_mark_peer_contact(sender_peer_id, "SAMPLE")
@@ -794,22 +810,32 @@ func _on_player_sample_rpc(sender_peer_id: int, sample: Dictionary) -> void:
 		_audit_sample_physics(owner_peer, sample)
 		_last_sample_state_by_peer[owner_peer] = sample.duplicate(true)
 		diagnostics.increment_metric("samples_validated_host")
+		diagnostics.increment_metric("samples_accepted_owner_%d" % owner_peer)
 		player_sample_received.emit(owner_peer, sample.duplicate(true))
 		for target in connected_peer_ids():
 			if int(target) != owner_peer and not _reconnect_sync_pending.has(int(target)):
-				rpc_endpoint.send_sample_to_peer(int(target), sample)
+				_send_position_sample(int(target), sample)
 		return
 	if sender_peer_id != 1 or owner_peer == int(session.get("local_peer_id", -1)) or not _is_roster_peer(owner_peer):
+		_record_sample_rejection(sender_peer_id, owner_peer, {"reason": "invalid_relay_owner"})
 		return
 	var reason := ValidationScript.validate_sample(sample, _round_id, owner_peer, int(_last_sample_by_peer.get(owner_peer, 0)), int(_last_seen_tick_by_peer.get(owner_peer, 0)))
 	if not reason.is_empty():
+		_record_sample_rejection(sender_peer_id, owner_peer, {"reason": reason})
 		return
 	_mark_peer_contact(sender_peer_id, "SAMPLE")
 	_last_sample_by_peer[owner_peer] = int(sample.sample_seq)
 	_last_seen_tick_by_peer[owner_peer] = int(sample.simulation_tick)
 	_last_sample_state_by_peer[owner_peer] = sample.duplicate(true)
+	diagnostics.increment_metric("samples_accepted_owner_%d" % owner_peer)
 	diagnostics.increment_metric("samples_presented_remote")
 	player_sample_received.emit(owner_peer, sample.duplicate(true))
+
+func _record_sample_rejection(sender: int, owner: int, details: Dictionary) -> void:
+	diagnostics.increment_metric("samples_rejected_owner_%d_sender_%d" % [owner, sender])
+	diagnostics.increment_metric("samples_rejected_reason_%s" % str(details.get("reason", "unknown")))
+	if int(diagnostics.metrics.get("samples_rejected_owner_%d_sender_%d" % [owner, sender], 0)) == 1:
+		diagnostics.record_event("sample_rejected", details)
 
 func _audit_sample_physics(peer_id: int, sample: Dictionary) -> void:
 	if not _last_sample_state_by_peer.has(peer_id):

@@ -2,6 +2,8 @@
 
 The Godot source project is in `gravity-run/` and is pushed to the Azure DevOps repository. The public GitHub Pages repository is a separate, export-only repo: `https://github.com/hjelmdev/gravity-run.git`.
 
+The shared source branch is `codex/current-prototype`. Singleplayer, Multiplayer V1 and Multiplayer V2 are menu choices in one build at `https://hjelmdev.github.io/gravity-run/`. The `game-v2` export directory is historical naming; it contains all three modes. The old `multiplayer-v2/` entry redirects to the root.
+
 Keep the persistent local clone of the Pages repo at `E:\Utveckling\gravity-run-pages` (branch `main`), outside the user's profile and separate from the Azure source repo. Do not use a Temp/AppData clone as the working copy. Older clean deployment clones, if retained, belong under `E:\Utveckling\gravity-run-pages-archive`.
 
 ## Publish a web build
@@ -13,18 +15,19 @@ Keep the persistent local clone of the Pages repo at `E:\Utveckling\gravity-run-
    ```
 
 2. Clone or update `hjelmdev/gravity-run` on branch `main`, then copy the exported files into that clone's `docs/game-v2/` folder.
-3. Keep the Pages shell at `docs/index.html` intact. It supplies the orientation prompt/cache refresh and loads `docs/game-v2/index.html` in an iframe. Do not replace the shell with Godot's generated `index.html`; do not alter `docs/game/` or other Pages files for a normal game export.
-4. Stage only the game export and verify the staged paths before committing:
+3. Preserve the Pages shell at `docs/index.html`. It supplies the orientation prompt, OAuth callback, mobile text entry and cache refresh, and loads `docs/game-v2/index.html` in an iframe. Do not replace it with Godot's generated HTML. Keep shell/manifest icons pointed at the current export. The unified release may update these integration files and the old V2 redirects; a normal game-only export changes only `docs/game-v2/`.
+4. Give the PCK a unique release filename (for example `index.unified-<source-sha>.pck`) and update both `mainPack` and `fileSizes` in the exported HTML config. Keep `index.pck` as a compatibility copy. This prevents a cached prior PCK being combined with a new HTML loader. Verify sizes and SHA-256 after copying.
+5. Stage the game export and verify the staged paths before committing:
 
    ```powershell
    git add -- docs/game-v2
    git diff --cached --name-only
    ```
 
-   Every staged path must start with `docs/game-v2/`. Commit and push `main` to `origin`; never force-push.
-5. If Git has no configured identity, the Pages repo's existing commit identity is `Adam Hjelm <hjelm.adam@gmail.com>`. Apply it only to the deploy commit with `git -c user.name=... -c user.email=...`; do not change global Git configuration.
+   For a normal export every staged path must start with `docs/game-v2/`. For the unified release explicitly stage and review any required `docs/index.html`, `docs/gravity-run.manifest.json` and `docs/multiplayer-v2/` redirect changes separately. Preserve unrelated paths. Commit and push `main` to `origin`; never force-push.
+6. If Git has no configured identity, the Pages repo's existing commit identity is `Adam Hjelm <hjelm.adam@gmail.com>`. Apply it only to the deploy commit with `git -c user.name=... -c user.email=...`; do not change global Git configuration.
 
-No cache-busting `?v=` URL is needed: the existing shell handles its own cache refresh. Test the normal Pages URL after GitHub Pages finishes deploying.
+No cache-busting `?v=` URL is needed: the shell retires old workers and the PCK filename identifies its release. Verify the actual Pages deployment SHA and loaded PCK at the normal root URL. Test both multiplayer menu choices and singleplayer in that same browser instance. Keep full authenticated multiplayer lifecycle testing distinct from standalone WebRTC/scene tests.
 
 ## Apply Supabase migrations
 
@@ -71,8 +74,8 @@ version recorded in `gravity-run/supabase/.temp/cli-latest`.
    to the installed Godot 4.7.2 templates; do not publish an incomplete folder.
 3. Verify the Pages clone at `E:\Utveckling\gravity-run-pages` is on `main` and
    clean before copying. Copy the export contents into `docs/game-v2/`, preserving
-   `docs/index.html` and every other Pages path.
-4. Stage only `docs/game-v2`, inspect `git diff --cached --name-only`, and verify
-   every staged path starts with that prefix. Commit and push `main` to Pages
+   root-shell features and unrelated Pages paths. For a planned integration change, review the specific shell/manifest/redirect edits before staging them.
+4. Stage `docs/game-v2` and any explicitly reviewed integration paths, inspect
+   `git diff --cached --name-only`, and verify the exact allowlist. Commit and push `main` to Pages
    `origin` without force-pushing. Verify the deployment at
    `https://hjelmdev.github.io/gravity-run/` after Pages finishes publishing.

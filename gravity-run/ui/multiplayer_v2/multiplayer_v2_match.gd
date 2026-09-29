@@ -13,6 +13,10 @@ const FIXED_DELTA := 1.0 / 60.0
 const CAMERA_PLAYER_X := 250.0
 const MAX_CATCHUP_STEPS := 12
 
+const CameraScript := preload("res://systems/runner_camera.gd")
+var _render_camera: Camera2D
+var _render_fraction := 0.0
+var _previous_camera_left := 0.0
 var _manifest: Resource
 var _runner
 var _world
@@ -25,6 +29,7 @@ var _pending_flip_direction := 0
 var _pending_interaction_id := ""
 var _remote_tracks: Dictionary = {}
 var _remote_terminal: Dictionary = {}
+var _remote_terminal_poses: Dictionary = {}
 var _remote_locomotion: Dictionary = {}
 var _slot_by_peer: Dictionary = {}
 var _player_views: Dictionary = {}
@@ -55,6 +60,8 @@ func _ready() -> void:
 	if not world_error.is_empty():
 		_show_failure(tr("The V2 course could not be initialized: %s") % world_error)
 		return
+	_render_camera = CameraScript.new()
+	add_child(_render_camera)
 	_course_root = Node2D.new()
 	_course_root.name = "SharedCourseRoot"
 	add_child(_course_root)
@@ -170,11 +177,7 @@ func _build_peer_slots() -> void:
 func _physics_process(delta: float) -> void:
 	if _manifest == null or _runner == null:
 		return
-	for track in _remote_tracks.values():
-		track.advance(delta)
 	if not _round_started:
-		_sync_player_views()
-		queue_redraw()
 		return
 	_accumulator += minf(delta, FIXED_DELTA * float(MAX_CATCHUP_STEPS))
 	var steps := 0
@@ -185,14 +188,24 @@ func _physics_process(delta: float) -> void:
 	if _accumulator >= FIXED_DELTA:
 		MultiplayerV2Service.diagnostics.record_event("local_physics_backlog", {"seconds": _accumulator})
 		_accumulator = fmod(_accumulator, FIXED_DELTA)
-	_update_spectator_camera()
-	_course_root.position.x = -_camera_left
-	_course_presentation.call("set_camera_left", _camera_left)
-	_course_presentation.call("set_world_state", {"barrels": _world.barrels, "entities": _world.entity_ledger.entities})
-	_update_hud()
-	_sync_player_views()
-	MultiplayerV2Service.diagnostics.record_frame({"tick": _runner.simulation_tick, "world_tick": _world.tick, "x": float(_runner.player_state.get("world_x", 0.0)), "y": float(_runner.player_state.get("y", 0.0)), "camera_left": _camera_left, "render_fraction": _accumulator / FIXED_DELTA, "physics_delta_ms": delta * 1000.0, "fps": Engine.get_frames_per_second(), "window_focused": DisplayServer.window_is_focused()})
 	MultiplayerV2Service.diagnostics.observe_max("max_physics_delta_ms", delta * 1000.0)
+
+func _process(delta: float) -> void:
+	if _manifest == null or _runner == null or _course_presentation == null:
+		return
+	_render_fraction = Engine.get_physics_interpolation_fraction()
+	for track in _remote_tracks.values():
+		track.advance(delta)
+	_previous_camera_left = _camera_left
+	_update_spectator_camera()
+	_render_camera.configure(get_viewport_rect().size, CAMERA_PLAYER_X)
+	_render_camera.follow(Vector2(_camera_left + CAMERA_PLAYER_X, 0.0), true)
+	_course_presentation.call("set_camera_left", _camera_left)
+	_course_presentation.call("set_world_state", _world.render_state(_render_fraction))
+	if _round_started:
+		_update_hud()
+	_sync_player_views()
+	MultiplayerV2Service.diagnostics.record_frame({"tick": _runner.simulation_tick, "world_tick": _world.tick, "x": float(_runner.player_state.get("world_x", 0.0)), "y": float(_runner.player_state.get("y", 0.0)), "camera_left": _camera_left, "camera_delta_x": _camera_left - _previous_camera_left, "render_fraction": _render_fraction, "render_delta_ms": delta * 1000.0, "fps": Engine.get_frames_per_second(), "window_focused": DisplayServer.window_is_focused()})
 	queue_redraw()
 
 func _step_local_round() -> void:
@@ -261,7 +274,10 @@ func _on_remote_sample(peer_id: int, sample: Dictionary) -> void:
 		return
 	if str(sample.get("round_id", "")) != _round_id:
 		return
-	_remote_tracks[peer_id].add_sample(sample)
+	if bool(_remote_tracks[peer_id].add_sample(sample)):
+		MultiplayerV2Service.diagnostics.increment_metric("track_insertions_owner_%d" % peer_id)
+	else:
+		MultiplayerV2Service.diagnostics.increment_metric("track_rejections_owner_%d" % peer_id)
 	_remote_locomotion[peer_id] = str(sample.get("locomotion_state", "running"))
 
 func _on_terminal_report(peer_id: int, report: Dictionary) -> void:
@@ -271,6 +287,7 @@ func _on_terminal_report(peer_id: int, report: Dictionary) -> void:
 	else:
 		_remote_terminal[peer_id] = next_state
 		_remote_locomotion[peer_id] = next_state
+		_remote_terminal_poses[peer_id] = report.duplicate(true)
 	MultiplayerV2Service.diagnostics.record_event("terminal_presented", {"peer_id": peer_id, "state": next_state, "tick": int(report.get("simulation_tick", -1))})
 	_update_spectator_camera()
 
@@ -336,19 +353,20 @@ func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 func _update_spectator_camera() -> void:
 	if str(_runner.player_state.get("state", "running")) == "running" or str(_runner.player_state.get("state", "")) == "pending_barrel":
 		_spectator_peer_id = 0
-		_camera_left = maxf(float(_runner.player_state.get("world_x", 0.0)) - CAMERA_PLAYER_X, 0.0)
+		var local_peer := int(MultiplayerV2Service.session.get("local_peer_id", 1))
+		_camera_left = maxf(float(_runner.render_state(_render_fraction).get("world_x", 0.0)) + float(_slot_by_peer.get(local_peer, 0)) * 18.0 - CAMERA_PLAYER_X, 0.0)
 		return
 	if _spectator_peer_id != 0 and str(_remote_terminal.get(_spectator_peer_id, "running")) == "running":
 		var current := _remote_track_sample(_spectator_peer_id)
-		if not current.is_empty() and not bool(current.get("stale", true)):
-			_camera_left = maxf(float(current.get("world_x", 0.0)) - CAMERA_PLAYER_X, 0.0)
+		if bool(current.get("valid", false)) and not bool(current.get("stale", true)):
+			_camera_left = maxf(float(current.get("world_x", 0.0)) + float(_slot_by_peer.get(_spectator_peer_id, 0)) * 18.0 - CAMERA_PLAYER_X, 0.0)
 			return
 	var candidates: Array[Dictionary] = []
 	for peer_id in _remote_tracks.keys():
 		if str(_remote_terminal.get(peer_id, "running")) != "running":
 			continue
 		var render_state := _remote_track_sample(int(peer_id))
-		if render_state.is_empty():
+		if not bool(render_state.get("valid", false)):
 			continue
 		candidates.append({"peer_id": int(peer_id), "world_x": float(render_state.get("world_x", 0.0)), "stale": bool(render_state.get("stale", false))})
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
@@ -359,7 +377,7 @@ func _update_spectator_camera() -> void:
 	_spectator_peer_id = int(candidates[0].peer_id) if not candidates.is_empty() else 0
 	if _spectator_peer_id > 0:
 		var selected := _remote_track_sample(_spectator_peer_id)
-		_camera_left = maxf(float(selected.get("world_x", 0.0)) - CAMERA_PLAYER_X, 0.0)
+		_camera_left = maxf(float(selected.get("world_x", 0.0)) + float(_slot_by_peer.get(_spectator_peer_id, 0)) * 18.0 - CAMERA_PLAYER_X, 0.0)
 	if _spectator_peer_id != _last_spectator_event_peer_id:
 		MultiplayerV2Service.diagnostics.record_event("spectator_target", {"peer_id": _spectator_peer_id, "camera_left": _camera_left})
 		_last_spectator_event_peer_id = _spectator_peer_id
@@ -367,9 +385,14 @@ func _update_spectator_camera() -> void:
 func _remote_track_sample(peer_id: int) -> Dictionary:
 	if not _remote_tracks.has(peer_id):
 		return {}
-	return _remote_tracks[peer_id].sample_at_render_time()
+	var result: Dictionary = _remote_tracks[peer_id].sample_at_render_time()
+	MultiplayerV2Service.diagnostics.metrics["remote_track_%d" % peer_id] = {"valid": bool(result.get("valid", false)), "stale": bool(result.get("stale", true)), "sequence": int(result.get("sample_seq", -1)), "render_tick": float(result.get("render_tick", -1.0)), "sample_age_ticks": float(result.get("render_tick", 0.0)) - float(result.get("simulation_tick", 0.0)), "world_x": float(result.get("world_x", 0.0))}
+	return result
 
 func _update_hud() -> void:
+	if not _result.is_empty():
+		_status_label.text = tr("The host confirmed the result.")
+		return
 	var state_name := str(_runner.player_state.get("state", "running"))
 	if state_name == "pending_barrel":
 		_status_label.text = tr("Waiting for shared barrel decision…")
@@ -384,17 +407,17 @@ func _draw() -> void:
 	if _manifest == null:
 		return
 	var view_size := get_viewport_rect().size
-	draw_rect(Rect2(Vector2.ZERO, view_size), Color("101827"))
+	draw_rect(Rect2(Vector2(_camera_left, 0.0), view_size), Color("101827"))
 	for index in range(18):
 		var star_x := fposmod(float(index * 83) + _camera_left * 0.12, view_size.x)
-		draw_circle(Vector2(star_x, 58.0 + float((index * 47) % 390)), 1.5, Color("26364b"))
+		draw_circle(Vector2(_camera_left + star_x, 58.0 + float((index * 47) % 390)), 1.5, Color("26364b"))
 	_draw_players()
 
 func _draw_players() -> void:
 	for member in MultiplayerV2Service.get_active_round_roster():
 		var peer_id := int(member.get("player_slot", 1))
 		var pose := _player_render_pose(member)
-		var screen_position: Vector2 = pose.position - Vector2(_camera_left, 0.0)
+		var screen_position: Vector2 = pose.position
 		draw_string(ThemeDB.fallback_font, screen_position + Vector2(-16.0, -Motion.SIZE.y * 0.5 - 8.0), str(member.get("display_name", "Runner")), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("edf3ff"))
 
 func _player_render_pose(member: Dictionary) -> Dictionary:
@@ -405,7 +428,7 @@ func _player_render_pose(member: Dictionary) -> Dictionary:
 	var gravity := 1
 	var locomotion := "running"
 	if peer_id == int(MultiplayerV2Service.session.get("local_peer_id", 1)):
-		var local_render: Dictionary = _runner.render_state(_accumulator / FIXED_DELTA)
+		var local_render: Dictionary = _runner.render_state(_render_fraction)
 		world_x = float(local_render.get("world_x", world_x))
 		y = float(local_render.get("y", y))
 		gravity = int(_runner.player_state.get("gravity_direction", 1))
@@ -419,6 +442,9 @@ func _player_render_pose(member: Dictionary) -> Dictionary:
 		locomotion = str(_remote_locomotion.get(peer_id, "running"))
 		if str(_remote_terminal.get(peer_id, "running")) != "running":
 			locomotion = str(_remote_terminal[peer_id])
+			var terminal: Dictionary = _remote_terminal_poses.get(peer_id, {})
+			world_x = float(terminal.get("world_x", world_x))
+			y = float(terminal.get("y", y))
 	var offset := float(slot) * 18.0
 	return {"position": Vector2(world_x + offset, y), "gravity": gravity, "locomotion": locomotion}
 

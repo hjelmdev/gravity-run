@@ -31,6 +31,7 @@ const COURSE_RULESET_SCRIPT := preload("res://systems/course_generation_ruleset.
 const COURSE_RUN_DEFINITION_SCRIPT := preload("res://systems/course_run_definition.gd")
 const TRACK_GAP_SCRIPT := preload("res://terrain/track_gap.gd")
 const COURSE_SURFACE_RENDERER := preload("res://systems/course_surface_renderer.gd")
+const CoursePresentation := preload("res://systems/race_course_presentation.gd")
 
 @onready var player: Node2D = $Player
 @onready var run_state: Node = $RunState
@@ -61,11 +62,17 @@ var run_blocked := false
 var demo_flip_timer := 1.0
 var demo_restart_timer := 0.0
 var _speed_debug_visible := false
+const Presentation := preload("res://systems/runner_presentation.gd")
+const CameraScript := preload("res://systems/runner_camera.gd")
+var _presentation := Presentation.new()
+var _render_player_position := Vector2(180.0, 438.0)
+var _render_course_distance := 0.0
 
 func _ready() -> void:
 	course_generator = COURSE_GENERATOR_SCRIPT.new()
 	loot_spawn_planner = LOOT_PLANNER_SCRIPT.new()
 	_default_ruleset = COURSE_RULESET_SCRIPT.new()
+	camera.set_script(CameraScript)
 	camera.enabled = true
 	camera.make_current()
 	_sync_screen_size()
@@ -121,6 +128,9 @@ func _start_run() -> void:
 	_clear_nodes(gaps)
 	game_over = false
 	run_blocked = false
+	_presentation.reset(player.position)
+	_render_player_position = player.position
+	_render_course_distance = 0.0
 	_update_camera()
 	demo_flip_timer = randf_range(0.9, 1.8)
 	demo_restart_timer = 0.0
@@ -147,10 +157,8 @@ func _sync_screen_size() -> void:
 func _update_camera() -> void:
 	if not is_instance_valid(camera) or not is_instance_valid(player):
 		return
-	camera.position = Vector2(
-		float(player.get("world_x")) + screen_width * 0.5 - PLAYER_X,
-		screen_height * 0.5
-	)
+	camera.call("configure", Vector2(screen_width, screen_height), PLAYER_X, camera.zoom.x)
+	camera.call("follow", _render_player_position)
 
 func _on_run_stats_changed(distance_pixels: float, coins: int) -> void:
 	hud.call("update_stats", distance_pixels, coins)
@@ -185,6 +193,16 @@ func _unhandled_input(event: InputEvent) -> void:
 			AppNavigation.request_game_hub()
 			get_tree().change_scene_to_file("res://ui/main_menu.tscn")
 			get_viewport().set_input_as_handled()
+
+func _process(_delta: float) -> void:
+	if not is_instance_valid(player):
+		return
+	_render_player_position = _presentation.sample(Engine.get_physics_interpolation_fraction())
+	_render_course_distance = _render_player_position.x - PLAYER_X
+	var sprite := player.get_node("AnimatedSprite2D") as AnimatedSprite2D
+	sprite.position = _render_player_position - player.position + Vector2(0.0, -float(player.call("get_gravity_direction")))
+	_update_camera()
+	queue_redraw()
 
 func _physics_process(delta: float) -> void:
 	if game_over:
@@ -233,7 +251,7 @@ func _physics_process(delta: float) -> void:
 	if demo_mode:
 		_update_demo_ai(delta)
 	player.call("advance", delta, _floor_surface_y(float(player.get("world_x"))), _ceiling_surface_y(float(player.get("world_x"))), _surface_is_solid_at_x(float(player.get("world_x")), false), _surface_is_solid_at_x(float(player.get("world_x")), true))
-	_update_camera()
+	_presentation.push(player.position)
 	if player.position.y < -64.0 or player.position.y > WORLD_HEIGHT + 64.0:
 		_end_run()
 
@@ -291,6 +309,10 @@ func _physics_process(delta: float) -> void:
 
 func _end_run() -> void:
 	game_over = true
+	_presentation.reset(player.position)
+	for obstacle in obstacles:
+		if obstacle.has_method("freeze_render_motion"):
+			obstacle.call("freeze_render_motion")
 	player.call("set_input_enabled", false)
 	if not demo_mode:
 		AchievementService.finish_run()
@@ -623,13 +645,10 @@ func _resolve_obstacle_interactions() -> void:
 	)
 
 func _spawn_obstacle_scene(scene: PackedScene, width: float, height: float, from_ceiling: bool, x: float, motion_speed_multiplier: float = 1.0) -> void:
-	var obstacle := scene.instantiate() as Node2D
+	var obstacle := CoursePresentation.create_hazard(scene, Vector2(x, _ceiling_surface_y(x) if from_ceiling else _floor_surface_y(x)), Vector2(width, height), from_ceiling, _surface_angle_at(x, from_ceiling))
 	obstacle.connect("destroyed", Callable(self, "_on_obstacle_destroyed"))
-	obstacle.position = Vector2(x, _ceiling_surface_y(x) if from_ceiling else _floor_surface_y(x))
-	obstacle.call("configure", Vector2(width, height), from_ceiling)
 	if obstacle.has_method("set_motion_speed_multiplier"):
 		obstacle.call("set_motion_speed_multiplier", motion_speed_multiplier)
-	obstacle.rotation = _surface_angle_at(x, from_ceiling)
 	add_child(obstacle)
 	obstacles.append(obstacle)
 
@@ -772,12 +791,12 @@ func _draw_seed_finish_markers() -> void:
 		draw_set_transform(Vector2.ZERO)
 
 func _draw_background() -> void:
-	var view_left := course_distance
+	var view_left := _render_course_distance
 	draw_rect(Rect2(Vector2(view_left, 0.0), Vector2(screen_width, screen_height)), Color("101827"))
 	# Use the continuous course coordinate: integer meter rounding made the
 	# stars drift gently while course objects remain at fixed world coordinates.
 	for i in range(18):
-		var x := view_left + fposmod(float(i * 83) + course_distance * 0.12, screen_width)
+		var x := view_left + fposmod(float(i * 83) + _render_course_distance * 0.12, screen_width)
 		draw_circle(Vector2(x, 58.0 + float((i * 47) % 390)), 1.5, Color("26364b"))
 
 func _draw_track() -> void:
@@ -793,4 +812,4 @@ func _draw_track() -> void:
 		terrain_boundaries.append(float(terrain.call("get_end_x")))
 		if terrain.has_method("is_terrain_step") and bool(terrain.call("is_terrain_step")):
 			step_positions.append(float(terrain.call("get_start_x")))
-	COURSE_SURFACE_RENDERER.draw_track(self, course_distance, Vector2(screen_width, screen_height), surface_gaps, terrain_boundaries, step_positions, Callable(self, "_surface_y_at"), 0.0)
+	COURSE_SURFACE_RENDERER.draw_track(self, _render_course_distance, Vector2(screen_width, screen_height), surface_gaps, terrain_boundaries, step_positions, Callable(self, "_surface_y_at"), 0.0)

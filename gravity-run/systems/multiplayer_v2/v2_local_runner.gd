@@ -2,6 +2,7 @@ extends RefCounted
 class_name MultiplayerV2LocalRunner
 
 const Motion := preload("res://systems/runner_motion.gd")
+const Presentation := preload("res://systems/runner_presentation.gd")
 const FIXED_DELTA := 1.0 / 60.0
 
 var player_state: Dictionary = {}
@@ -46,11 +47,9 @@ func step(flip_direction: int, floor_y: float, ceiling_y: float, floor_supported
 	return make_sample()
 
 func render_state(fraction: float) -> Dictionary:
-	var amount := clampf(fraction, 0.0, 1.0)
-	var result := current_render_state.duplicate(true)
-	for key in ["world_x", "y", "vertical_speed"]:
-		result[key] = lerpf(float(previous_render_state.get(key, result.get(key, 0.0))), float(current_render_state.get(key, 0.0)), amount)
-	return result
+	if not active:
+		return player_state.duplicate(true)
+	return Presentation.interpolate_states(previous_render_state, current_render_state, fraction)
 
 func make_sample() -> Dictionary:
 	sample_sequence += 1
