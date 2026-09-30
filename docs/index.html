@@ -176,7 +176,7 @@
 		// Retire old Godot workers and cached game exports before loading the iframe.
 		const makeGameUrl = () => {
 			const gameUrl = new URL('./game-v2/index.html', location.href);
-			gameUrl.searchParams.set('build', 'v2-30hz-profiled-optimization-20260930');
+			gameUrl.searchParams.set('build', 'v2-common-course-flow-377e2a2');
 			if (new URLSearchParams(location.search).get('v2_profile') === '1') gameUrl.searchParams.set('v2_profile', '1');
 			return gameUrl.href;
 		};
