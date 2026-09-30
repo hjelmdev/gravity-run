@@ -180,7 +180,8 @@
 			if (new URLSearchParams(location.search).get('v2_profile') === '1') gameUrl.searchParams.set('v2_profile', '1');
 			return gameUrl.href;
 		};
-		const loadGame = () => { document.getElementById('game-frame').src = makeGameUrl(); };		if ('serviceWorker' in navigator) {
+		const loadGame = () => { document.getElementById('game-frame').src = makeGameUrl(); };
+		if ('serviceWorker' in navigator) {
 			const pageScope = new URL('./', location.href).href;
 			const gameScopes = ['./game/', './game-v2/', './multiplayer-v2/', './multiplayer-v2/game/'].map((path) => new URL(path, location.href).href);
 			const cachePrefix = 'Gravity Run-sw-cache-';
