@@ -36,6 +36,8 @@ var _accumulator := 0.0
 var _pending_flip_direction := 0
 var _pending_interaction_id := ""
 var _remote_tracks: Dictionary = {}
+var _remote_presentation_cache: Dictionary = {}
+var _presentation_work_counts: Dictionary = {"track_sample_calls": 0, "projection_steps": 0, "surface_queries": 0, "contact_queries": 0, "track_pose_computations": 0}
 var _remote_terminal: Dictionary = {}
 var _remote_terminal_poses: Dictionary = {}
 var _remote_locomotion: Dictionary = {}
@@ -74,14 +76,19 @@ var _last_process_usec := -1
 var _godot_frame_intervals_ms: Array[float] = []
 var _phase_profile: Dictionary = {}
 var _last_barrel_probe: Dictionary = {}
+var _barrel_trace_entity_id := ""
+var _barrel_trace_started_usec := -1
+var _barrel_trace_frames: Array[Dictionary] = []
 var _last_render_world_state: Dictionary = {}
 var _last_world_render_fraction := 0.0
 var _last_presentation_tick := 0.0
+var _profiling_enabled := false
 var _hud_root: Control
 var _viewport_size := Vector2.ZERO
 
 func _ready() -> void:
 	set_process_unhandled_input(true)
+	_configure_profiling()
 	_install_browser_frame_diagnostics()
 	MultiplayerV2Service.room_changed.connect(_on_room_changed_for_abort)
 	MultiplayerV2Service.lobby_returned.connect(_navigate_lobby)
@@ -106,6 +113,7 @@ func _ready() -> void:
 	_course_presentation = CoursePresentationScript.new()
 	_course_presentation.name = "RaceCoursePresentation"
 	_course_root.add_child(_course_presentation)
+	_course_presentation.call("set_render_profile_enabled", _profiling_enabled)
 	var presentation_error := str(_course_presentation.call("load_manifest", _manifest))
 	if not presentation_error.is_empty():
 		_show_failure(tr("The shared race presentation failed: %s") % presentation_error)
@@ -131,6 +139,15 @@ func _ready() -> void:
 	MultiplayerV2Service.mark_local_prepared()
 	_status_label.text = tr("Preparing all V2 players…")
 	queue_redraw()
+
+func _configure_profiling() -> void:
+	if OS.has_feature("web"):
+		_profiling_enabled = bool(JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('v2_profile') === '1'"))
+	else:
+		_profiling_enabled = OS.get_cmdline_user_args().has("--v2-profile")
+
+func _exit_tree() -> void:
+	_close_barrel_frame_trace("match_scene_exit")
 
 func _build_overlay() -> void:
 	var overlay := CanvasLayer.new()
@@ -301,7 +318,7 @@ func _record_local_pose(tick: int) -> void:
 		_local_pose_history.append(entry)
 	while _local_pose_history.size() > LOCAL_POSE_HISTORY:
 		_local_pose_history.pop_front()
-	if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec <= int(START_TRACE_SECONDS * 1_000_000.0):
+	if _profiling_enabled and _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec <= int(START_TRACE_SECONDS * 1_000_000.0):
 		_append_timeline_metric("local_poses", entry.duplicate(true))
 
 func _sample_local_pose(target_tick: float) -> Dictionary:
@@ -382,7 +399,7 @@ func _advance_local_to_shared_clock(delta: float) -> void:
 			MultiplayerV2Service.diagnostics.record_event("first_local_physics_step", {"deadline_lateness_ms": float(late_usec) / 1000.0, "tick": _world_tick + 1, "round_elapsed_tick": target_tick})
 		_step_local_round()
 		_record_local_pose(_world_tick)
-		if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec <= int(START_TRACE_SECONDS * 1_000_000.0):
+		if _profiling_enabled and _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec <= int(START_TRACE_SECONDS * 1_000_000.0):
 			_append_timeline_metric("local_steps", {"tick": _world_tick, "world_x": float(_runner.player_state.get("world_x", 0.0)), "local_usec": Time.get_ticks_usec()})
 		steps += 1
 	if owed_steps > MAX_CATCHUP_STEPS:
@@ -392,17 +409,19 @@ func _advance_local_to_shared_clock(delta: float) -> void:
 func _process(delta: float) -> void:
 	if _manifest == null or _runner == null or _course_presentation == null:
 		return
+	_remote_presentation_cache.clear()
 	# Godot's render callback can run between 60 Hz physics callbacks. Advance
 	# fixed-tick simulation to the shared clock before sampling any player pose,
 	# so the local runner and camera do not hit a short projection ceiling.
 	if _round_started:
-		var catchup_started_usec := Time.get_ticks_usec()
+		var catchup_started_usec := Time.get_ticks_usec() if _profiling_enabled else 0
 		_advance_local_to_shared_clock(0.0)
-		_profile_phase("fixed_step_catchup", catchup_started_usec)
+		if _profiling_enabled:
+			_profile_phase("fixed_step_catchup", catchup_started_usec)
 	_render_fraction = Engine.get_physics_interpolation_fraction()
 	var shared_tick := 0.0
 	var presentation_tick := 0.0
-	var player_presentation_started_usec := Time.get_ticks_usec()
+	var player_presentation_started_usec := Time.get_ticks_usec() if _profiling_enabled else 0
 	if _round_started:
 		shared_tick = MultiplayerV2Service._round_coordinator.clock.tick_at_monotonic_usec(Time.get_ticks_usec())
 		# One fixed simulation tick of shared history gives 30/60 Hz remote
@@ -419,7 +438,8 @@ func _process(delta: float) -> void:
 				MultiplayerV2Service.diagnostics.record_event("remote_track_transition", {"peer_id": int(peer_id), "round_id": _round_id, "transition": transition, "presentation_tick": presentation_tick, "shared_clock_tick": shared_tick, "sample_tick": float(sampled.get("simulation_tick", -1.0)), "world_x": float(sampled.get("world_x", 0.0)), "correction_magnitude": float(sampled.get("correction_magnitude", 0.0)), "correction_elapsed_seconds": float(sampled.get("correction_elapsed_seconds", 0.0))})
 	else:
 		_local_presentation_pose = _runner.render_state(_render_fraction)
-	_profile_phase("player_remote_presentation", player_presentation_started_usec)
+	if _profiling_enabled:
+		_profile_phase("player_remote_presentation", player_presentation_started_usec)
 	_last_presentation_tick = presentation_tick
 	_update_start_countdown()
 	_previous_camera_left = _camera_left
@@ -431,10 +451,15 @@ func _process(delta: float) -> void:
 	if _round_started:
 		world_render_fraction = WorldSimulationScript.presentation_fraction(presentation_tick, _world.tick)
 	_last_world_render_fraction = world_render_fraction
-	var dynamic_nodes_started_usec := Time.get_ticks_usec()
+	var dynamic_nodes_started_usec := Time.get_ticks_usec() if _profiling_enabled else 0
 	_last_render_world_state = _world.render_state(world_render_fraction)
 	_course_presentation.call("set_world_state", _last_render_world_state)
-	_profile_phase("dynamic_entity_presentation", dynamic_nodes_started_usec)
+	if _profiling_enabled:
+		_profile_phase("dynamic_entity_presentation", dynamic_nodes_started_usec)
+	if _profiling_enabled:
+		var barrel_trace_started_usec := Time.get_ticks_usec()
+		_capture_barrel_frame_trace()
+		_profile_phase("barrel_trace_sampling", barrel_trace_started_usec)
 	if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec <= int(START_TRACE_SECONDS * 1_000_000.0):
 		var remote_presented := {}
 		for peer_id in _remote_tracks:
@@ -452,9 +477,12 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 func _step_local_round() -> void:
-	var tick_started_usec := Time.get_ticks_usec()
-	_step_local_round_impl()
-	_profile_phase("world_tick_and_collision", tick_started_usec)
+	if _profiling_enabled:
+		var tick_started_usec := Time.get_ticks_usec()
+		_step_local_round_impl()
+		_profile_phase("world_tick_and_collision", tick_started_usec)
+	else:
+		_step_local_round_impl()
 
 func _step_local_round_impl() -> void:
 	_world_tick += 1
@@ -527,23 +555,24 @@ func _request_shared_barrel(contact: Dictionary) -> void:
 	MultiplayerV2Service.diagnostics.record_event("barrel_contact_pending", request)
 
 func _on_remote_sample(peer_id: int, sample: Dictionary) -> void:
-	var sample_started_usec := Time.get_ticks_usec()
+	var sample_started_usec := Time.get_ticks_usec() if _profiling_enabled else 0
 	if peer_id == int(MultiplayerV2Service.session.get("local_peer_id", 1)) or not _remote_tracks.has(peer_id):
-		_profile_phase("remote_sample_ingest", sample_started_usec)
+		if _profiling_enabled: _profile_phase("remote_sample_ingest", sample_started_usec)
 		return
 	if str(sample.get("round_id", "")) != _round_id:
-		_profile_phase("remote_sample_ingest", sample_started_usec)
+		if _profiling_enabled: _profile_phase("remote_sample_ingest", sample_started_usec)
 		return
 	if bool(_remote_tracks[peer_id].add_sample(sample)):
 		MultiplayerV2Service.diagnostics.increment_metric("track_insertions_owner_%d" % peer_id)
 	else:
 		MultiplayerV2Service.diagnostics.increment_metric("track_rejections_owner_%d" % peer_id)
 	_remote_locomotion[peer_id] = str(sample.get("locomotion_state", "running"))
-	if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec <= int(START_TRACE_SECONDS * 1_000_000.0):
+	if _profiling_enabled and _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec <= int(START_TRACE_SECONDS * 1_000_000.0):
 		var local_peer_id := int(MultiplayerV2Service.session.get("local_peer_id", -1))
 		var role := str(MultiplayerV2Service.session.get("role", ""))
 		_append_timeline_metric("remote_samples", {"owner_peer_id": peer_id, "transport_sender_peer_id": 1 if role == "guest" else peer_id, "delivery_path": "host_relay" if role == "guest" and peer_id != 1 else "direct", "local_peer_id": local_peer_id, "sample_tick": int(sample.get("simulation_tick", -1)), "local_simulation_tick": _world_tick, "world_x": float(sample.get("world_x", 0.0)), "received_usec": Time.get_ticks_usec()})
-	_profile_phase("remote_sample_ingest", sample_started_usec)
+	if _profiling_enabled:
+		_profile_phase("remote_sample_ingest", sample_started_usec)
 
 func _append_timeline_metric(key: String, value: Dictionary) -> void:
 	var sample := value.duplicate(true)
@@ -644,12 +673,15 @@ func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 	_last_process_usec = -1
 	_godot_frame_intervals_ms.clear()
 	_phase_profile.clear()
+	for key in _presentation_work_counts:
+		_presentation_work_counts[key] = 0
 	_last_barrel_probe.clear()
+	_close_barrel_frame_trace("round_restarted")
 	_countdown_flash_until_usec = _local_start_deadline_usec + COUNTDOWN_START_FLASH_USEC
 	_status_label.text = tr("RUN")
 	MultiplayerV2Service.diagnostics.record_event("round_timeline_started", {"round_id": round_id, "deadline_local_usec": _local_start_deadline_usec, "clock_uncertainty_usec": float(MultiplayerV2Service._round_coordinator.clock.offset_uncertainty_usec), "initial_tick": _world_tick})
 	MultiplayerV2Service.diagnostics.begin_round_trace(round_id, int(MultiplayerV2Service.session.get("local_peer_id", -1)), str(MultiplayerV2Service.session.get("role", "")), _local_start_deadline_usec, float(MultiplayerV2Service._round_coordinator.clock.offset_uncertainty_usec))
-	MultiplayerV2Service.diagnostics.record_event("presentation_timing_config", {"shared_presentation_delay_ticks": PRESENTATION_DELAY_TICKS, "moving_barrels_use_shared_presentation_time": true, "browser_raf_available": OS.has_feature("web")})
+	MultiplayerV2Service.diagnostics.record_event("presentation_timing_config", {"shared_presentation_delay_ticks": PRESENTATION_DELAY_TICKS, "moving_barrels_use_shared_presentation_time": true, "browser_raf_available": OS.has_feature("web"), "profiling_enabled": _profiling_enabled})
 	_update_start_countdown()
 
 func _update_spectator_camera() -> void:
@@ -688,15 +720,24 @@ func _update_spectator_camera() -> void:
 func _remote_track_sample(peer_id: int) -> Dictionary:
 	if not _remote_tracks.has(peer_id):
 		return {}
+	if _profiling_enabled:
+		_presentation_work_counts["track_sample_calls"] = int(_presentation_work_counts.track_sample_calls) + 1
+	if _remote_presentation_cache.has(peer_id):
+		return _remote_presentation_cache[peer_id]
+	if _profiling_enabled:
+		_presentation_work_counts["track_pose_computations"] = int(_presentation_work_counts.track_pose_computations) + 1
 	var result: Dictionary = _remote_tracks[peer_id].sample_at_render_time()
 	var terminal := str(_remote_terminal.get(peer_id, "running")) != "running"
 	var gravity := int(result.get("gravity_direction", 1))
 	if bool(result.get("grounded", false)) and not terminal and _world != null:
+		if _profiling_enabled:
+			_presentation_work_counts["surface_queries"] = int(_presentation_work_counts.surface_queries) + 1
 		var support: Dictionary = _world.surface_at(float(result.get("world_x", 0.0)), gravity < 0)
 		if bool(support.get("supported", false)):
 			result["y"] = float(support.get("y", result.get("y", 0.0))) - float(gravity) * Motion.SIZE.y * 0.5
 	result["sample_age_ticks"] = 0.0 if terminal else maxf(float(result.get("render_tick", 0.0)) - float(result.get("simulation_tick", 0.0)), 0.0)
 	MultiplayerV2Service.diagnostics.metrics["remote_track_%d" % peer_id] = {"valid": bool(result.get("valid", false)), "terminal": terminal, "stale": false if terminal else bool(result.get("stale", true)), "sequence": int(result.get("sample_seq", -1)), "render_tick": float(result.get("render_tick", -1.0)), "sample_age_ticks": float(result.get("sample_age_ticks", -1.0)), "world_x": float(result.get("world_x", 0.0)), "render_mode": str(result.get("render_mode", "unknown")), "correction_magnitude": float(result.get("correction_magnitude", 0.0)), "correction_elapsed_seconds": float(result.get("correction_elapsed_seconds", 0.0))}
+	_remote_presentation_cache[peer_id] = result
 	return result
 
 func _project_remote_vertical(sample: Dictionary, target_tick: float) -> Dictionary:
@@ -709,6 +750,8 @@ func _project_remote_vertical(sample: Dictionary, target_tick: float) -> Diction
 	var world_x := float(sample.get("world_x", 0.0))
 	var velocity_x := maxf(float(sample.get("velocity_x", Motion.BASE_RUN_SPEED)), 0.0)
 	while remaining > 0.0001:
+		if _profiling_enabled:
+			_presentation_work_counts["projection_steps"] = int(_presentation_work_counts.projection_steps) + 1
 		var step_ticks := minf(remaining, 1.0)
 		var delta := step_ticks / 60.0
 		var previous_state := state.duplicate(true)
@@ -716,9 +759,13 @@ func _project_remote_vertical(sample: Dictionary, target_tick: float) -> Diction
 		world_x += velocity_x * delta
 		var floor_surface: Dictionary = _world.surface_at(world_x, false)
 		var ceiling_surface: Dictionary = _world.surface_at(world_x, true)
+		if _profiling_enabled:
+			_presentation_work_counts["surface_queries"] = int(_presentation_work_counts.surface_queries) + 2
 		Motion.advance_vertical(state, delta, float(floor_surface.get("y", _manifest.initial_floor_y)), float(ceiling_surface.get("y", _manifest.initial_ceiling_y)), bool(floor_surface.get("supported", false)), bool(ceiling_surface.get("supported", false)))
 		var candidate := {"world_x": world_x, "y": float(state.y), "gravity_direction": int(state.gravity_direction), "state": "running", "blocked": false}
 		var contact: Dictionary = _world.player_contact(candidate)
+		if _profiling_enabled:
+			_presentation_work_counts["contact_queries"] = int(_presentation_work_counts.contact_queries) + 1
 		if not contact.is_empty():
 			state = previous_state
 			world_x = previous_x
@@ -731,28 +778,34 @@ func _project_remote_vertical(sample: Dictionary, target_tick: float) -> Diction
 	return projected
 
 func _record_presentation_diagnostic(delta: float) -> void:
-	var diagnostic_started_usec := Time.get_ticks_usec()
+	var diagnostic_started_usec := Time.get_ticks_usec() if _profiling_enabled else 0
 	var now_usec := Time.get_ticks_usec()
+	if not _round_started:
+		_last_process_usec = -1
+		return
 	if _last_process_usec >= 0:
 		_godot_frame_intervals_ms.append(float(now_usec - _last_process_usec) / 1000.0)
 	_last_process_usec = now_usec
-	if _last_remote_watch_usec >= 0 and now_usec - _last_remote_watch_usec < 100_000:
+	if not _profiling_enabled and (_last_cadence_window_usec < 0 or now_usec - _last_cadence_window_usec < 1_000_000):
+		return
+	if _profiling_enabled and _last_remote_watch_usec >= 0 and now_usec - _last_remote_watch_usec < 100_000:
 		if _last_cadence_window_usec < 0 or now_usec - _last_cadence_window_usec < 1_000_000:
-			_profile_phase("diagnostic_sampling", diagnostic_started_usec)
+			if _profiling_enabled: _profile_phase("diagnostic_sampling", diagnostic_started_usec)
 			return
-	if _last_remote_watch_usec < 0 or now_usec - _last_remote_watch_usec >= 100_000:
-		_last_remote_watch_usec = now_usec
 	var peers := {}
-	for peer_id in _remote_tracks:
-		var pose := _remote_track_sample(int(peer_id))
-		peers[str(peer_id)] = {"simulation_tick": float(pose.get("simulation_tick", -1.0)), "render_tick": float(pose.get("render_tick", -1.0)), "world_x": float(pose.get("world_x", 0.0)), "y": float(pose.get("y", 0.0)), "velocity_y": float(pose.get("velocity_y", 0.0)), "gravity_direction": int(pose.get("gravity_direction", 1)), "grounded": bool(pose.get("grounded", false)), "blocked": bool(pose.get("blocked", false)), "locomotion_state": str(pose.get("locomotion_state", "unknown")), "render_mode": str(pose.get("render_mode", "unknown")), "sample_age_ticks": float(pose.get("sample_age_ticks", -1.0))}
-	for peer_key in peers:
-		var current: Dictionary = peers[peer_key]
-		var previous: Dictionary = _last_remote_watch_poses.get(peer_key, {})
-		if not previous.is_empty() and (absf(float(current.y) - float(previous.y)) >= 24.0 or int(current.gravity_direction) != int(previous.gravity_direction) or bool(current.grounded) != bool(previous.grounded) or bool(current.blocked) != bool(previous.blocked) or str(current.locomotion_state) != str(previous.locomotion_state)):
-			MultiplayerV2Service.diagnostics.record_event("remote_presentation_change", {"peer_id": int(peer_key), "presentation_tick": float(current.render_tick), "previous": previous, "current": current})
-	_last_remote_watch_poses = peers.duplicate(true)
-	MultiplayerV2Service.diagnostics.record_frame({"phase": "spectator" if _spectator_peer_id > 0 else "running", "tick": _runner.simulation_tick, "world_tick": _world.tick, "x": float(_runner.player_state.get("world_x", 0.0)), "y": float(_runner.player_state.get("y", 0.0)), "camera_left": _camera_left, "camera_delta_x": _camera_left - _previous_camera_left, "render_fraction": _render_fraction, "render_delta_ms": delta * 1000.0, "fps": Engine.get_frames_per_second(), "window_focused": DisplayServer.window_is_focused(), "presentation_tick": float(MultiplayerV2Service._round_coordinator.clock.tick_at_monotonic_usec(now_usec)) if _round_started else -1.0, "remote": peers})
+	if _profiling_enabled:
+		_last_remote_watch_usec = now_usec
+		for peer_id in _remote_tracks:
+			var pose := _remote_track_sample(int(peer_id))
+			peers[str(peer_id)] = {"simulation_tick": float(pose.get("simulation_tick", -1.0)), "render_tick": float(pose.get("render_tick", -1.0)), "world_x": float(pose.get("world_x", 0.0)), "y": float(pose.get("y", 0.0)), "velocity_y": float(pose.get("velocity_y", 0.0)), "gravity_direction": int(pose.get("gravity_direction", 1)), "grounded": bool(pose.get("grounded", false)), "blocked": bool(pose.get("blocked", false)), "locomotion_state": str(pose.get("locomotion_state", "unknown")), "render_mode": str(pose.get("render_mode", "unknown")), "sample_age_ticks": float(pose.get("sample_age_ticks", -1.0))}
+		for peer_key in peers:
+			var current: Dictionary = peers[peer_key]
+			var previous: Dictionary = _last_remote_watch_poses.get(peer_key, {})
+			if not previous.is_empty() and (absf(float(current.y) - float(previous.y)) >= 24.0 or int(current.gravity_direction) != int(previous.gravity_direction) or bool(current.grounded) != bool(previous.grounded) or bool(current.blocked) != bool(previous.blocked) or str(current.locomotion_state) != str(previous.locomotion_state)):
+				MultiplayerV2Service.diagnostics.record_event("remote_presentation_change", {"peer_id": int(peer_key), "presentation_tick": float(current.render_tick), "previous": previous, "current": current})
+		_last_remote_watch_poses = peers.duplicate(true) if _profiling_enabled else _last_remote_watch_poses
+	if _profiling_enabled:
+		MultiplayerV2Service.diagnostics.record_frame({"phase": "spectator" if _spectator_peer_id > 0 else "running", "tick": _runner.simulation_tick, "world_tick": _world.tick, "x": float(_runner.player_state.get("world_x", 0.0)), "y": float(_runner.player_state.get("y", 0.0)), "camera_left": _camera_left, "camera_delta_x": _camera_left - _previous_camera_left, "render_fraction": _render_fraction, "render_delta_ms": delta * 1000.0, "fps": Engine.get_frames_per_second(), "window_focused": DisplayServer.window_is_focused(), "presentation_tick": float(MultiplayerV2Service._round_coordinator.clock.tick_at_monotonic_usec(now_usec)) if _round_started else -1.0, "remote": peers})
 	if _last_cadence_window_usec < 0:
 		_last_cadence_window_usec = now_usec
 	if now_usec - _last_cadence_window_usec >= 1_000_000:
@@ -760,23 +813,29 @@ func _record_presentation_diagnostic(delta: float) -> void:
 		window["engine_fps"] = Engine.get_frames_per_second()
 		window["elapsed_round_tick"] = _world_tick
 		window["presentation_tick"] = float(MultiplayerV2Service._round_coordinator.clock.tick_at_monotonic_usec(now_usec)) - PRESENTATION_DELAY_TICKS if _round_started else -1.0
-		window["obstacle_transform"] = _diagnostic_obstacle_transform()
-		window["barrel_transform"] = _diagnostic_barrel_transform()
+		window["profiling_enabled"] = _profiling_enabled
+		if _profiling_enabled:
+			window["obstacle_transform"] = _diagnostic_obstacle_transform()
+			window["barrel_transform"] = _diagnostic_barrel_transform()
+			window["presentation_work_counts"] = _presentation_work_counts.duplicate(true)
 		var browser_window := _take_browser_frame_window()
 		if not browser_window.is_empty():
 			window["browser_raf"] = _summarize_intervals(_intervals_from_json(browser_window.get("intervals", [])))
 			for key in ["device_pixel_ratio", "canvas_css_width", "canvas_css_height"]:
 				if browser_window.has(key):
 					window[key] = browser_window[key]
-		_profile_phase("diagnostic_sampling", diagnostic_started_usec)
-		window["phase_profile"] = _take_phase_profile()
-		if _course_presentation.has_method("take_render_profile"):
+		if _profiling_enabled: _profile_phase("diagnostic_sampling", diagnostic_started_usec)
+		if _profiling_enabled:
+			window["phase_profile"] = _take_phase_profile()
+		if _profiling_enabled and _course_presentation.has_method("take_render_profile"):
 			window["course_render_profile"] = _course_presentation.call("take_render_profile")
 		MultiplayerV2Service.diagnostics.record_event("render_cadence_window", window)
 		_godot_frame_intervals_ms.clear()
+		for key in _presentation_work_counts:
+			_presentation_work_counts[key] = 0
 		_last_cadence_window_usec = now_usec
 	else:
-		_profile_phase("diagnostic_sampling", diagnostic_started_usec)
+		if _profiling_enabled: _profile_phase("diagnostic_sampling", diagnostic_started_usec)
 
 func _summarize_intervals(intervals: Array[float]) -> Dictionary:
 	if intervals.is_empty():
@@ -849,23 +908,7 @@ func _diagnostic_barrel_transform() -> Dictionary:
 	var previous_id := str(_last_barrel_probe.get("entity_id", ""))
 	if _world == null or _course_presentation == null:
 		return {"entity_id": "", "previous_probe_entity_id": previous_id, "target_changed": not previous_id.is_empty(), "stage": "unavailable"}
-	var viewport_width := get_viewport_rect().size.x
-	var selected: Dictionary = {}
-	var selected_distance := INF
-	for barrel in _world.barrels:
-		if not bool(barrel.get("spawned", false)) or bool(barrel.get("destroyed", false)):
-			continue
-		var entity_id := str(barrel.get("entity_id", ""))
-		var node_value: Variant = _course_presentation.event_nodes.get(entity_id)
-		if not is_instance_valid(node_value) or not node_value is Node2D or not (node_value as Node2D).visible:
-			continue
-		var canvas_position: Vector2 = (node_value as Node2D).get_global_transform_with_canvas().origin
-		if canvas_position.x < 0.0 or canvas_position.x > viewport_width:
-			continue
-		var distance := absf(canvas_position.x - CAMERA_PLAYER_X)
-		if distance < selected_distance:
-			selected = {"entity_id": entity_id, "node": node_value, "distance": distance}
-			selected_distance = distance
+	var selected := _find_visible_barrel()
 	if selected.is_empty():
 		_last_barrel_probe = {"entity_id": ""}
 		return {"entity_id": "", "previous_probe_entity_id": previous_id, "target_changed": not previous_id.is_empty(), "stage": "no_visible_spawned_barrel", "simulation_tick": int(_world.tick)}
@@ -888,7 +931,62 @@ func _diagnostic_barrel_transform() -> Dictionary:
 	_last_barrel_probe = {"entity_id": entity_id, "world_x": node.global_position.x, "world_y": node.global_position.y, "at_usec": Time.get_ticks_usec()}
 	return probe
 
+func _find_visible_barrel() -> Dictionary:
+	var viewport_width := get_viewport_rect().size.x
+	var selected: Dictionary = {}
+	var selected_distance := INF
+	for barrel in _world.barrels:
+		if not bool(barrel.get("spawned", false)) or bool(barrel.get("destroyed", false)):
+			continue
+		var entity_id := str(barrel.get("entity_id", ""))
+		var node_value: Variant = _course_presentation.event_nodes.get(entity_id)
+		if not is_instance_valid(node_value) or not node_value is Node2D or not (node_value as Node2D).visible:
+			continue
+		var canvas_position: Vector2 = (node_value as Node2D).get_global_transform_with_canvas().origin
+		if canvas_position.x < 0.0 or canvas_position.x > viewport_width:
+			continue
+		var distance := absf(canvas_position.x - CAMERA_PLAYER_X)
+		if distance < selected_distance:
+			selected = {"entity_id": entity_id, "node": node_value}
+			selected_distance = distance
+	return selected
+
+func _capture_barrel_frame_trace() -> void:
+	var selected := _find_visible_barrel()
+	if selected.is_empty():
+		_close_barrel_frame_trace(_barrel_trace_loss_reason())
+		return
+	var entity_id := str(selected.entity_id)
+	if not _barrel_trace_entity_id.is_empty() and _barrel_trace_entity_id != entity_id:
+		_close_barrel_frame_trace("visible_target_changed")
+	if _barrel_trace_entity_id.is_empty():
+		_barrel_trace_entity_id = entity_id
+		_barrel_trace_started_usec = Time.get_ticks_usec()
+	var node: Node2D = selected.node
+	var canvas_position: Vector2 = node.get_global_transform_with_canvas().origin
+	var barrel_state: Dictionary = _world.barrel_presentation_probe(entity_id, _last_presentation_tick, _last_world_render_fraction)
+	_barrel_trace_frames.append({"at_usec": Time.get_ticks_usec(), "simulation_tick": _world.tick, "presentation_tick": _last_presentation_tick, "presentation_fraction": _last_world_render_fraction, "entity_id": entity_id, "previous": barrel_state.get("previous", {}), "current": barrel_state.get("current", {}), "displayed": barrel_state.get("displayed", {}), "world_x": node.global_position.x, "world_y": node.global_position.y, "canvas_x": canvas_position.x, "canvas_y": canvas_position.y, "rotation": node.rotation})
+	if _barrel_trace_frames.size() >= 120:
+		_close_barrel_frame_trace("sample_window_complete")
+
+func _close_barrel_frame_trace(reason: String) -> void:
+	if not _barrel_trace_entity_id.is_empty() and not _barrel_trace_frames.is_empty():
+		MultiplayerV2Service.diagnostics.record_event("barrel_render_trace", {"entity_id": _barrel_trace_entity_id, "sample_count": _barrel_trace_frames.size(), "duration_ms": float(Time.get_ticks_usec() - _barrel_trace_started_usec) / 1000.0 if _barrel_trace_started_usec >= 0 else 0.0, "close_reason": reason, "samples": _barrel_trace_frames})
+	_barrel_trace_entity_id = ""
+	_barrel_trace_started_usec = -1
+	_barrel_trace_frames.clear()
+
+func _barrel_trace_loss_reason() -> String:
+	if _barrel_trace_entity_id.is_empty() or _world == null:
+		return "target_not_visible"
+	for barrel in _world.barrels:
+		if str(barrel.get("entity_id", "")) == _barrel_trace_entity_id:
+			return "entity_destroyed" if bool(barrel.get("destroyed", false)) else "target_not_visible"
+	return "entity_removed"
+
 func _profile_phase(name: String, started_usec: int) -> void:
+	if not _profiling_enabled:
+		return
 	var elapsed_usec := maxi(Time.get_ticks_usec() - started_usec, 0)
 	var sample: Dictionary = _phase_profile.get(name, {"total_usec": 0, "max_usec": 0, "sample_count": 0})
 	sample["total_usec"] = int(sample.total_usec) + elapsed_usec

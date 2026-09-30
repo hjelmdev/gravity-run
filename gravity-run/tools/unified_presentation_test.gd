@@ -99,6 +99,9 @@ func _test_v2_scene(manifest: Resource) -> void:
 	root.add_child(match_scene)
 	match_scene.set_process(false)
 	match_scene.set_physics_process(false)
+	_check(not match_scene._profiling_enabled, "expensive V2 profiling is opt-in by default")
+	match_scene._profiling_enabled = true
+	match_scene._course_presentation.set_render_profile_enabled(true)
 	_check(match_scene._render_camera.get_script() == CameraScript, "V2 uses shared Camera2D")
 	_check(match_scene._course_root.position == Vector2.ZERO, "V2 course is never translated twice")
 	match_scene._runner.player_state.world_x = 1500.0
@@ -114,6 +117,10 @@ func _test_v2_scene(manifest: Resource) -> void:
 	for peer in [2, 3]:
 		var remote_pose: Dictionary = match_scene._remote_track_sample(peer)
 		_check(is_equal_approx(match_scene._player_views[peer].position.x, float(remote_pose.get("world_x", -1.0))), "peer %d render x equals sampled collision world x" % peer)
+	var track_computations_before_cache_reads := int(match_scene._presentation_work_counts.track_pose_computations)
+	var cached_pose_a: Dictionary = match_scene._remote_track_sample(2)
+	var cached_pose_b: Dictionary = match_scene._remote_track_sample(2)
+	_check(cached_pose_a == cached_pose_b and int(match_scene._presentation_work_counts.track_pose_computations) == track_computations_before_cache_reads, "remote pose is computed once and reused throughout the render frame")
 	match_scene._on_terminal_report(1, {"state": "dead", "world_x": 1500.0, "y": 438.0})
 	match_scene._process(1.0 / 144.0)
 	var target := int(match_scene._spectator_peer_id)

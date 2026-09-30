@@ -5,6 +5,7 @@ const Motion := preload("res://systems/runner_motion.gd")
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const CourseGeneratorScript := preload("res://systems/course_generator.gd")
 const LedgerScript := preload("res://systems/multiplayer_v2/v2_world_event_ledger.gd")
+const SurfaceIndexScript := preload("res://systems/course_surface_index.gd")
 
 const TICK_RATE := 60.0
 const FIXED_DELTA := 1.0 / TICK_RATE
@@ -17,6 +18,7 @@ var barrels: Array[Dictionary] = []
 var entity_ledger: MultiplayerV2WorldEventLedger = LedgerScript.new()
 var _entity_by_event: Dictionary = {}
 var _barrel_history: Dictionary = {}
+var _surface_index
 
 func configure(course_manifest: Resource) -> String:
 	if course_manifest == null or not course_manifest.has_method("validate"):
@@ -25,6 +27,8 @@ func configure(course_manifest: Resource) -> String:
 	if not error.is_empty():
 		return error
 	manifest = course_manifest
+	_surface_index = SurfaceIndexScript.new()
+	_surface_index.configure(manifest.events, float(manifest.initial_floor_y), float(manifest.initial_ceiling_y))
 	tick = 0
 	elapsed = 0.0
 	barrels.clear()
@@ -116,6 +120,8 @@ static func presentation_fraction(presentation_tick: float, latest_simulation_ti
 	return clampf(presentation_tick - float(latest_simulation_tick - 1), 0.0, 1.0)
 
 func surface_at(x: float, ceiling: bool) -> Dictionary:
+	if _surface_index != null:
+		return _surface_index.surface_at(x, ceiling)
 	var y := float(manifest.initial_ceiling_y) if ceiling else float(manifest.initial_floor_y)
 	var supported := true
 	for event in manifest.events:

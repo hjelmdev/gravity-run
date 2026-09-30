@@ -8,6 +8,7 @@ const Ledger := preload("res://systems/multiplayer_v2/v2_world_event_ledger.gd")
 const Rules := preload("res://systems/multiplayer_v2/v2_destructible_rules.gd")
 const Builder := preload("res://systems/course_manifest_builder.gd")
 const CourseGenerator := preload("res://systems/course_generator.gd")
+const SurfaceIndex := preload("res://systems/course_surface_index.gd")
 const World := preload("res://systems/multiplayer_v2/v2_world_simulation.gd")
 const Runner := preload("res://systems/multiplayer_v2/v2_local_runner.gd")
 const Coordinator := preload("res://systems/multiplayer_v2/v2_round_coordinator.gd")
@@ -329,10 +330,46 @@ func _initialize() -> void:
 		var second = World.new()
 		_assert(first.configure(built.manifest).is_empty(), "first world configures")
 		_assert(second.configure(built.manifest).is_empty(), "second world configures")
+		var surface_index = SurfaceIndex.new()
+		surface_index.configure(built.manifest.events, float(built.manifest.initial_floor_y), float(built.manifest.initial_ceiling_y))
+		var surface_probe_xs: Array[float] = []
+		for event_value in built.manifest.events:
+			if not event_value is Dictionary:
+				continue
+			var event: Dictionary = event_value
+			match str(event.get("kind", "")):
+				"step":
+					var step_x := float(event.get("x", 0.0))
+					surface_probe_xs.append_array([step_x - 0.001, step_x, step_x + 0.001])
+				"slope":
+					var slope_start := float(event.get("start_x", 0.0))
+					var slope_end := float(event.get("end_x", 0.0))
+					surface_probe_xs.append_array([slope_start - 0.001, slope_start, slope_start + 0.001, slope_end - 0.001, slope_end, slope_end + 0.001])
+				"gap":
+					var gap_start := float(event.get("x", 0.0)) - float(event.get("width", 0.0)) * 0.5
+					var gap_end := gap_start + float(event.get("width", 0.0))
+					surface_probe_xs.append_array([gap_start - 0.001, gap_start, gap_start + 0.001, gap_end - 0.001, gap_end, gap_end + 0.001])
+		for sample_index in range(256):
+			surface_probe_xs.append(float(built.manifest.start_x) + float(sample_index) * float(built.manifest.finish_x - built.manifest.start_x) / 255.0)
+		var surface_index_matches := true
+		for x in surface_probe_xs:
+			for ceiling in [false, true]:
+				var indexed: Dictionary = surface_index.surface_at(x, ceiling)
+				var reference: Dictionary = SurfaceIndex.linear_surface_at(built.manifest.events, float(built.manifest.initial_floor_y), float(built.manifest.initial_ceiling_y), x, ceiling)
+				if not is_equal_approx(float(indexed.y), float(reference.y)) or bool(indexed.supported) != bool(reference.supported):
+					surface_index_matches = false
+					break
+		_assert(surface_index_matches, "indexed floor and ceiling queries preserve exact step, slope, and gap geometry")
+		second._surface_index = null # Reference path: the original event-by-event surface scan.
+		var indexed_world_matches_reference := true
 		for tick in range(1, 121):
 			first.step_to(tick)
 			second.step_to(tick)
+			if first.state_hash() != second.state_hash():
+				indexed_world_matches_reference = false
+				break
 		_assert(first.state_hash() == second.state_hash(), "world hashes match at same tick/revision")
+		_assert(indexed_world_matches_reference, "indexed surface queries preserve deterministic world simulation against the original scan")
 		if not first.barrels.is_empty():
 			var barrel_id := str(first.barrels[0].entity_id)
 			var fraction := 0.5

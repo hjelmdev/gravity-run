@@ -10,17 +10,24 @@ const TrackGapScript := preload("res://terrain/track_gap.gd")
 const CourseGenerator := preload("res://systems/course_generator.gd")
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const CourseSurfaceRenderer := preload("res://systems/course_surface_renderer.gd")
+const SurfaceIndexScript := preload("res://systems/course_surface_index.gd")
 
 var manifest: Resource
 var event_nodes: Dictionary = {}
 var terrain_events: Array[Dictionary] = []
 var gap_events: Array[Dictionary] = []
+var _render_ceiling_gaps: Array[Dictionary] = []
+var _render_floor_gaps: Array[Dictionary] = []
+var _render_terrain_boundaries: Array[float] = []
+var _render_step_positions: Array[float] = []
 var _camera_left := 0.0
 var _world_height := 720.0
 var _render_profile_total_usec := 0
 var _render_profile_max_usec := 0
 var _render_profile_draw_count := 0
 var _render_profile_surface_queries := 0
+var _render_profile_enabled := false
+var _surface_index
 
 static func create_hazard(scene: PackedScene, at_position: Vector2, size: Vector2, from_ceiling: bool, surface_rotation: float = 0.0) -> Node2D:
 	var hazard := scene.instantiate() as Node2D
@@ -39,6 +46,8 @@ func load_manifest(course_manifest: Resource) -> String:
 		manifest = null
 		return validation
 	_world_height = float(manifest.world_height)
+	_surface_index = SurfaceIndexScript.new()
+	_surface_index.configure(manifest.events, float(manifest.initial_floor_y), float(manifest.initial_ceiling_y))
 	var floor_y := float(manifest.initial_floor_y)
 	var ceiling_y := float(manifest.initial_ceiling_y)
 	for event_value in manifest.events:
@@ -109,11 +118,31 @@ func load_manifest(course_manifest: Resource) -> String:
 				event_nodes[event_id] = slope
 				if from_ceiling: ceiling_y = end_y
 				else: floor_y = end_y
+	for event in gap_events:
+		var half_width := float(event.get("width", 0.0)) * 0.5
+		var interval := {"start": float(event.get("x", 0.0)) - half_width, "end": float(event.get("x", 0.0)) + half_width}
+		if bool(event.get("from_ceiling", false)):
+			_render_ceiling_gaps.append(interval)
+		else:
+			_render_floor_gaps.append(interval)
+	for event in terrain_events:
+		if str(event.get("kind", "")) == "slope":
+			_render_terrain_boundaries.append(float(event.get("start_x", 0.0)))
+			_render_terrain_boundaries.append(float(event.get("end_x", 0.0)))
+		else:
+			_render_step_positions.append(float(event.get("x", 0.0)))
+	_render_ceiling_gaps.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.start) < float(b.start))
+	_render_floor_gaps.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.start) < float(b.start))
+	_render_terrain_boundaries.sort()
+	_render_step_positions.sort()
 	return ""
 
 func set_camera_left(camera_left: float) -> void:
 	_camera_left = maxf(camera_left, 0.0)
 	queue_redraw()
+
+func set_render_profile_enabled(enabled: bool) -> void:
+	_render_profile_enabled = enabled
 
 func set_world_state(world_state: Dictionary) -> void:
 	var barrels: Variant = world_state.get("barrels", [])
@@ -160,32 +189,26 @@ func reset() -> void:
 	event_nodes.clear()
 	terrain_events.clear()
 	gap_events.clear()
+	_render_ceiling_gaps.clear()
+	_render_floor_gaps.clear()
+	_render_terrain_boundaries.clear()
+	_render_step_positions.clear()
 	manifest = null
+	_surface_index = null
 
 func _draw() -> void:
 	if manifest == null:
 		return
-	var draw_started_usec := Time.get_ticks_usec()
-	var gaps: Array[Dictionary] = []
-	for event in gap_events:
-		var half_width := float(event.get("width", 0.0)) * 0.5
-		gaps.append({"start": float(event.get("x", 0.0)) - half_width, "end": float(event.get("x", 0.0)) + half_width, "ceiling": bool(event.get("from_ceiling", false))})
-	var boundaries: Array[float] = []
-	var steps: Array[float] = []
-	for event in terrain_events:
-		if str(event.get("kind", "")) == "slope":
-			boundaries.append(float(event.get("start_x", 0.0)))
-			boundaries.append(float(event.get("end_x", 0.0)))
-		else:
-			steps.append(float(event.get("x", 0.0)))
-	CourseSurfaceRenderer.draw_track(self, _camera_left, get_viewport_rect().size, gaps, boundaries, steps, Callable(self, "_surface_y_at"), 0.0)
+	var draw_started_usec := Time.get_ticks_usec() if _render_profile_enabled else 0
+	CourseSurfaceRenderer.draw_track_cached(self, _camera_left, get_viewport_rect().size, _render_ceiling_gaps, _render_floor_gaps, _render_terrain_boundaries, _render_step_positions, Callable(self, "_surface_y_at"), 0.0)
 	var finish_screen_x := float(manifest.finish_x) - _camera_left
 	if finish_screen_x >= 0.0 and finish_screen_x <= get_viewport_rect().size.x:
 		draw_line(Vector2(float(manifest.finish_x), 0.0), Vector2(float(manifest.finish_x), _world_height), Color("f5d45e"), 4.0)
-	var draw_elapsed_usec := maxi(Time.get_ticks_usec() - draw_started_usec, 0)
-	_render_profile_total_usec += draw_elapsed_usec
-	_render_profile_max_usec = maxi(_render_profile_max_usec, draw_elapsed_usec)
-	_render_profile_draw_count += 1
+	if _render_profile_enabled:
+		var draw_elapsed_usec := maxi(Time.get_ticks_usec() - draw_started_usec, 0)
+		_render_profile_total_usec += draw_elapsed_usec
+		_render_profile_max_usec = maxi(_render_profile_max_usec, draw_elapsed_usec)
+		_render_profile_draw_count += 1
 
 func take_render_profile() -> Dictionary:
 	var result := {"terrain_draw_count": _render_profile_draw_count, "terrain_total_usec": _render_profile_total_usec, "terrain_max_usec": _render_profile_max_usec, "surface_query_count": _render_profile_surface_queries}
@@ -196,7 +219,10 @@ func take_render_profile() -> Dictionary:
 	return result
 
 func _surface_y_at(x: float, ceiling: bool) -> float:
-	_render_profile_surface_queries += 1
+	if _render_profile_enabled:
+		_render_profile_surface_queries += 1
+	if _surface_index != null:
+		return float(_surface_index.surface_at(x, ceiling).get("y", _world_height * 0.5))
 	var y := float(manifest.initial_ceiling_y) if ceiling else float(manifest.initial_floor_y)
 	for event in terrain_events:
 		if bool(event.get("from_ceiling", false)) != ceiling:
