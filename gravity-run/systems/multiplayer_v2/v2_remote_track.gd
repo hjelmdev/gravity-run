@@ -6,6 +6,7 @@ const MAX_EXTRAPOLATION_SECONDS := 0.1
 const MAX_HISTORY := 64
 const RECOVERY_X_RATE_FACTOR := 0.85
 const RECOVERY_Y_RATE := 720.0
+const VERTICAL_CORRECTION_RATE := 840.0
 const POSE_EPSILON := 0.25
 
 var samples: Array[Dictionary] = []
@@ -16,6 +17,9 @@ var shared_presentation_tick := -1.0
 var presentation_mode := "initial"
 var correction_magnitude := 0.0
 var correction_elapsed_seconds := 0.0
+var _vertical_correction := 0.0
+var _presentation_baseline_samples: Array[Dictionary] = []
+var _presentation_baseline_correction := 0.0
 
 var _displayed_pose: Dictionary = {}
 var _recovery_correction := Vector2.ZERO
@@ -31,6 +35,9 @@ func reset() -> void:
 	presentation_mode = "initial"
 	correction_magnitude = 0.0
 	correction_elapsed_seconds = 0.0
+	_vertical_correction = 0.0
+	_presentation_baseline_samples.clear()
+	_presentation_baseline_correction = 0.0
 	_displayed_pose.clear()
 	_recovery_correction = Vector2.ZERO
 	_stale_episode = false
@@ -50,10 +57,21 @@ func seed(sample: Dictionary) -> bool:
 	return true
 
 func set_shared_presentation_tick(value: float) -> void:
-	shared_presentation_tick = maxf(value, 0.0)
+	var next_tick := maxf(value, 0.0)
+	shared_presentation_tick = next_tick
 	if not samples.is_empty():
-		render_tick = shared_presentation_tick
+		render_tick = next_tick
 		initialized = true
+		if not _presentation_baseline_samples.is_empty():
+			var updated_samples := samples
+			var updated_prediction := _sample_raw_at_tick(next_tick)
+			samples = _presentation_baseline_samples
+			var previous_prediction := _sample_raw_at_tick(next_tick)
+			samples = updated_samples
+			if not _stale_episode and not bool(previous_prediction.get("stale", true)) and not bool(updated_prediction.get("stale", true)) and str(updated_prediction.get("locomotion_state", "running")) == "running":
+				_vertical_correction = float(previous_prediction.get("y", 0.0)) + _presentation_baseline_correction - float(updated_prediction.get("y", 0.0))
+			_presentation_baseline_samples.clear()
+			_presentation_baseline_correction = 0.0
 		if _displayed_pose.is_empty():
 			_displayed_pose = _sample_raw_at_tick(render_tick)
 
@@ -65,6 +83,9 @@ func add_sample(sample: Dictionary) -> bool:
 	for existing in samples:
 		if int(existing.get("sample_seq", -2)) == sequence:
 			return false
+	if _presentation_baseline_samples.is_empty() and not samples.is_empty() and initialized:
+		_presentation_baseline_samples = samples.duplicate(true)
+		_presentation_baseline_correction = _vertical_correction
 	var insert_at := samples.size()
 	for i in range(samples.size()):
 		if tick < int(samples[i].get("simulation_tick", 0)):
@@ -108,6 +129,7 @@ func advance_presentation(delta: float) -> Dictionary:
 		presentation_mode = "terminal" if state in ["blocked", "pending_barrel", "dead", "finished"] else "interpolation"
 		_stale_episode = false
 		_recovery_correction = Vector2.ZERO
+		_vertical_correction = 0.0
 		correction_magnitude = 0.0
 		_displayed_pose = raw.duplicate(true)
 		return _decorate_pose(_displayed_pose, raw, false)
@@ -117,6 +139,7 @@ func advance_presentation(delta: float) -> Dictionary:
 			_last_transition = "projection_to_stale_hold"
 		presentation_mode = "stale_hold"
 		_recovery_correction = Vector2.ZERO
+		_vertical_correction = 0.0
 		correction_magnitude = 0.0
 		_displayed_pose = raw.duplicate(true)
 		return _decorate_pose(_displayed_pose, raw, true)
@@ -153,6 +176,11 @@ func advance_presentation(delta: float) -> Dictionary:
 	else:
 		presentation_mode = "seeded" if samples.size() == 1 and render_tick <= 0.0 else str(raw.get("render_mode", "interpolation"))
 		_displayed_pose = raw.duplicate(true)
+		if absf(_vertical_correction) > POSE_EPSILON:
+			_displayed_pose["y"] = float(raw.get("y", 0.0)) + _vertical_correction
+			_vertical_correction = move_toward(_vertical_correction, 0.0, VERTICAL_CORRECTION_RATE * maxf(delta, 0.0))
+		else:
+			_vertical_correction = 0.0
 	return _decorate_pose(_displayed_pose, raw, false)
 
 func sample_at_render_time() -> Dictionary:
@@ -202,7 +230,7 @@ func _sample_raw_at_tick(target_tick: float) -> Dictionary:
 	# both axes hold and the track becomes stale as before.
 	if projected_seconds > 0.0 and vertical_projector.is_valid():
 		var projected: Dictionary = vertical_projector.call(before.duplicate(true), float(before.get("simulation_tick", 0.0)) + projected_seconds * 60.0)
-		for key in ["y", "velocity_y", "grounded"]:
+		for key in ["world_x", "y", "velocity_y", "grounded"]:
 			if projected.has(key):
 				result[key] = projected[key]
 	else:
@@ -222,4 +250,5 @@ func _decorate_pose(pose: Dictionary, raw: Dictionary, stale: bool) -> Dictionar
 	result["render_mode"] = presentation_mode
 	result["correction_magnitude"] = correction_magnitude
 	result["correction_elapsed_seconds"] = correction_elapsed_seconds
+	result["vertical_correction"] = _vertical_correction
 	return result

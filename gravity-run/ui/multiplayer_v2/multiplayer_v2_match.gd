@@ -16,6 +16,7 @@ const FIXED_DELTA := 1.0 / 60.0
 const CAMERA_PLAYER_X := 250.0
 const MAX_CATCHUP_STEPS := 12
 const START_TRACE_SECONDS := 4.0
+const PRESENTATION_DELAY_TICKS := 1.0
 const LOCAL_POSE_HISTORY := 256
 const COUNTDOWN_START_FLASH_USEC := 350_000
 
@@ -389,16 +390,21 @@ func _process(delta: float) -> void:
 		_advance_local_to_shared_clock(0.0)
 	_render_fraction = Engine.get_physics_interpolation_fraction()
 	var shared_tick := 0.0
+	var presentation_tick := 0.0
 	if _round_started:
 		shared_tick = MultiplayerV2Service._round_coordinator.clock.tick_at_monotonic_usec(Time.get_ticks_usec())
-		_local_presentation_pose = _sample_local_pose(shared_tick)
+		# One fixed simulation tick of shared history gives 30/60 Hz remote
+		# samples time to bracket the display tick. Local pose and camera use the
+		# same delayed tick, while simulation and terminal decisions stay current.
+		presentation_tick = maxf(shared_tick - PRESENTATION_DELAY_TICKS, 0.0)
+		_local_presentation_pose = _sample_local_pose(presentation_tick)
 		for peer_id in _remote_tracks:
 			if str(_remote_terminal.get(peer_id, "running")) == "running":
-				_remote_tracks[peer_id].set_shared_presentation_tick(shared_tick)
+				_remote_tracks[peer_id].set_shared_presentation_tick(presentation_tick)
 			var sampled: Dictionary = _remote_tracks[peer_id].advance_presentation(delta)
 			var transition := str(_remote_tracks[peer_id].consume_transition())
 			if not transition.is_empty():
-				MultiplayerV2Service.diagnostics.record_event("remote_track_transition", {"peer_id": int(peer_id), "round_id": _round_id, "transition": transition, "presentation_tick": shared_tick, "sample_tick": float(sampled.get("simulation_tick", -1.0)), "world_x": float(sampled.get("world_x", 0.0)), "correction_magnitude": float(sampled.get("correction_magnitude", 0.0)), "correction_elapsed_seconds": float(sampled.get("correction_elapsed_seconds", 0.0))})
+				MultiplayerV2Service.diagnostics.record_event("remote_track_transition", {"peer_id": int(peer_id), "round_id": _round_id, "transition": transition, "presentation_tick": presentation_tick, "shared_clock_tick": shared_tick, "sample_tick": float(sampled.get("simulation_tick", -1.0)), "world_x": float(sampled.get("world_x", 0.0)), "correction_magnitude": float(sampled.get("correction_magnitude", 0.0)), "correction_elapsed_seconds": float(sampled.get("correction_elapsed_seconds", 0.0))})
 	else:
 		_local_presentation_pose = _runner.render_state(_render_fraction)
 	_update_start_countdown()
@@ -412,9 +418,9 @@ func _process(delta: float) -> void:
 		var remote_presented := {}
 		for peer_id in _remote_tracks:
 			var remote_pose := _remote_track_sample(int(peer_id))
-			remote_presented[str(peer_id)] = {"requested_presentation_tick": shared_tick, "actual_sample_tick": float(remote_pose.get("simulation_tick", -1.0)), "sample_age_ticks": float(remote_pose.get("sample_age_ticks", -1.0)), "world_x": float(remote_pose.get("world_x", 0.0)), "screen_x": float(remote_pose.get("world_x", 0.0)) - _camera_left, "y": float(remote_pose.get("y", 0.0)), "stale": bool(remote_pose.get("stale", true)), "render_mode": str(remote_pose.get("render_mode", "unknown")), "correction_magnitude": float(remote_pose.get("correction_magnitude", 0.0)), "correction_elapsed_seconds": float(remote_pose.get("correction_elapsed_seconds", 0.0))}
+			remote_presented[str(peer_id)] = {"requested_presentation_tick": presentation_tick, "actual_sample_tick": float(remote_pose.get("simulation_tick", -1.0)), "sample_age_ticks": float(remote_pose.get("sample_age_ticks", -1.0)), "world_x": float(remote_pose.get("world_x", 0.0)), "screen_x": float(remote_pose.get("world_x", 0.0)) - _camera_left, "y": float(remote_pose.get("y", 0.0)), "stale": bool(remote_pose.get("stale", true)), "render_mode": str(remote_pose.get("render_mode", "unknown")), "correction_magnitude": float(remote_pose.get("correction_magnitude", 0.0)), "correction_elapsed_seconds": float(remote_pose.get("correction_elapsed_seconds", 0.0))}
 		var local_pose: Dictionary = _local_presentation_pose if not _local_presentation_pose.is_empty() else _runner.render_state(_render_fraction)
-		_append_timeline_metric("presented_frames", {"presentation_tick": shared_tick, "local_simulation_tick": _runner.simulation_tick, "local_actual_sample_tick": float(_local_presentation_pose.get("tick", _runner.simulation_tick)), "local_previous_pose": _runner.previous_render_state.duplicate(true), "local_current_pose": _runner.current_render_state.duplicate(true), "local_render_x": float(local_pose.get("world_x", 0.0)), "local_render_y": float(local_pose.get("y", 0.0)), "local_screen_x": float(local_pose.get("world_x", 0.0)) - _camera_left, "remote": remote_presented, "camera_left": _camera_left, "camera_delta_x": _camera_left - _previous_camera_left, "frame_delta_seconds": delta, "local_usec": Time.get_ticks_usec()})
+		_append_timeline_metric("presented_frames", {"presentation_tick": presentation_tick, "shared_clock_tick": shared_tick, "presentation_delay_ticks": PRESENTATION_DELAY_TICKS, "local_simulation_tick": _runner.simulation_tick, "local_actual_sample_tick": float(_local_presentation_pose.get("tick", _runner.simulation_tick)), "local_previous_pose": _runner.previous_render_state.duplicate(true), "local_current_pose": _runner.current_render_state.duplicate(true), "local_render_x": float(local_pose.get("world_x", 0.0)), "local_render_y": float(local_pose.get("y", 0.0)), "local_screen_x": float(local_pose.get("world_x", 0.0)) - _camera_left, "remote": remote_presented, "camera_left": _camera_left, "camera_delta_x": _camera_left - _previous_camera_left, "frame_delta_seconds": delta, "local_usec": Time.get_ticks_usec()})
 	if _round_started:
 		_update_hud()
 	_sync_player_views()
@@ -682,6 +688,7 @@ func _project_remote_vertical(sample: Dictionary, target_tick: float) -> Diction
 			world_x = previous_x
 			break
 		remaining -= step_ticks
+	projected["world_x"] = world_x
 	projected["y"] = float(state.y)
 	projected["velocity_y"] = float(state.vertical_speed)
 	projected["grounded"] = bool(state.grounded)

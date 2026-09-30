@@ -284,6 +284,10 @@ func _initialize() -> void:
 	vertical_track.set_shared_presentation_tick(6.0)
 	var vertical_pose: Dictionary = vertical_track.advance_presentation(1.0 / 60.0)
 	_assert(float(vertical_pose.y) > 260.0 and is_equal_approx(float(vertical_pose.y), 278.0) and bool(vertical_pose.grounded), "vertical prediction advances between samples and snaps to support geometry")
+	for packet_rate in [30, 60]:
+		for render_rate in [60, 144, 240]:
+			var max_vertical_step := _run_vertical_fixture(packet_rate, render_rate)
+			_assert(max_vertical_step <= 25.0, "vertical presentation stays continuous through a flip at %d Hz packets and %d Hz rendering (largest step %.2f px)" % [packet_rate, render_rate, max_vertical_step])
 	var trace_diagnostics = preload("res://systems/multiplayer_v2/v2_diagnostics.gd").new()
 	trace_diagnostics.begin_round_trace("trace-one", 2, "guest", 1_000_000, 500.0)
 	for frame_index in range(960):
@@ -372,3 +376,36 @@ func _project_test_vertical(sample: Dictionary, target_tick: float) -> Dictionar
 		Motion.advance_vertical(state, step_ticks / 60.0, 300.0, 80.0, true, true)
 		remaining -= step_ticks
 	return {"y": float(state.y), "velocity_y": float(state.vertical_speed), "grounded": bool(state.grounded)}
+
+func _run_vertical_fixture(packet_rate: int, render_rate: int) -> float:
+	var track := Track.new()
+	var initial := {"world_x": 0.0, "y": 278.0, "velocity_x": 500.0, "velocity_y": 0.0, "gravity_direction": 1, "grounded": true, "blocked": false, "locomotion_state": "running"}
+	track.seed(initial)
+	track.vertical_projector = Callable(self, "_project_test_vertical")
+	var motion_state := {"y": 278.0, "vertical_speed": 0.0, "gravity_direction": 1, "grounded": true, "cooldown": 0.0}
+	var next_simulation_tick := 1
+	var next_packet_tick := 60 / packet_rate
+	var sequence := 0
+	var elapsed_seconds := 0.0
+	var previous_y := 278.0
+	var max_step := 0.0
+	for _frame in range(render_rate * 2):
+		elapsed_seconds += 1.0 / float(render_rate)
+		var completed_tick := int(floor(elapsed_seconds * 60.0))
+		while next_simulation_tick <= completed_tick:
+			if next_simulation_tick == 15:
+				Motion.try_flip(motion_state, -1)
+			Motion.advance_vertical(motion_state, 1.0 / 60.0, 300.0, 80.0, true, true)
+			if next_simulation_tick >= next_packet_tick:
+				sequence += 1
+				var packet := {"simulation_tick": next_simulation_tick, "sample_seq": sequence, "world_x": float(next_simulation_tick) * 500.0 / 60.0, "y": float(motion_state.y), "velocity_x": 500.0, "velocity_y": float(motion_state.vertical_speed), "gravity_direction": int(motion_state.gravity_direction), "grounded": bool(motion_state.grounded), "blocked": false, "locomotion_state": "running"}
+				track.add_sample(packet)
+				next_packet_tick += 60 / packet_rate
+			next_simulation_tick += 1
+		track.set_shared_presentation_tick(maxf(elapsed_seconds * 60.0 - 1.0, 0.0))
+		var pose: Dictionary = track.advance_presentation(1.0 / float(render_rate))
+		var step_size := absf(float(pose.y) - previous_y)
+		if step_size > max_step:
+			max_step = step_size
+		previous_y = float(pose.y)
+	return max_step
