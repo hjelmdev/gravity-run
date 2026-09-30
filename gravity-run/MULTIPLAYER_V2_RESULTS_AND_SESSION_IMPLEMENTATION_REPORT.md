@@ -76,3 +76,11 @@ Kontrollera på användarens skärm/webbläsare att stillastående hinder flyter
 Gör gärna en längre spelad V1-runda och omspel, en V2-runda där hosten dör först och gäster överlever länge, verklig nätförlust samt ett mobilprov med långa namn. Dessa scenarier är delvis täckta av fixtures men hela hårdvaru-/nätmatrisen är inte verifierad genom mänskligt spel. Rörliga barrel-kollisioner kräver ett separat reproducerbart fall om fel kontaktposition fortfarande observeras där.
 
 Alla lägen behåller samma rootpublicering; ingen separat V2-URL eller ny databasversion införs.
+
+## Publicerad release
+
+Källkod: `c26ee21`, pushad till Azure `codex/current-prototype`. Pages: `084b10051f427c216486c2f04b11f98d4ac86d70`, pushad till GitHub `main`. Pages-jobb `36683653008` avslutades med `success` för denna SHA.
+
+Root svarar HTTP 200 och använder fortfarande det bevarade skalet med den gemensamma `game-v2/index.html`. Loadern pekar på `index.results-c26ee21.pck`, 1 153 828 byte. Det serverade paketets SHA-256 matchar exporten: `89f84f2c666f7eaee70ebc5c03744d62415e8252c1825cf1fc0fe87aa0c8cf9d`.
+
+Slutexporten kontrollerades dessutom med två webbklienter genom automatisk anslutning, start, resultat och lobbyretur efter de sista små ändringarna. Delad pall visar båda porträtten och diagnostikmenyn ligger framför resultatpanelen så att exporten är åtkomlig även där. De tillfälliga klienterna lämnade testlobbyn efter provet.
