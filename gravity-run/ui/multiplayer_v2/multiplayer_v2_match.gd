@@ -72,6 +72,11 @@ var _last_remote_watch_poses: Dictionary = {}
 var _last_cadence_window_usec := -1
 var _last_process_usec := -1
 var _godot_frame_intervals_ms: Array[float] = []
+var _phase_profile: Dictionary = {}
+var _last_barrel_probe: Dictionary = {}
+var _last_render_world_state: Dictionary = {}
+var _last_world_render_fraction := 0.0
+var _last_presentation_tick := 0.0
 var _hud_root: Control
 var _viewport_size := Vector2.ZERO
 
@@ -391,10 +396,13 @@ func _process(delta: float) -> void:
 	# fixed-tick simulation to the shared clock before sampling any player pose,
 	# so the local runner and camera do not hit a short projection ceiling.
 	if _round_started:
+		var catchup_started_usec := Time.get_ticks_usec()
 		_advance_local_to_shared_clock(0.0)
+		_profile_phase("fixed_step_catchup", catchup_started_usec)
 	_render_fraction = Engine.get_physics_interpolation_fraction()
 	var shared_tick := 0.0
 	var presentation_tick := 0.0
+	var player_presentation_started_usec := Time.get_ticks_usec()
 	if _round_started:
 		shared_tick = MultiplayerV2Service._round_coordinator.clock.tick_at_monotonic_usec(Time.get_ticks_usec())
 		# One fixed simulation tick of shared history gives 30/60 Hz remote
@@ -411,6 +419,8 @@ func _process(delta: float) -> void:
 				MultiplayerV2Service.diagnostics.record_event("remote_track_transition", {"peer_id": int(peer_id), "round_id": _round_id, "transition": transition, "presentation_tick": presentation_tick, "shared_clock_tick": shared_tick, "sample_tick": float(sampled.get("simulation_tick", -1.0)), "world_x": float(sampled.get("world_x", 0.0)), "correction_magnitude": float(sampled.get("correction_magnitude", 0.0)), "correction_elapsed_seconds": float(sampled.get("correction_elapsed_seconds", 0.0))})
 	else:
 		_local_presentation_pose = _runner.render_state(_render_fraction)
+	_profile_phase("player_remote_presentation", player_presentation_started_usec)
+	_last_presentation_tick = presentation_tick
 	_update_start_countdown()
 	_previous_camera_left = _camera_left
 	_update_spectator_camera()
@@ -420,7 +430,11 @@ func _process(delta: float) -> void:
 	var world_render_fraction := _render_fraction
 	if _round_started:
 		world_render_fraction = WorldSimulationScript.presentation_fraction(presentation_tick, _world.tick)
-	_course_presentation.call("set_world_state", _world.render_state(world_render_fraction))
+	_last_world_render_fraction = world_render_fraction
+	var dynamic_nodes_started_usec := Time.get_ticks_usec()
+	_last_render_world_state = _world.render_state(world_render_fraction)
+	_course_presentation.call("set_world_state", _last_render_world_state)
+	_profile_phase("dynamic_entity_presentation", dynamic_nodes_started_usec)
 	if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec <= int(START_TRACE_SECONDS * 1_000_000.0):
 		var remote_presented := {}
 		for peer_id in _remote_tracks:
@@ -438,6 +452,11 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 func _step_local_round() -> void:
+	var tick_started_usec := Time.get_ticks_usec()
+	_step_local_round_impl()
+	_profile_phase("world_tick_and_collision", tick_started_usec)
+
+func _step_local_round_impl() -> void:
 	_world_tick += 1
 	if not _world.step_to(_world_tick):
 		return
@@ -508,9 +527,12 @@ func _request_shared_barrel(contact: Dictionary) -> void:
 	MultiplayerV2Service.diagnostics.record_event("barrel_contact_pending", request)
 
 func _on_remote_sample(peer_id: int, sample: Dictionary) -> void:
+	var sample_started_usec := Time.get_ticks_usec()
 	if peer_id == int(MultiplayerV2Service.session.get("local_peer_id", 1)) or not _remote_tracks.has(peer_id):
+		_profile_phase("remote_sample_ingest", sample_started_usec)
 		return
 	if str(sample.get("round_id", "")) != _round_id:
+		_profile_phase("remote_sample_ingest", sample_started_usec)
 		return
 	if bool(_remote_tracks[peer_id].add_sample(sample)):
 		MultiplayerV2Service.diagnostics.increment_metric("track_insertions_owner_%d" % peer_id)
@@ -521,6 +543,7 @@ func _on_remote_sample(peer_id: int, sample: Dictionary) -> void:
 		var local_peer_id := int(MultiplayerV2Service.session.get("local_peer_id", -1))
 		var role := str(MultiplayerV2Service.session.get("role", ""))
 		_append_timeline_metric("remote_samples", {"owner_peer_id": peer_id, "transport_sender_peer_id": 1 if role == "guest" else peer_id, "delivery_path": "host_relay" if role == "guest" and peer_id != 1 else "direct", "local_peer_id": local_peer_id, "sample_tick": int(sample.get("simulation_tick", -1)), "local_simulation_tick": _world_tick, "world_x": float(sample.get("world_x", 0.0)), "received_usec": Time.get_ticks_usec()})
+	_profile_phase("remote_sample_ingest", sample_started_usec)
 
 func _append_timeline_metric(key: String, value: Dictionary) -> void:
 	var sample := value.duplicate(true)
@@ -620,6 +643,8 @@ func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 	_last_cadence_window_usec = Time.get_ticks_usec()
 	_last_process_usec = -1
 	_godot_frame_intervals_ms.clear()
+	_phase_profile.clear()
+	_last_barrel_probe.clear()
 	_countdown_flash_until_usec = _local_start_deadline_usec + COUNTDOWN_START_FLASH_USEC
 	_status_label.text = tr("RUN")
 	MultiplayerV2Service.diagnostics.record_event("round_timeline_started", {"round_id": round_id, "deadline_local_usec": _local_start_deadline_usec, "clock_uncertainty_usec": float(MultiplayerV2Service._round_coordinator.clock.offset_uncertainty_usec), "initial_tick": _world_tick})
@@ -706,12 +731,14 @@ func _project_remote_vertical(sample: Dictionary, target_tick: float) -> Diction
 	return projected
 
 func _record_presentation_diagnostic(delta: float) -> void:
+	var diagnostic_started_usec := Time.get_ticks_usec()
 	var now_usec := Time.get_ticks_usec()
 	if _last_process_usec >= 0:
 		_godot_frame_intervals_ms.append(float(now_usec - _last_process_usec) / 1000.0)
 	_last_process_usec = now_usec
 	if _last_remote_watch_usec >= 0 and now_usec - _last_remote_watch_usec < 100_000:
 		if _last_cadence_window_usec < 0 or now_usec - _last_cadence_window_usec < 1_000_000:
+			_profile_phase("diagnostic_sampling", diagnostic_started_usec)
 			return
 	if _last_remote_watch_usec < 0 or now_usec - _last_remote_watch_usec >= 100_000:
 		_last_remote_watch_usec = now_usec
@@ -734,29 +761,39 @@ func _record_presentation_diagnostic(delta: float) -> void:
 		window["elapsed_round_tick"] = _world_tick
 		window["presentation_tick"] = float(MultiplayerV2Service._round_coordinator.clock.tick_at_monotonic_usec(now_usec)) - PRESENTATION_DELAY_TICKS if _round_started else -1.0
 		window["obstacle_transform"] = _diagnostic_obstacle_transform()
+		window["barrel_transform"] = _diagnostic_barrel_transform()
 		var browser_window := _take_browser_frame_window()
 		if not browser_window.is_empty():
 			window["browser_raf"] = _summarize_intervals(_intervals_from_json(browser_window.get("intervals", [])))
 			for key in ["device_pixel_ratio", "canvas_css_width", "canvas_css_height"]:
 				if browser_window.has(key):
 					window[key] = browser_window[key]
+		_profile_phase("diagnostic_sampling", diagnostic_started_usec)
+		window["phase_profile"] = _take_phase_profile()
+		if _course_presentation.has_method("take_render_profile"):
+			window["course_render_profile"] = _course_presentation.call("take_render_profile")
 		MultiplayerV2Service.diagnostics.record_event("render_cadence_window", window)
 		_godot_frame_intervals_ms.clear()
 		_last_cadence_window_usec = now_usec
+	else:
+		_profile_phase("diagnostic_sampling", diagnostic_started_usec)
 
 func _summarize_intervals(intervals: Array[float]) -> Dictionary:
 	if intervals.is_empty():
-		return {"sample_count": 0, "p50_ms": 0.0, "p95_ms": 0.0, "max_ms": 0.0, "over_16_7_ms": 0, "over_33_3_ms": 0}
+		return {"sample_count": 0, "p50_ms": 0.0, "p95_ms": 0.0, "max_ms": 0.0, "over_8_3_ms": 0, "over_16_7_ms": 0, "over_33_3_ms": 0}
 	var ordered := intervals.duplicate()
 	ordered.sort()
 	var over_16_7 := 0
+	var over_8_3 := 0
 	var over_33_3 := 0
 	for interval in intervals:
+		if interval > 8.3:
+			over_8_3 += 1
 		if interval > 16.7:
 			over_16_7 += 1
 		if interval > 33.3:
 			over_33_3 += 1
-	return {"sample_count": intervals.size(), "p50_ms": ordered[int(round(float(ordered.size() - 1) * 0.50))], "p95_ms": ordered[int(round(float(ordered.size() - 1) * 0.95))], "max_ms": ordered.back(), "over_16_7_ms": over_16_7, "over_33_3_ms": over_33_3}
+	return {"sample_count": intervals.size(), "p50_ms": ordered[int(round(float(ordered.size() - 1) * 0.50))], "p95_ms": ordered[int(round(float(ordered.size() - 1) * 0.95))], "max_ms": ordered.back(), "over_8_3_ms": over_8_3, "over_16_7_ms": over_16_7, "over_33_3_ms": over_33_3}
 
 func _intervals_from_json(raw: Variant) -> Array[float]:
 	var result: Array[float] = []
@@ -807,6 +844,66 @@ func _diagnostic_obstacle_transform() -> Dictionary:
 		world_position = (node_value as Node2D).global_position
 		canvas_position = (node_value as Node2D).get_global_transform_with_canvas().origin
 	return {"obstacle_id": event_id, "kind": str(selected.get("kind", "")), "world_x": world_position.x, "world_y": world_position.y, "canvas_x": canvas_position.x, "canvas_y": canvas_position.y, "camera_left": _camera_left, "local_world_x": local_x, "node_valid": is_instance_valid(node_value)}
+
+func _diagnostic_barrel_transform() -> Dictionary:
+	var previous_id := str(_last_barrel_probe.get("entity_id", ""))
+	if _world == null or _course_presentation == null:
+		return {"entity_id": "", "previous_probe_entity_id": previous_id, "target_changed": not previous_id.is_empty(), "stage": "unavailable"}
+	var viewport_width := get_viewport_rect().size.x
+	var selected: Dictionary = {}
+	var selected_distance := INF
+	for barrel in _world.barrels:
+		if not bool(barrel.get("spawned", false)) or bool(barrel.get("destroyed", false)):
+			continue
+		var entity_id := str(barrel.get("entity_id", ""))
+		var node_value: Variant = _course_presentation.event_nodes.get(entity_id)
+		if not is_instance_valid(node_value) or not node_value is Node2D or not (node_value as Node2D).visible:
+			continue
+		var canvas_position: Vector2 = (node_value as Node2D).get_global_transform_with_canvas().origin
+		if canvas_position.x < 0.0 or canvas_position.x > viewport_width:
+			continue
+		var distance := absf(canvas_position.x - CAMERA_PLAYER_X)
+		if distance < selected_distance:
+			selected = {"entity_id": entity_id, "node": node_value, "distance": distance}
+			selected_distance = distance
+	if selected.is_empty():
+		_last_barrel_probe = {"entity_id": ""}
+		return {"entity_id": "", "previous_probe_entity_id": previous_id, "target_changed": not previous_id.is_empty(), "stage": "no_visible_spawned_barrel", "simulation_tick": int(_world.tick)}
+	var entity_id := str(selected.entity_id)
+	var probe: Dictionary = _world.barrel_presentation_probe(entity_id, _last_presentation_tick, _last_world_render_fraction)
+	var node: Node2D = selected.node
+	var canvas_position: Vector2 = node.get_global_transform_with_canvas().origin
+	probe["world_x"] = node.global_position.x
+	probe["world_y"] = node.global_position.y
+	probe["canvas_x"] = canvas_position.x
+	probe["canvas_y"] = canvas_position.y
+	probe["screen_x"] = canvas_position.x
+	probe["screen_y"] = canvas_position.y
+	probe["camera_left"] = _camera_left
+	probe["node_visible"] = node.visible
+	probe["target_changed"] = not previous_id.is_empty() and previous_id != entity_id
+	probe["previous_probe_entity_id"] = previous_id
+	if previous_id == entity_id:
+		probe["same_entity_delta"] = {"elapsed_ms": float(Time.get_ticks_usec() - int(_last_barrel_probe.get("at_usec", Time.get_ticks_usec()))) / 1000.0, "world_dx": node.global_position.x - float(_last_barrel_probe.get("world_x", node.global_position.x)), "world_dy": node.global_position.y - float(_last_barrel_probe.get("world_y", node.global_position.y))}
+	_last_barrel_probe = {"entity_id": entity_id, "world_x": node.global_position.x, "world_y": node.global_position.y, "at_usec": Time.get_ticks_usec()}
+	return probe
+
+func _profile_phase(name: String, started_usec: int) -> void:
+	var elapsed_usec := maxi(Time.get_ticks_usec() - started_usec, 0)
+	var sample: Dictionary = _phase_profile.get(name, {"total_usec": 0, "max_usec": 0, "sample_count": 0})
+	sample["total_usec"] = int(sample.total_usec) + elapsed_usec
+	sample["max_usec"] = maxi(int(sample.max_usec), elapsed_usec)
+	sample["sample_count"] = int(sample.sample_count) + 1
+	_phase_profile[name] = sample
+
+func _take_phase_profile() -> Dictionary:
+	var profile := _phase_profile.duplicate(true)
+	for phase in profile:
+		var sample: Dictionary = profile[phase]
+		var count := maxi(int(sample.get("sample_count", 0)), 1)
+		sample["average_usec"] = float(sample.get("total_usec", 0)) / float(count)
+	_phase_profile.clear()
+	return profile
 
 func _update_hud() -> void:
 	if not _result.is_empty():

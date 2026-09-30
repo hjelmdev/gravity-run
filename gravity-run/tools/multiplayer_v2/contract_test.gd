@@ -333,6 +333,19 @@ func _initialize() -> void:
 			first.step_to(tick)
 			second.step_to(tick)
 		_assert(first.state_hash() == second.state_hash(), "world hashes match at same tick/revision")
+		if not first.barrels.is_empty():
+			var barrel_id := str(first.barrels[0].entity_id)
+			var fraction := 0.5
+			var probe: Dictionary = first.barrel_presentation_probe(barrel_id, float(first.tick) - 0.5, fraction)
+			var rendered_world: Dictionary = first.render_state(fraction)
+			var rendered_barrel: Dictionary = {}
+			for rendered_value in rendered_world.get("barrels", []):
+				if str(rendered_value.get("entity_id", "")) == barrel_id:
+					rendered_barrel = rendered_value
+					break
+			_assert(str(probe.get("entity_id", "")) == barrel_id, "barrel presentation probe keeps a stable entity ID")
+			_assert(int(probe.get("simulation_tick", -1)) == first.tick and probe.has("previous") and probe.has("current"), "barrel probe records adjacent simulation states")
+			_assert(not rendered_barrel.is_empty() and is_equal_approx(float(probe.get("displayed", {}).get("x", -1.0)), float(rendered_barrel.get("x", -2.0))), "barrel probe reports the same displayed pose as presentation")
 
 	var owner = Runner.new()
 	owner.configure("round", 2, 100.0, 460.0, {"run_speed_percent": 10200, "flip_cooldown_percent": 9500})

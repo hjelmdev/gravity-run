@@ -92,6 +92,26 @@ func render_state(fraction: float) -> Dictionary:
 				barrel[key] = lerpf(float(previous.get(key, barrel.get(key, 0.0))), float(barrel.get(key, 0.0)), clampf(fraction, 0.0, 1.0))
 	return {"barrels": rendered, "entities": entity_ledger.entities}
 
+func barrel_presentation_probe(entity_id: String, presentation_tick: float, fraction: float) -> Dictionary:
+	var current: Dictionary = {}
+	for barrel in barrels:
+		if str(barrel.get("entity_id", "")) == entity_id:
+			current = barrel
+			break
+	if current.is_empty():
+		return {}
+	var previous: Dictionary = _previous_render_barrels.get(entity_id, current)
+	var current_copy: Dictionary = current.duplicate(true)
+	var previous_copy: Dictionary = previous.duplicate(true)
+	var displayed := current_copy.duplicate(true)
+	if bool(previous_copy.get("spawned", false)) and not bool(current_copy.get("destroyed", false)):
+		for key in ["x", "y", "roll_angle", "rotation"]:
+			displayed[key] = lerpf(float(previous_copy.get(key, displayed.get(key, 0.0))), float(current_copy.get(key, 0.0)), clampf(fraction, 0.0, 1.0))
+	return {"entity_id": entity_id, "simulation_tick": tick, "presentation_tick": presentation_tick, "presentation_fraction": clampf(fraction, 0.0, 1.0), "previous": _barrel_probe_pose(previous_copy), "current": _barrel_probe_pose(current_copy), "displayed": _barrel_probe_pose(displayed)}
+
+static func _barrel_probe_pose(barrel: Dictionary) -> Dictionary:
+	return {"x": float(barrel.get("x", 0.0)), "y": float(barrel.get("y", 0.0)), "roll_angle": float(barrel.get("roll_angle", 0.0)), "rotation": float(barrel.get("rotation", 0.0)), "spawned": bool(barrel.get("spawned", false)), "falling": bool(barrel.get("falling", false)), "destroyed": bool(barrel.get("destroyed", false))}
+
 static func presentation_fraction(presentation_tick: float, latest_simulation_tick: int) -> float:
 	return clampf(presentation_tick - float(latest_simulation_tick - 1), 0.0, 1.0)
 

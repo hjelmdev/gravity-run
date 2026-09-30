@@ -17,6 +17,10 @@ var terrain_events: Array[Dictionary] = []
 var gap_events: Array[Dictionary] = []
 var _camera_left := 0.0
 var _world_height := 720.0
+var _render_profile_total_usec := 0
+var _render_profile_max_usec := 0
+var _render_profile_draw_count := 0
+var _render_profile_surface_queries := 0
 
 static func create_hazard(scene: PackedScene, at_position: Vector2, size: Vector2, from_ceiling: bool, surface_rotation: float = 0.0) -> Node2D:
 	var hazard := scene.instantiate() as Node2D
@@ -161,6 +165,7 @@ func reset() -> void:
 func _draw() -> void:
 	if manifest == null:
 		return
+	var draw_started_usec := Time.get_ticks_usec()
 	var gaps: Array[Dictionary] = []
 	for event in gap_events:
 		var half_width := float(event.get("width", 0.0)) * 0.5
@@ -177,8 +182,21 @@ func _draw() -> void:
 	var finish_screen_x := float(manifest.finish_x) - _camera_left
 	if finish_screen_x >= 0.0 and finish_screen_x <= get_viewport_rect().size.x:
 		draw_line(Vector2(float(manifest.finish_x), 0.0), Vector2(float(manifest.finish_x), _world_height), Color("f5d45e"), 4.0)
+	var draw_elapsed_usec := maxi(Time.get_ticks_usec() - draw_started_usec, 0)
+	_render_profile_total_usec += draw_elapsed_usec
+	_render_profile_max_usec = maxi(_render_profile_max_usec, draw_elapsed_usec)
+	_render_profile_draw_count += 1
+
+func take_render_profile() -> Dictionary:
+	var result := {"terrain_draw_count": _render_profile_draw_count, "terrain_total_usec": _render_profile_total_usec, "terrain_max_usec": _render_profile_max_usec, "surface_query_count": _render_profile_surface_queries}
+	_render_profile_total_usec = 0
+	_render_profile_max_usec = 0
+	_render_profile_draw_count = 0
+	_render_profile_surface_queries = 0
+	return result
 
 func _surface_y_at(x: float, ceiling: bool) -> float:
+	_render_profile_surface_queries += 1
 	var y := float(manifest.initial_ceiling_y) if ceiling else float(manifest.initial_floor_y)
 	for event in terrain_events:
 		if bool(event.get("from_ceiling", false)) != ceiling:
