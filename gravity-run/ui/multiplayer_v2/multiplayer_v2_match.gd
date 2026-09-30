@@ -10,12 +10,17 @@ const Motion := preload("res://systems/runner_motion.gd")
 const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_export.gd")
 const CoursePresentationScript := preload("res://systems/race_course_presentation.gd")
 const RoundCoordinatorScript := preload("res://systems/multiplayer_v2/v2_round_coordinator.gd")
+const HudLayout := preload("res://ui/multiplayer_v2/v2_hud_layout.gd")
 
 const FIXED_DELTA := 1.0 / 60.0
 const CAMERA_PLAYER_X := 250.0
 const MAX_CATCHUP_STEPS := 12
+const START_TRACE_SECONDS := 4.0
+const LOCAL_POSE_HISTORY := 256
+const COUNTDOWN_START_FLASH_USEC := 350_000
 
 const CameraScript := preload("res://systems/runner_camera.gd")
+
 var _render_camera: Camera2D
 var _render_fraction := 0.0
 var _previous_camera_left := 0.0
@@ -56,6 +61,13 @@ var _touch_start := Vector2.ZERO
 var _touch_index := -1
 var _local_start_deadline_usec := -1
 var _first_physics_step_usec := -1
+var _local_pose_history: Array[Dictionary] = []
+var _local_presentation_pose: Dictionary = {}
+var _countdown_label: Label
+var _countdown_flash_until_usec := -1
+var _trace_frame_elapsed := 0.0
+var _hud_root: Control
+var _viewport_size := Vector2.ZERO
 
 func _ready() -> void:
 	set_process_unhandled_input(true)
@@ -90,6 +102,7 @@ func _ready() -> void:
 	var loadout_snapshot: Resource = InventoryService.create_run_loadout_snapshot(PlayerProfile.get_character_stats())
 	var resolved_stats: Dictionary = loadout_snapshot.get_resolved_stats() if loadout_snapshot != null and loadout_snapshot.has_method("is_valid") and bool(loadout_snapshot.call("is_valid")) else {}
 	_runner.configure(_round_id, local_peer, float(_manifest.start_x), float(_manifest.initial_floor_y), resolved_stats)
+	_record_local_pose(0)
 	MultiplayerV2Service.diagnostics.record_event("local_loadout_frozen", {"run_speed_percent": int(resolved_stats.get("run_speed_percent", 10000)), "flip_cooldown_percent": int(resolved_stats.get("flip_cooldown_percent", 10000))})
 	MultiplayerV2Service.configure_world_simulation(_world)
 	_build_overlay()
@@ -110,20 +123,34 @@ func _ready() -> void:
 func _build_overlay() -> void:
 	var overlay := CanvasLayer.new()
 	add_child(overlay)
+	_hud_root = Control.new()
+	_hud_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_hud_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hud_root.resized.connect(_layout_hud)
+	overlay.add_child(_hud_root)
 	_status_label = Label.new()
-	_status_label.position = Vector2(20.0, 18.0)
 	_status_label.add_theme_font_size_override("font_size", 17)
 	status_style(_status_label)
-	overlay.add_child(_status_label)
+	_status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hud_root.add_child(_status_label)
 	_debug_toggle = Button.new()
 	_debug_toggle.text = tr("Menu")
-	_debug_toggle.position = Vector2(20.0, 58.0)
-	_debug_toggle.custom_minimum_size = Vector2(112.0, 42.0)
+	_debug_toggle.custom_minimum_size = Vector2(104.0, 42.0)
 	_debug_toggle.pressed.connect(_toggle_debug_panel)
-	overlay.add_child(_debug_toggle)
+	_hud_root.add_child(_debug_toggle)
+	_countdown_label = Label.new()
+	_countdown_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_countdown_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_countdown_label.add_theme_font_size_override("font_size", 64)
+	_countdown_label.add_theme_color_override("font_color", Color("ffd166"))
+	_countdown_label.add_theme_color_override("font_shadow_color", Color(0.04, 0.07, 0.12, 0.9))
+	_countdown_label.add_theme_constant_override("shadow_offset_x", 3)
+	_countdown_label.add_theme_constant_override("shadow_offset_y", 4)
+	_countdown_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_countdown_label.visible = false
+	_hud_root.add_child(_countdown_label)
 	_debug_panel = PanelContainer.new()
-	_debug_panel.position = Vector2(20.0, 108.0)
-	_debug_panel.custom_minimum_size = Vector2(300.0, 110.0)
+	_debug_panel.custom_minimum_size = Vector2(280.0, 110.0)
 	_debug_panel.visible = false
 	var debug_style := StyleBoxFlat.new()
 	debug_style.bg_color = Color("18243a")
@@ -135,7 +162,7 @@ func _build_overlay() -> void:
 	debug_style.content_margin_top = 10
 	debug_style.content_margin_bottom = 10
 	_debug_panel.add_theme_stylebox_override("panel", debug_style)
-	overlay.add_child(_debug_panel)
+	_hud_root.add_child(_debug_panel)
 	var tools := VBoxContainer.new()
 	_debug_panel.add_child(tools)
 	var rate_row := HBoxContainer.new()
@@ -200,9 +227,99 @@ func _build_overlay() -> void:
 	back.text = tr("Leave race")
 	back.pressed.connect(_leave_v2)
 	actions.add_child(back)
-	# Keep diagnostic controls reachable when the result panel is open.
-	overlay.move_child(_debug_panel, overlay.get_child_count() - 1)
-	overlay.move_child(_debug_toggle, overlay.get_child_count() - 1)
+	# The small menu control remains reachable above a result panel.
+	_hud_root.z_index = 1
+	_layout_hud()
+	get_viewport().size_changed.connect(_layout_hud)
+	call_deferred("_layout_hud")
+
+func _layout_hud() -> void:
+	if not is_instance_valid(_hud_root) or not is_instance_valid(_debug_toggle) or not is_instance_valid(_status_label) or not is_instance_valid(_debug_panel) or not is_instance_valid(_countdown_label):
+		return
+	var size := _hud_root.size
+	if size.x <= 0.0 or size.y <= 0.0:
+		size = get_viewport_rect().size
+	if size == _viewport_size and _viewport_size != Vector2.ZERO:
+		return
+	_viewport_size = size
+	var layout := HudLayout.for_viewport(size)
+	var button_rect: Rect2 = layout.get("button", Rect2())
+	var status_rect: Rect2 = layout.get("status", Rect2())
+	var panel_rect: Rect2 = layout.get("panel", Rect2())
+	_debug_toggle.position = button_rect.position
+	_debug_toggle.size = button_rect.size
+	_status_label.position = status_rect.position
+	_status_label.size = status_rect.size
+	_debug_panel.position = panel_rect.position
+	_debug_panel.size = panel_rect.size
+	_countdown_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	_countdown_label.offset_left = -minf(size.x * 0.4, 240.0)
+	_countdown_label.offset_right = minf(size.x * 0.4, 240.0)
+	_countdown_label.offset_top = -56.0
+	_countdown_label.offset_bottom = 56.0
+
+func _update_start_countdown() -> void:
+	if not is_instance_valid(_countdown_label):
+		return
+	var now_usec := Time.get_ticks_usec()
+	if _round_started:
+		if _countdown_flash_until_usec >= now_usec:
+			_countdown_label.text = tr("START!")
+			_countdown_label.visible = true
+		else:
+			_countdown_label.visible = false
+		return
+	var coordinator = MultiplayerV2Service._round_coordinator
+	if coordinator.state != RoundCoordinatorScript.State.COMMITTING:
+		_countdown_label.visible = false
+		return
+	var local_deadline: int = coordinator.clock.host_time_to_local_usec(coordinator.host_start_usec)
+	var phase := RoundCoordinatorScript.countdown_label(local_deadline, now_usec)
+	_countdown_label.text = tr(phase)
+	_countdown_label.visible = not phase.is_empty()
+
+func _record_local_pose(tick: int) -> void:
+	if _runner == null:
+		return
+	var state: Dictionary = _runner.player_state
+	var entry := {"tick": tick, "world_x": float(state.get("world_x", 0.0)), "y": float(state.get("y", 0.0)), "vertical_speed": float(state.get("vertical_speed", 0.0)), "velocity_x": Motion.speed_for_multiplier(_runner.run_speed_multiplier) if str(state.get("state", "running")) == "running" and not bool(state.get("blocked", false)) else 0.0, "gravity_direction": int(state.get("gravity_direction", 1)), "grounded": bool(state.get("grounded", false)), "blocked": bool(state.get("blocked", false)), "locomotion_state": str(state.get("state", "running"))}
+	if not _local_pose_history.is_empty() and int(_local_pose_history.back().get("tick", -1)) == tick:
+		_local_pose_history[_local_pose_history.size() - 1] = entry
+	else:
+		_local_pose_history.append(entry)
+	while _local_pose_history.size() > LOCAL_POSE_HISTORY:
+		_local_pose_history.pop_front()
+	if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec <= int(START_TRACE_SECONDS * 1_000_000.0):
+		_append_timeline_metric("local_poses", entry.duplicate(true))
+
+func _sample_local_pose(target_tick: float) -> Dictionary:
+	if _local_pose_history.is_empty():
+		return _runner.render_state(_render_fraction)
+	var before: Dictionary = _local_pose_history.front()
+	var after: Dictionary = {}
+	for pose in _local_pose_history:
+		if float(pose.get("tick", 0.0)) <= target_tick:
+			before = pose
+		elif after.is_empty():
+			after = pose
+			break
+	if not after.is_empty():
+		var span := maxf(float(after.tick) - float(before.tick), 0.001)
+		var weight := clampf((target_tick - float(before.tick)) / span, 0.0, 1.0)
+		var result := before.duplicate(true)
+		for key in ["world_x", "y", "vertical_speed", "velocity_x"]:
+			result[key] = lerpf(float(before.get(key, 0.0)), float(after.get(key, 0.0)), weight)
+		result["presentation_tick"] = target_tick
+		return result
+	var result := before.duplicate(true)
+	var ahead_ticks := clampf(target_tick - float(before.get("tick", 0.0)), 0.0, 1.25)
+	if ahead_ticks > 0.0 and str(before.get("locomotion_state", "running")) == "running":
+		var ahead_seconds := ahead_ticks / 60.0
+		result["world_x"] = float(before.world_x) + float(before.velocity_x) * ahead_seconds
+		if not bool(before.get("grounded", false)):
+			result["y"] = float(before.y) + float(before.vertical_speed) * ahead_seconds
+	result["presentation_tick"] = target_tick
+	return result
 
 func _build_peer_slots() -> void:
 	var local_runner_view: Node2D
@@ -220,6 +337,7 @@ func _build_peer_slots() -> void:
 			continue
 		var track = RemoteTrackScript.new()
 		track.target_delay_ticks = 0.0
+		track.seed({"round_id": _round_id, "owner_peer_id": peer_id, "world_x": float(_manifest.start_x), "y": float(_manifest.initial_floor_y) - Motion.SIZE.y * 0.5, "velocity_x": Motion.BASE_RUN_SPEED, "velocity_y": 0.0, "gravity_direction": 1, "locomotion_state": "running"})
 		_remote_tracks[peer_id] = track
 		_remote_terminal[peer_id] = "running"
 		_remote_locomotion[peer_id] = "running"
@@ -241,7 +359,8 @@ func _physics_process(delta: float) -> void:
 			var late_usec := maxi(_first_physics_step_usec - _local_start_deadline_usec, 0) if _local_start_deadline_usec >= 0 else 0
 			MultiplayerV2Service.diagnostics.record_event("first_local_physics_step", {"deadline_lateness_ms": float(late_usec) / 1000.0, "tick": _world_tick + 1, "round_elapsed_tick": target_tick})
 		_step_local_round()
-		if _world_tick <= 120:
+		_record_local_pose(_world_tick)
+		if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec <= int(START_TRACE_SECONDS * 1_000_000.0):
 			_append_timeline_metric("local_steps", {"tick": _world_tick, "world_x": float(_runner.player_state.get("world_x", 0.0)), "local_usec": Time.get_ticks_usec()})
 		steps += 1
 	if owed_steps > MAX_CATCHUP_STEPS:
@@ -255,27 +374,37 @@ func _process(delta: float) -> void:
 	var shared_tick := 0.0
 	if _round_started:
 		shared_tick = MultiplayerV2Service._round_coordinator.clock.tick_at_monotonic_usec(Time.get_ticks_usec())
+		_local_presentation_pose = _sample_local_pose(shared_tick)
 		for peer_id in _remote_tracks:
 			if str(_remote_terminal.get(peer_id, "running")) == "running":
 				_remote_tracks[peer_id].set_shared_presentation_tick(shared_tick)
+			var sampled: Dictionary = _remote_tracks[peer_id].advance_presentation(delta)
+			var transition := str(_remote_tracks[peer_id].consume_transition())
+			if not transition.is_empty():
+				MultiplayerV2Service.diagnostics.record_event("remote_track_transition", {"peer_id": int(peer_id), "round_id": _round_id, "transition": transition, "presentation_tick": shared_tick, "sample_tick": float(sampled.get("simulation_tick", -1.0)), "world_x": float(sampled.get("world_x", 0.0)), "correction_magnitude": float(sampled.get("correction_magnitude", 0.0)), "correction_elapsed_seconds": float(sampled.get("correction_elapsed_seconds", 0.0))})
+	else:
+		_local_presentation_pose = _runner.render_state(_render_fraction)
+	_update_start_countdown()
 	_previous_camera_left = _camera_left
 	_update_spectator_camera()
 	_render_camera.configure(get_viewport_rect().size, CAMERA_PLAYER_X)
 	_render_camera.follow(Vector2(_camera_left + CAMERA_PLAYER_X, 0.0), true)
 	_course_presentation.call("set_camera_left", _camera_left)
 	_course_presentation.call("set_world_state", _world.render_state(_render_fraction))
-	if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec <= 2_000_000:
+	if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec <= int(START_TRACE_SECONDS * 1_000_000.0):
 		var remote_presented := {}
 		for peer_id in _remote_tracks:
 			var remote_pose := _remote_track_sample(int(peer_id))
-			remote_presented[str(peer_id)] = {"presentation_tick": float(remote_pose.get("render_tick", -1.0)), "sample_tick": float(remote_pose.get("simulation_tick", -1.0)), "world_x": float(remote_pose.get("world_x", 0.0)), "stale": bool(remote_pose.get("stale", true))}
-		var local_pose: Dictionary = _runner.render_state(_render_fraction)
-		_append_timeline_metric("presented_frames", {"presentation_tick": shared_tick, "local_simulation_tick": _runner.simulation_tick, "local_render_x": float(local_pose.get("world_x", 0.0)), "remote": remote_presented, "camera_left": _camera_left, "local_usec": Time.get_ticks_usec()})
+			remote_presented[str(peer_id)] = {"requested_presentation_tick": shared_tick, "actual_sample_tick": float(remote_pose.get("simulation_tick", -1.0)), "sample_age_ticks": float(remote_pose.get("sample_age_ticks", -1.0)), "world_x": float(remote_pose.get("world_x", 0.0)), "screen_x": float(remote_pose.get("world_x", 0.0)) - _camera_left, "y": float(remote_pose.get("y", 0.0)), "stale": bool(remote_pose.get("stale", true)), "render_mode": str(remote_pose.get("render_mode", "unknown")), "correction_magnitude": float(remote_pose.get("correction_magnitude", 0.0)), "correction_elapsed_seconds": float(remote_pose.get("correction_elapsed_seconds", 0.0))}
+		var local_pose: Dictionary = _local_presentation_pose if not _local_presentation_pose.is_empty() else _runner.render_state(_render_fraction)
+		_append_timeline_metric("presented_frames", {"presentation_tick": shared_tick, "local_simulation_tick": _runner.simulation_tick, "local_actual_sample_tick": float(_local_presentation_pose.get("tick", _runner.simulation_tick)), "local_previous_pose": _runner.previous_render_state.duplicate(true), "local_current_pose": _runner.current_render_state.duplicate(true), "local_render_x": float(local_pose.get("world_x", 0.0)), "local_render_y": float(local_pose.get("y", 0.0)), "local_screen_x": float(local_pose.get("world_x", 0.0)) - _camera_left, "remote": remote_presented, "camera_left": _camera_left, "camera_delta_x": _camera_left - _previous_camera_left, "frame_delta_seconds": delta, "local_usec": Time.get_ticks_usec()})
 	if _round_started:
 		_update_hud()
 	_sync_player_views()
 	if _result.is_empty():
 		MultiplayerV2Service.diagnostics.record_frame({"phase": "spectator" if _spectator_peer_id > 0 else "running", "tick": _runner.simulation_tick, "world_tick": _world.tick, "x": float(_runner.player_state.get("world_x", 0.0)), "y": float(_runner.player_state.get("y", 0.0)), "camera_left": _camera_left, "camera_delta_x": _camera_left - _previous_camera_left, "render_fraction": _render_fraction, "render_delta_ms": delta * 1000.0, "fps": Engine.get_frames_per_second(), "window_focused": DisplayServer.window_is_focused()})
+	if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec > int(START_TRACE_SECONDS * 1_000_000.0):
+		MultiplayerV2Service.diagnostics.freeze_round_trace("start_window_complete")
 	queue_redraw()
 
 func _step_local_round() -> void:
@@ -358,15 +487,18 @@ func _on_remote_sample(peer_id: int, sample: Dictionary) -> void:
 	else:
 		MultiplayerV2Service.diagnostics.increment_metric("track_rejections_owner_%d" % peer_id)
 	_remote_locomotion[peer_id] = str(sample.get("locomotion_state", "running"))
-	if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec <= 2_000_000:
-		_append_timeline_metric("remote_samples", {"peer_id": peer_id, "sample_tick": int(sample.get("simulation_tick", -1)), "local_tick": _world_tick, "world_x": float(sample.get("world_x", 0.0)), "received_usec": Time.get_ticks_usec()})
+	if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec <= int(START_TRACE_SECONDS * 1_000_000.0):
+		var local_peer_id := int(MultiplayerV2Service.session.get("local_peer_id", -1))
+		var role := str(MultiplayerV2Service.session.get("role", ""))
+		_append_timeline_metric("remote_samples", {"owner_peer_id": peer_id, "transport_sender_peer_id": 1 if role == "guest" else peer_id, "delivery_path": "host_relay" if role == "guest" and peer_id != 1 else "direct", "local_peer_id": local_peer_id, "sample_tick": int(sample.get("simulation_tick", -1)), "local_simulation_tick": _world_tick, "world_x": float(sample.get("world_x", 0.0)), "received_usec": Time.get_ticks_usec()})
 
 func _append_timeline_metric(key: String, value: Dictionary) -> void:
-	var entries: Array = MultiplayerV2Service.diagnostics.metrics.get("start_timeline_" + key, [])
-	entries.append(value)
-	while entries.size() > 128:
-		entries.pop_front()
-	MultiplayerV2Service.diagnostics.metrics["start_timeline_" + key] = entries
+	var sample := value.duplicate(true)
+	sample["round_id"] = _round_id
+	sample["local_peer_id"] = int(MultiplayerV2Service.session.get("local_peer_id", -1))
+	sample["start_deadline_usec"] = _local_start_deadline_usec
+	sample["trace_schema_version"] = 1
+	MultiplayerV2Service.diagnostics.record_round_trace(key, sample)
 
 func _on_terminal_report(peer_id: int, report: Dictionary) -> void:
 	var next_state := str(report.get("state", "dead"))
@@ -408,6 +540,7 @@ func _on_interaction_resolved(request_id: String, accepted: bool, reason: String
 
 func _on_results_received(result: Dictionary) -> void:
 	_result = result.duplicate(true)
+	MultiplayerV2Service.diagnostics.freeze_round_trace("results_received")
 	_result_panel.visible = true
 	_status_label.visible = false
 	_result_text.clear()
@@ -424,6 +557,8 @@ func _frozen_member(peer_id: int) -> Dictionary:
 func _on_round_failed(reason: String) -> void:
 	_round_aborted = true
 	_round_started = false
+	_countdown_label.visible = false
+	MultiplayerV2Service.diagnostics.freeze_round_trace("round_aborted")
 	_result_panel.visible = true
 	_result_text.clear()
 	_result_text.append_text("[center][b]V2 round aborted[/b][/center]\n\n%s" % reason)
@@ -452,14 +587,18 @@ func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 	_world_tick = 0
 	_local_start_deadline_usec = int(MultiplayerV2Service._round_coordinator.clock.started_at_usec)
 	_first_physics_step_usec = -1
+	_countdown_flash_until_usec = _local_start_deadline_usec + COUNTDOWN_START_FLASH_USEC
 	_status_label.text = tr("RUN")
 	MultiplayerV2Service.diagnostics.record_event("round_timeline_started", {"round_id": round_id, "deadline_local_usec": _local_start_deadline_usec, "clock_uncertainty_usec": float(MultiplayerV2Service._round_coordinator.clock.offset_uncertainty_usec), "initial_tick": _world_tick})
+	MultiplayerV2Service.diagnostics.begin_round_trace(round_id, int(MultiplayerV2Service.session.get("local_peer_id", -1)), str(MultiplayerV2Service.session.get("role", "")), _local_start_deadline_usec, float(MultiplayerV2Service._round_coordinator.clock.offset_uncertainty_usec))
+	_update_start_countdown()
 
 func _update_spectator_camera() -> void:
 	if str(_runner.player_state.get("state", "running")) == "running" or str(_runner.player_state.get("state", "")) == "pending_barrel":
 		_spectator_peer_id = 0
 		var local_peer := int(MultiplayerV2Service.session.get("local_peer_id", 1))
-		_camera_left = maxf(float(_runner.render_state(_render_fraction).get("world_x", 0.0)) - CAMERA_PLAYER_X, 0.0)
+		var local_pose: Dictionary = _local_presentation_pose if not _local_presentation_pose.is_empty() else _runner.render_state(_render_fraction)
+		_camera_left = maxf(float(local_pose.get("world_x", 0.0)) - CAMERA_PLAYER_X, 0.0)
 		return
 	if _spectator_peer_id != 0 and str(_remote_terminal.get(_spectator_peer_id, "running")) == "running":
 		var current := _remote_track_sample(_spectator_peer_id)
@@ -492,7 +631,13 @@ func _remote_track_sample(peer_id: int) -> Dictionary:
 		return {}
 	var result: Dictionary = _remote_tracks[peer_id].sample_at_render_time()
 	var terminal := str(_remote_terminal.get(peer_id, "running")) != "running"
-	MultiplayerV2Service.diagnostics.metrics["remote_track_%d" % peer_id] = {"valid": bool(result.get("valid", false)), "terminal": terminal, "stale": false if terminal else bool(result.get("stale", true)), "sequence": int(result.get("sample_seq", -1)), "render_tick": float(result.get("render_tick", -1.0)), "sample_age_ticks": 0.0 if terminal else float(result.get("render_tick", 0.0)) - float(result.get("simulation_tick", 0.0)), "world_x": float(result.get("world_x", 0.0))}
+	var gravity := int(result.get("gravity_direction", 1))
+	if bool(result.get("grounded", false)) and not terminal and _world != null:
+		var support: Dictionary = _world.surface_at(float(result.get("world_x", 0.0)), gravity < 0)
+		if bool(support.get("supported", false)):
+			result["y"] = float(support.get("y", result.get("y", 0.0))) - float(gravity) * Motion.SIZE.y * 0.5
+	result["sample_age_ticks"] = 0.0 if terminal else maxf(float(result.get("render_tick", 0.0)) - float(result.get("simulation_tick", 0.0)), 0.0)
+	MultiplayerV2Service.diagnostics.metrics["remote_track_%d" % peer_id] = {"valid": bool(result.get("valid", false)), "terminal": terminal, "stale": false if terminal else bool(result.get("stale", true)), "sequence": int(result.get("sample_seq", -1)), "render_tick": float(result.get("render_tick", -1.0)), "sample_age_ticks": float(result.get("sample_age_ticks", -1.0)), "world_x": float(result.get("world_x", 0.0)), "render_mode": str(result.get("render_mode", "unknown")), "correction_magnitude": float(result.get("correction_magnitude", 0.0)), "correction_elapsed_seconds": float(result.get("correction_elapsed_seconds", 0.0))}
 	return result
 
 func _update_hud() -> void:
@@ -505,7 +650,7 @@ func _update_hud() -> void:
 	elif state_name in ["dead", "finished"]:
 		_status_label.text = tr("Spectating peer %d") % _spectator_peer_id if _spectator_peer_id > 0 else tr("Waiting for host result…")
 	else:
-		_status_label.text = tr("V2 · tick %d · %s") % [_runner.simulation_tick, tr("Host") if MultiplayerV2Service.is_room_owner() else tr("Guest")]
+		_status_label.text = ""
 
 func _draw() -> void:
 	if _manifest == null:
@@ -546,7 +691,7 @@ func _player_render_pose(member: Dictionary) -> Dictionary:
 	var gravity := 1
 	var locomotion := "running"
 	if peer_id == int(MultiplayerV2Service.session.get("local_peer_id", 1)):
-		var local_render: Dictionary = _runner.render_state(_render_fraction)
+		var local_render: Dictionary = _local_presentation_pose if not _local_presentation_pose.is_empty() else _runner.render_state(_render_fraction)
 		world_x = float(local_render.get("world_x", world_x))
 		y = float(local_render.get("y", y))
 		gravity = int(_runner.player_state.get("gravity_direction", 1))

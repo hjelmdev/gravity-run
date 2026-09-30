@@ -13,6 +13,7 @@ const Coordinator := preload("res://systems/multiplayer_v2/v2_round_coordinator.
 const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_export.gd")
 const V2Service := preload("res://systems/multiplayer_v2/multiplayer_v2_service.gd")
 const V2Transport := preload("res://systems/multiplayer_v2/v2_webrtc_transport.gd")
+const HudLayout := preload("res://ui/multiplayer_v2/v2_hud_layout.gd")
 
 func _initialize() -> void:
 	var numeric_roster := [
@@ -102,6 +103,20 @@ func _initialize() -> void:
 	_assert(not clock.commit_start(2_000_001), "clock rejects duplicate start")
 	_assert(clock.advance(Clock.FIXED_DELTA * 3.0) == 3, "clock advances fixed simulation ticks")
 	var host_coordinator = Coordinator.new()
+	_assert(Coordinator.START_LEAD_USEC == 3_000_000, "common start reserves a full three-second countdown")
+	_assert(Coordinator.countdown_label(10_000_000, 7_000_000) == "3", "countdown begins with three seconds at the shared start deadline")
+	_assert(Coordinator.countdown_label(10_000_000, 8_000_001) == "2", "countdown uses the shared deadline after delayed frames")
+	_assert(Coordinator.countdown_label(10_000_000, 9_100_000) == "1", "countdown advances from remaining shared time")
+	_assert(Coordinator.countdown_label(10_000_000, 10_000_001) == "START!", "late frames show START without replaying a stale local sequence")
+	for viewport_size in [Vector2(1920, 1080), Vector2(960, 540), Vector2(844, 390), Vector2(320, 180)]:
+		var hud_layout: Dictionary = HudLayout.for_viewport(viewport_size)
+		var hud_margin := float(hud_layout.margin)
+		var menu_rect: Rect2 = hud_layout.button
+		var status_rect: Rect2 = hud_layout.status
+		var tools_rect: Rect2 = hud_layout.panel
+		_assert(menu_rect.position.x >= 0.0 and menu_rect.end.x <= viewport_size.x - hud_margin + 0.01, "responsive menu stays inside the right safe margin at %s" % viewport_size)
+		_assert(status_rect.position.x >= hud_margin - 0.01 and status_rect.end.x <= menu_rect.position.x - 15.0, "status text stays clear of the menu at %s" % viewport_size)
+		_assert(tools_rect.position.x >= hud_margin - 0.01 and tools_rect.end.x <= viewport_size.x - hud_margin + 0.01, "diagnostics panel adapts to the viewport width at %s" % viewport_size)
 	var started := [false]
 	var prepare_scene_requested := [false]
 	var sent_prepare: Dictionary = {}
@@ -196,7 +211,78 @@ func _initialize() -> void:
 	frozen.add_sample(_sample(1, 1, 100.0, "blocked", 0.0))
 	frozen.render_tick = 10.0
 	_assert(is_equal_approx(float(frozen.sample_at_render_time().world_x), 100.0), "blocked remote player is not extrapolated")
-
+	var stale_track := Track.new()
+	var stale_source := _sample(1, 1, 108.0)
+	stale_source["velocity_x"] = 500.0
+	_assert(stale_track.seed({"world_x": 100.0, "y": 200.0, "velocity_x": 500.0, "gravity_direction": 1, "grounded": true}), "remote track seeds from the frozen round spawn at tick zero")
+	_assert(stale_track.add_sample(stale_source), "remote track accepts its first movement sample after the seed")
+	stale_track.set_shared_presentation_tick(6.94)
+	var age_99: Dictionary = stale_track.advance_presentation(1.0 / 144.0)
+	_assert(not bool(age_99.stale) and str(age_99.render_mode) == "projection", "99 ms sample age remains inside bounded projection")
+	_assert(is_equal_approx(float(age_99.world_x), 157.5), "projection is based on sample velocity and actual presentation age")
+	stale_track.set_shared_presentation_tick(7.0)
+	var age_100: Dictionary = stale_track.advance_presentation(1.0 / 144.0)
+	_assert(not bool(age_100.stale) and is_equal_approx(float(age_100.world_x), 158.0), "100 ms boundary retains the last projected pose")
+	stale_track.set_shared_presentation_tick(7.06)
+	var age_101: Dictionary = stale_track.advance_presentation(1.0 / 144.0)
+	_assert(bool(age_101.stale) and str(age_101.render_mode) == "stale_hold", "101 ms transitions directly to stale hold without raw-position fallback")
+	stale_track.set_shared_presentation_tick(10.0)
+	var age_150: Dictionary = stale_track.advance_presentation(1.0 / 144.0)
+	_assert(bool(age_150.stale) and is_equal_approx(float(age_150.world_x), 158.0), "a direct jump to 150 ms holds the capped projected position")
+	var late_sample := _sample(9, 2, 120.0)
+	late_sample["velocity_x"] = 500.0
+	_assert(stale_track.add_sample(late_sample), "remote track accepts a delayed recovery sample behind the held pose")
+	var recovery_previous_x := float(stale_track.advance_presentation(1.0 / 60.0).world_x)
+	for tick in range(11, 40):
+		stale_track.set_shared_presentation_tick(float(tick))
+		var recovery_pose: Dictionary = stale_track.advance_presentation(1.0 / 60.0)
+		_assert(float(recovery_pose.world_x) >= recovery_previous_x - 0.001, "stale recovery cannot move a running player backwards at presentation tick %d" % tick)
+		recovery_previous_x = float(recovery_pose.world_x)
+	var reads_a: Dictionary = stale_track.sample_at_render_time()
+	var reads_b: Dictionary = stale_track.sample_at_render_time()
+	_assert(reads_a == reads_b, "camera, diagnostics, and sprites observe the same cached pose within a frame")
+	var terminal_sample := _sample(40, 3, 130.0, "dead", 0.0)
+	_assert(stale_track.add_sample(terminal_sample), "remote track accepts authoritative terminal state")
+	stale_track.set_shared_presentation_tick(40.0)
+	var exact_terminal: Dictionary = stale_track.advance_presentation(1.0 / 60.0)
+	_assert(str(exact_terminal.render_mode) == "terminal" and is_equal_approx(float(exact_terminal.world_x), 130.0), "terminal pose bypasses running-only stale recovery correction")
+	for packet_rate in [30, 60]:
+		for render_rate in [30, 60, 144]:
+			var network_track := Track.new()
+			network_track.seed({"world_x": 0.0, "y": 200.0, "velocity_x": 500.0, "gravity_direction": 1, "grounded": true})
+			var in_flight: Array[Dictionary] = []
+			var next_sequence := 1
+			var elapsed_seconds := 0.0
+			var previous_presented_x := 0.0
+			for frame in range(render_rate * 3):
+				var frame_scale: float = 0.65 if frame % 5 == 0 else (1.35 if frame % 7 == 0 else 1.0)
+				elapsed_seconds += frame_scale / float(render_rate)
+				while float(next_sequence) / float(packet_rate) <= elapsed_seconds:
+					var sent_at := float(next_sequence) / float(packet_rate)
+					var sent_tick := int(round(sent_at * 60.0))
+					var packet := _sample(sent_tick, next_sequence, sent_at * 500.0)
+					packet["velocity_x"] = 500.0
+					var jitter: float = float([0.0, 0.035, 0.075, 0.015][next_sequence % 4])
+					if next_sequence % 7 != 3:
+						in_flight.append({"delivery_at": sent_at + jitter, "sample": packet})
+						if next_sequence % 11 == 0:
+							in_flight.append({"delivery_at": sent_at + jitter + 0.01, "sample": packet.duplicate(true)})
+					next_sequence += 1
+				in_flight.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.delivery_at) < float(b.delivery_at))
+				while not in_flight.is_empty() and float(in_flight[0].delivery_at) <= elapsed_seconds:
+					network_track.add_sample(in_flight.pop_front().sample)
+				network_track.set_shared_presentation_tick(elapsed_seconds * 60.0)
+				var presented: Dictionary = network_track.advance_presentation(frame_scale / float(render_rate))
+				_assert(float(presented.world_x) >= previous_presented_x - 0.001, "jitter/loss at %d Hz packets and %d Hz rendering cannot regress on stale recovery" % [packet_rate, render_rate])
+				previous_presented_x = float(presented.world_x)
+	var trace_diagnostics = preload("res://systems/multiplayer_v2/v2_diagnostics.gd").new()
+	trace_diagnostics.begin_round_trace("trace-one", 2, "guest", 1_000_000, 500.0)
+	trace_diagnostics.record_round_trace("presented_frames", {"presentation_tick": 1.0})
+	trace_diagnostics.freeze_round_trace("test_round_end")
+	trace_diagnostics.begin_round_trace("trace-two", 2, "guest", 2_000_000, 500.0)
+	var exported_traces: Dictionary = trace_diagnostics.export_report()
+	_assert(exported_traces.round_traces.size() == 1 and str(exported_traces.round_traces[0].round_id) == "trace-one", "start diagnostics are frozen by round and do not combine rematches")
+	_assert(exported_traces.active_round_trace.has("start_deadline_usec") and int(exported_traces.active_round_trace.schema_version) == 1, "active start trace records its local start deadline and schema")
 	var ledger = Ledger.new()
 	ledger.reset([{"entity_id": "shared", "incarnation": 1, "kind": "barrel", "health": 1}])
 	var request: Dictionary = Rules.make_request("round", "shared", 1, "lethal_contact", 10, 2, 0, "claim-a")
