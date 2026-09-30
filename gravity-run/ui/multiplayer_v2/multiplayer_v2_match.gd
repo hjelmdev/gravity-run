@@ -69,11 +69,15 @@ var _countdown_flash_until_usec := -1
 var _trace_frame_elapsed := 0.0
 var _last_remote_watch_usec := -1
 var _last_remote_watch_poses: Dictionary = {}
+var _last_cadence_window_usec := -1
+var _last_process_usec := -1
+var _godot_frame_intervals_ms: Array[float] = []
 var _hud_root: Control
 var _viewport_size := Vector2.ZERO
 
 func _ready() -> void:
 	set_process_unhandled_input(true)
+	_install_browser_frame_diagnostics()
 	MultiplayerV2Service.room_changed.connect(_on_room_changed_for_abort)
 	MultiplayerV2Service.lobby_returned.connect(_navigate_lobby)
 	MultiplayerV2Service.membership_removed.connect(_on_membership_removed)
@@ -413,7 +417,10 @@ func _process(delta: float) -> void:
 	_render_camera.configure(get_viewport_rect().size, CAMERA_PLAYER_X)
 	_render_camera.follow(Vector2(_camera_left + CAMERA_PLAYER_X, 0.0), true)
 	_course_presentation.call("set_camera_left", _camera_left)
-	_course_presentation.call("set_world_state", _world.render_state(_render_fraction))
+	var world_render_fraction := _render_fraction
+	if _round_started:
+		world_render_fraction = WorldSimulationScript.presentation_fraction(presentation_tick, _world.tick)
+	_course_presentation.call("set_world_state", _world.render_state(world_render_fraction))
 	if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec <= int(START_TRACE_SECONDS * 1_000_000.0):
 		var remote_presented := {}
 		for peer_id in _remote_tracks:
@@ -610,10 +617,14 @@ func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 	_world_tick = 0
 	_local_start_deadline_usec = int(MultiplayerV2Service._round_coordinator.clock.started_at_usec)
 	_first_physics_step_usec = -1
+	_last_cadence_window_usec = Time.get_ticks_usec()
+	_last_process_usec = -1
+	_godot_frame_intervals_ms.clear()
 	_countdown_flash_until_usec = _local_start_deadline_usec + COUNTDOWN_START_FLASH_USEC
 	_status_label.text = tr("RUN")
 	MultiplayerV2Service.diagnostics.record_event("round_timeline_started", {"round_id": round_id, "deadline_local_usec": _local_start_deadline_usec, "clock_uncertainty_usec": float(MultiplayerV2Service._round_coordinator.clock.offset_uncertainty_usec), "initial_tick": _world_tick})
 	MultiplayerV2Service.diagnostics.begin_round_trace(round_id, int(MultiplayerV2Service.session.get("local_peer_id", -1)), str(MultiplayerV2Service.session.get("role", "")), _local_start_deadline_usec, float(MultiplayerV2Service._round_coordinator.clock.offset_uncertainty_usec))
+	MultiplayerV2Service.diagnostics.record_event("presentation_timing_config", {"shared_presentation_delay_ticks": PRESENTATION_DELAY_TICKS, "moving_barrels_use_shared_presentation_time": true, "browser_raf_available": OS.has_feature("web")})
 	_update_start_countdown()
 
 func _update_spectator_camera() -> void:
@@ -696,9 +707,14 @@ func _project_remote_vertical(sample: Dictionary, target_tick: float) -> Diction
 
 func _record_presentation_diagnostic(delta: float) -> void:
 	var now_usec := Time.get_ticks_usec()
+	if _last_process_usec >= 0:
+		_godot_frame_intervals_ms.append(float(now_usec - _last_process_usec) / 1000.0)
+	_last_process_usec = now_usec
 	if _last_remote_watch_usec >= 0 and now_usec - _last_remote_watch_usec < 100_000:
-		return
-	_last_remote_watch_usec = now_usec
+		if _last_cadence_window_usec < 0 or now_usec - _last_cadence_window_usec < 1_000_000:
+			return
+	if _last_remote_watch_usec < 0 or now_usec - _last_remote_watch_usec >= 100_000:
+		_last_remote_watch_usec = now_usec
 	var peers := {}
 	for peer_id in _remote_tracks:
 		var pose := _remote_track_sample(int(peer_id))
@@ -710,6 +726,87 @@ func _record_presentation_diagnostic(delta: float) -> void:
 			MultiplayerV2Service.diagnostics.record_event("remote_presentation_change", {"peer_id": int(peer_key), "presentation_tick": float(current.render_tick), "previous": previous, "current": current})
 	_last_remote_watch_poses = peers.duplicate(true)
 	MultiplayerV2Service.diagnostics.record_frame({"phase": "spectator" if _spectator_peer_id > 0 else "running", "tick": _runner.simulation_tick, "world_tick": _world.tick, "x": float(_runner.player_state.get("world_x", 0.0)), "y": float(_runner.player_state.get("y", 0.0)), "camera_left": _camera_left, "camera_delta_x": _camera_left - _previous_camera_left, "render_fraction": _render_fraction, "render_delta_ms": delta * 1000.0, "fps": Engine.get_frames_per_second(), "window_focused": DisplayServer.window_is_focused(), "presentation_tick": float(MultiplayerV2Service._round_coordinator.clock.tick_at_monotonic_usec(now_usec)) if _round_started else -1.0, "remote": peers})
+	if _last_cadence_window_usec < 0:
+		_last_cadence_window_usec = now_usec
+	if now_usec - _last_cadence_window_usec >= 1_000_000:
+		var window := _summarize_intervals(_godot_frame_intervals_ms)
+		window["engine_fps"] = Engine.get_frames_per_second()
+		window["elapsed_round_tick"] = _world_tick
+		window["presentation_tick"] = float(MultiplayerV2Service._round_coordinator.clock.tick_at_monotonic_usec(now_usec)) - PRESENTATION_DELAY_TICKS if _round_started else -1.0
+		window["obstacle_transform"] = _diagnostic_obstacle_transform()
+		var browser_window := _take_browser_frame_window()
+		if not browser_window.is_empty():
+			window["browser_raf"] = _summarize_intervals(_intervals_from_json(browser_window.get("intervals", [])))
+			for key in ["device_pixel_ratio", "canvas_css_width", "canvas_css_height"]:
+				if browser_window.has(key):
+					window[key] = browser_window[key]
+		MultiplayerV2Service.diagnostics.record_event("render_cadence_window", window)
+		_godot_frame_intervals_ms.clear()
+		_last_cadence_window_usec = now_usec
+
+func _summarize_intervals(intervals: Array[float]) -> Dictionary:
+	if intervals.is_empty():
+		return {"sample_count": 0, "p50_ms": 0.0, "p95_ms": 0.0, "max_ms": 0.0, "over_16_7_ms": 0, "over_33_3_ms": 0}
+	var ordered := intervals.duplicate()
+	ordered.sort()
+	var over_16_7 := 0
+	var over_33_3 := 0
+	for interval in intervals:
+		if interval > 16.7:
+			over_16_7 += 1
+		if interval > 33.3:
+			over_33_3 += 1
+	return {"sample_count": intervals.size(), "p50_ms": ordered[int(round(float(ordered.size() - 1) * 0.50))], "p95_ms": ordered[int(round(float(ordered.size() - 1) * 0.95))], "max_ms": ordered.back(), "over_16_7_ms": over_16_7, "over_33_3_ms": over_33_3}
+
+func _intervals_from_json(raw: Variant) -> Array[float]:
+	var result: Array[float] = []
+	if raw is Array:
+		for value in raw:
+			var interval := float(value)
+			if is_finite(interval) and interval >= 0.0:
+				result.append(interval)
+	return result
+
+func _install_browser_frame_diagnostics() -> void:
+	if not OS.has_feature("web"):
+		return
+	var script := "(function(){if(window.__gravityRunRafDiag)return;var d={intervals:[],last:null,take:function(){var canvas=document.getElementById('canvas');var r=canvas?canvas.getBoundingClientRect():{width:0,height:0};var out={intervals:d.intervals,device_pixel_ratio:window.devicePixelRatio||1,canvas_css_width:r.width,canvas_css_height:r.height};d.intervals=[];return JSON.stringify(out);}};window.__gravityRunRafDiag=d;function pulse(t){if(d.last!==null){d.intervals.push(t-d.last);if(d.intervals.length>512)d.intervals.shift();}d.last=t;window.requestAnimationFrame(pulse);}window.requestAnimationFrame(pulse);})()"
+	JavaScriptBridge.eval(script)
+
+func _take_browser_frame_window() -> Dictionary:
+	if not OS.has_feature("web"):
+		return {}
+	var encoded := str(JavaScriptBridge.eval("window.__gravityRunRafDiag ? window.__gravityRunRafDiag.take() : ''"))
+	if encoded.is_empty():
+		return {}
+	var parsed: Variant = JSON.parse_string(encoded)
+	return parsed if parsed is Dictionary else {}
+
+func _diagnostic_obstacle_transform() -> Dictionary:
+	if _manifest == null or _course_presentation == null:
+		return {}
+	var local_pose: Dictionary = _local_presentation_pose if not _local_presentation_pose.is_empty() else _runner.player_state
+	var local_x := float(local_pose.get("world_x", 0.0))
+	var selected: Dictionary = {}
+	var selected_x := INF
+	for event in _manifest.events:
+		if not event is Dictionary or str(event.get("kind", "")) not in ["block", "spikes"]:
+			continue
+		var event_x := float(event.get("start_x", event.get("x", 0.0)))
+		if event_x >= local_x - 200.0 and event_x < selected_x:
+			selected = event
+			selected_x = event_x
+	if selected.is_empty():
+		return {"obstacle_id": "none", "local_world_x": local_x}
+	var event_id := str(selected.get("event_id", ""))
+	var node_key := event_id + "_0" if str(selected.get("kind", "")) == "spikes" else event_id
+	var node_value: Variant = _course_presentation.event_nodes.get(node_key)
+	var world_position := Vector2(selected_x, float(selected.get("y", _manifest.initial_floor_y)))
+	var canvas_position := get_viewport().get_canvas_transform() * world_position
+	if is_instance_valid(node_value) and node_value is Node2D:
+		world_position = (node_value as Node2D).global_position
+		canvas_position = (node_value as Node2D).get_global_transform_with_canvas().origin
+	return {"obstacle_id": event_id, "kind": str(selected.get("kind", "")), "world_x": world_position.x, "world_y": world_position.y, "canvas_x": canvas_position.x, "canvas_y": canvas_position.y, "camera_left": _camera_left, "local_world_x": local_x, "node_valid": is_instance_valid(node_value)}
 
 func _update_hud() -> void:
 	if not _result.is_empty():

@@ -92,6 +92,9 @@ func render_state(fraction: float) -> Dictionary:
 				barrel[key] = lerpf(float(previous.get(key, barrel.get(key, 0.0))), float(barrel.get(key, 0.0)), clampf(fraction, 0.0, 1.0))
 	return {"barrels": rendered, "entities": entity_ledger.entities}
 
+static func presentation_fraction(presentation_tick: float, latest_simulation_tick: int) -> float:
+	return clampf(presentation_tick - float(latest_simulation_tick - 1), 0.0, 1.0)
+
 func surface_at(x: float, ceiling: bool) -> Dictionary:
 	var y := float(manifest.initial_ceiling_y) if ceiling else float(manifest.initial_floor_y)
 	var supported := true

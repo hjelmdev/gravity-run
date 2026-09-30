@@ -323,6 +323,7 @@ func _initialize() -> void:
 
 	var built: Dictionary = Builder.new().build(73421, 45000, CourseGenerator.GENERATOR_VERSION)
 	_assert(built.get("manifest") != null, "deterministic course manifest builds")
+	_assert(is_equal_approx(World.presentation_fraction(16.25, 17), 0.25), "world entities can be rendered on the same one-tick-delayed presentation timeline as runners")
 	if built.get("manifest") != null:
 		var first = World.new()
 		var second = World.new()
