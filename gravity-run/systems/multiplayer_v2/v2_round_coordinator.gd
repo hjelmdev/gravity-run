@@ -6,7 +6,7 @@ signal round_started(round_id: String, descriptor: Dictionary)
 signal round_failed(reason: String)
 signal all_prepare_received
 
-const START_LEAD_USEC := 2_500_000
+const START_LEAD_USEC := 3_000_000
 const ACK_MARGIN_USEC := 500_000
 const PREPARE_RETRY_USEC := 1_000_000
 const PREPARE_TIMEOUT_USEC := 15_000_000
@@ -29,6 +29,12 @@ var prepare_received_emitted := false
 var start_acks: Dictionary = {}
 var clock := MultiplayerV2RoundClock.new()
 var round_descriptor: Dictionary = {}
+
+static func countdown_label(deadline_usec: int, now_usec: int) -> String:
+	if deadline_usec < 0:
+		return ""
+	var remaining_usec := deadline_usec - now_usec
+	return str(ceili(float(remaining_usec) / 1_000_000.0)) if remaining_usec > 0 else "START!"
 
 func prepare_as_host(descriptor: Dictionary, peers: Array[int], now_usec: int) -> bool:
 	if state not in [State.IDLE, State.CANCELLED, State.RUNNING, State.FINISHED]:
