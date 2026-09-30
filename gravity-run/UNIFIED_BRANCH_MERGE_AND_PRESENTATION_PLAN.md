@@ -2,6 +2,8 @@
 
 Datum: 2026-09-30. Detta är en införandeplan, inte en genomförd merge eller verifierad release.
 
+Införandestatus 2026-09-30: merge, R5, gemensam presentation, migrationer och Pages-release är införda. Se `UNIFIED_BRANCH_IMPLEMENTATION_REPORT.md` för commits, testbevis, liveverifiering och kvarvarande manuellt multiplayerprov. Planens ursprungliga acceptansmatris är bevarad som granskningsunderlag.
+
 Användarens förtydligande 2026-09-30: de fyra senaste ocommittade V2-filerna ska ingå och committas före merge. Båda SQL-migrationernas funktionalitet ska också ingå; samma versionsprefix är ett historik-/namngivningsproblem och inte ett skäl att välja bort någon av dem. V1:s övergång till gemensam banpresentation är en accepterad refaktorisering, med bibehållen regressionskontroll.
 
 ## 1. Uppdrag och slutresultat
