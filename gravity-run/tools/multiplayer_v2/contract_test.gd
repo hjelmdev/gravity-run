@@ -24,6 +24,7 @@ func _initialize() -> void:
 	_assert(V2Service.room_snapshot_rejection_reason({"room_id": "room", "room_session_id": "session", "lobby_generation": 5, "phase": "PREPARING_COURSE"}, {"room_id": "room", "room_session_id": "session", "lobby_generation": 4, "phase": "OPEN"}, "refresh_room") == "older_generation", "stale room polling cannot roll back a newer generation")
 	_assert(V2Service.room_snapshot_rejection_reason({"room_id": "room", "room_session_id": "session", "lobby_generation": 5, "phase": "PREPARING_COURSE"}, {"room_id": "room", "room_session_id": "session", "lobby_generation": 5, "phase": "OPEN"}, "refresh_room") == "phase_regression", "room polling cannot regress phase within one generation")
 	_assert(V2Service.room_snapshot_rejection_reason({"room_id": "room", "room_session_id": "session", "lobby_generation": 5, "phase": "PREPARING_COURSE"}, {"room_id": "room", "room_session_id": "session", "lobby_generation": 6, "phase": "OPEN"}, "refresh_room").is_empty(), "a newer return-to-lobby generation can reopen the room")
+	_assert(V2Service.room_snapshot_rejection_reason({"room_id": "room", "room_session_id": "session", "lobby_generation": 6, "state_revision": 20, "phase": "OPEN"}, {"room_id": "room", "room_session_id": "session", "lobby_generation": 6, "state_revision": 19, "phase": "OPEN"}, "refresh_room") == "older_state_revision", "same-generation responses cannot roll back a newer ready or return state")
 	var lobby_snapshot := {"room_id": "room", "room_session_id": "session", "lobby_generation": 6, "phase": "OPEN"}
 	_assert(V2Service.should_apply_return_to_lobby(lobby_snapshot, lobby_snapshot), "duplicate return-to-lobby packet is idempotently accepted at the same generation")
 	_assert(not V2Service.should_apply_return_to_lobby(lobby_snapshot, {"room_id": "room", "room_session_id": "session", "lobby_generation": 5, "phase": "OPEN"}), "old return-to-lobby packet cannot regress a newer lobby")
@@ -55,6 +56,19 @@ func _initialize() -> void:
 	_assert(int(reconnect_transport._connection_generations.get("host-user", 0)) == 4, "client peer recreation preserves signaling generation monotonicity")
 	reconnect_peer.close()
 	reconnect_transport.free()
+	var roster_transport = V2Transport.new()
+	var requested_refresh := [false]
+	var signal_events: Array[String] = []
+	roster_transport.roster_refresh_requested.connect(func(_reason: String) -> void: requested_refresh[0] = true)
+	roster_transport.signal_diagnostic.connect(func(event_name: String, _details: Dictionary) -> void: signal_events.append(event_name))
+	roster_transport.configure({"room_id": "test-room", "owner_user_id": "host", "roster_revision": 2, "members": [{"user_id": "host", "player_slot": 1}]}, "host", null)
+	var now_unix := int(Time.get_unix_time_from_system())
+	var unknown_offer := {"network_mode": "v2", "room_id": "test-room", "connection_generation": 1, "attempt_id": "synthetic-attempt", "from_user_id": "guest", "to_user_id": "host", "type": "offer", "body": {"sdp_type": "offer", "sdp": "synthetic"}, "sent_at": now_unix, "expires_at": now_unix + 30}
+	roster_transport.handle_signal(unknown_offer)
+	_assert(requested_refresh[0] and roster_transport._unknown_member_signals.size() == 1, "unknown but room-scoped signaling is briefly queued while refreshing membership")
+	roster_transport.update_room({"room_id": "test-room", "owner_user_id": "host", "roster_revision": 3, "members": [{"user_id": "host", "player_slot": 1}, {"user_id": "guest", "player_slot": 2}]})
+	_assert(roster_transport._unknown_member_signals.is_empty() and "signal_replayed" in signal_events, "queued signaling is replayed only after the sender appears in the backend roster")
+	roster_transport.free()
 	var event_unix_before := int(Time.get_unix_time_from_system() * 1_000_000.0)
 	diagnostics.record_event("utc-test")
 	var event_unix := int(diagnostics.events.back().at_unix_usec)
@@ -168,6 +182,12 @@ func _initialize() -> void:
 	_assert(track.add_sample(_sample(1, 1, 100.0)), "remote track inserts reordered sample")
 	_assert(not track.add_sample(_sample(1, 1, 100.0)), "remote track rejects duplicate sequence")
 	_assert(track.samples.size() == 2, "remote history survives new samples")
+	var shared_track = Track.new()
+	shared_track.add_sample(_sample(1, 1, 100.0))
+	shared_track.add_sample(_sample(2, 2, 200.0))
+	shared_track.set_shared_presentation_tick(1.5)
+	shared_track.advance(0.25)
+	_assert(is_equal_approx(float(shared_track.sample_at_render_time().world_x), 150.0), "all tracks use an explicitly shared presentation time instead of first-packet arrival phase")
 	var frozen := Track.new()
 	frozen.add_sample(_sample(1, 1, 100.0, "blocked", 0.0))
 	frozen.render_tick = 10.0
@@ -215,6 +235,15 @@ func _initialize() -> void:
 	var local_after := float(owner.player_state.world_x)
 	_assert(local_after > before_x, "owner runner advances locally")
 	_assert(is_equal_approx(float(owner.player_state.world_x), local_after), "remote presentation cannot mutate owner runner state")
+	var faster = Runner.new()
+	var slower = Runner.new()
+	faster.configure("speed-round", 1, 100.0, 460.0, {"run_speed_percent": 10100})
+	slower.configure("speed-round", 2, 100.0, 460.0, {"run_speed_percent": 10000})
+	for _tick in 45:
+		faster.step(0, 460.0, 80.0)
+		slower.step(0, 460.0, 80.0)
+	var measured_speed_gap := float(faster.player_state.world_x) - float(slower.player_state.world_x)
+	_assert(is_equal_approx(measured_speed_gap, 3.75), "101 percent versus 100 percent keeps its expected 45-tick distance lead")
 
 	if _failures == 0:
 		print("Multiplayer V2 contract tests passed.")

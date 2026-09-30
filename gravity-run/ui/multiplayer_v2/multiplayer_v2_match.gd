@@ -54,11 +54,14 @@ var _lobby_navigation_pending := false
 var _export_notice_generation := 0
 var _touch_start := Vector2.ZERO
 var _touch_index := -1
+var _local_start_deadline_usec := -1
+var _first_physics_step_usec := -1
 
 func _ready() -> void:
 	set_process_unhandled_input(true)
 	MultiplayerV2Service.room_changed.connect(_on_room_changed_for_abort)
 	MultiplayerV2Service.lobby_returned.connect(_navigate_lobby)
+	MultiplayerV2Service.membership_removed.connect(_on_membership_removed)
 	MultiplayerV2Service.lobby_request_finished.connect(_on_lobby_request_finished)
 	_manifest = MultiplayerV2Service.current_manifest
 	_round_id = str(MultiplayerV2Service.session.get("round_id", ""))
@@ -202,6 +205,7 @@ func _build_overlay() -> void:
 	overlay.move_child(_debug_toggle, overlay.get_child_count() - 1)
 
 func _build_peer_slots() -> void:
+	var local_runner_view: Node2D
 	for member in MultiplayerV2Service.get_active_round_roster():
 		_frozen_roster.append(member.duplicate(true))
 		var peer_id := int(member.get("player_slot", 1))
@@ -212,42 +216,61 @@ func _build_peer_slots() -> void:
 		runner.call("set_skin_id", int(member.get("skin_id", 0)))
 		_player_views[peer_id] = runner
 		if peer_id == int(MultiplayerV2Service.session.get("local_peer_id", 1)):
+			local_runner_view = runner
 			continue
 		var track = RemoteTrackScript.new()
-		track.target_delay_ticks = 4.5
+		track.target_delay_ticks = 0.0
 		_remote_tracks[peer_id] = track
 		_remote_terminal[peer_id] = "running"
 		_remote_locomotion[peer_id] = "running"
+	if is_instance_valid(local_runner_view):
+		_course_root.move_child(local_runner_view, _course_root.get_child_count() - 1)
 
 func _physics_process(delta: float) -> void:
 	if _manifest == null or _runner == null:
 		return
 	if not _round_started:
 		return
-	_accumulator += minf(delta, FIXED_DELTA * float(MAX_CATCHUP_STEPS))
+	var clock = MultiplayerV2Service._round_coordinator.clock
+	var target_tick := int(floor(clock.tick_at_monotonic_usec(Time.get_ticks_usec())))
+	var owed_steps := maxi(target_tick - _world_tick, 0)
 	var steps := 0
-	while _accumulator >= FIXED_DELTA and steps < MAX_CATCHUP_STEPS:
-		_accumulator -= FIXED_DELTA
+	while steps < mini(owed_steps, MAX_CATCHUP_STEPS):
+		if _first_physics_step_usec < 0:
+			_first_physics_step_usec = Time.get_ticks_usec()
+			var late_usec := maxi(_first_physics_step_usec - _local_start_deadline_usec, 0) if _local_start_deadline_usec >= 0 else 0
+			MultiplayerV2Service.diagnostics.record_event("first_local_physics_step", {"deadline_lateness_ms": float(late_usec) / 1000.0, "tick": _world_tick + 1, "round_elapsed_tick": target_tick})
 		_step_local_round()
+		if _world_tick <= 120:
+			_append_timeline_metric("local_steps", {"tick": _world_tick, "world_x": float(_runner.player_state.get("world_x", 0.0)), "local_usec": Time.get_ticks_usec()})
 		steps += 1
-	if _accumulator >= FIXED_DELTA:
-		MultiplayerV2Service.diagnostics.record_event("local_physics_backlog", {"seconds": _accumulator})
-		_accumulator = fmod(_accumulator, FIXED_DELTA)
+	if owed_steps > MAX_CATCHUP_STEPS:
+		MultiplayerV2Service.diagnostics.record_event("local_physics_backlog", {"owed_steps": owed_steps, "executed_steps": steps})
 	MultiplayerV2Service.diagnostics.observe_max("max_physics_delta_ms", delta * 1000.0)
 
 func _process(delta: float) -> void:
 	if _manifest == null or _runner == null or _course_presentation == null:
 		return
 	_render_fraction = Engine.get_physics_interpolation_fraction()
-	for peer_id in _remote_tracks:
-		if str(_remote_terminal.get(peer_id, "running")) == "running":
-			_remote_tracks[peer_id].advance(delta)
+	var shared_tick := 0.0
+	if _round_started:
+		shared_tick = MultiplayerV2Service._round_coordinator.clock.tick_at_monotonic_usec(Time.get_ticks_usec())
+		for peer_id in _remote_tracks:
+			if str(_remote_terminal.get(peer_id, "running")) == "running":
+				_remote_tracks[peer_id].set_shared_presentation_tick(shared_tick)
 	_previous_camera_left = _camera_left
 	_update_spectator_camera()
 	_render_camera.configure(get_viewport_rect().size, CAMERA_PLAYER_X)
 	_render_camera.follow(Vector2(_camera_left + CAMERA_PLAYER_X, 0.0), true)
 	_course_presentation.call("set_camera_left", _camera_left)
 	_course_presentation.call("set_world_state", _world.render_state(_render_fraction))
+	if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec <= 2_000_000:
+		var remote_presented := {}
+		for peer_id in _remote_tracks:
+			var remote_pose := _remote_track_sample(int(peer_id))
+			remote_presented[str(peer_id)] = {"presentation_tick": float(remote_pose.get("render_tick", -1.0)), "sample_tick": float(remote_pose.get("simulation_tick", -1.0)), "world_x": float(remote_pose.get("world_x", 0.0)), "stale": bool(remote_pose.get("stale", true))}
+		var local_pose: Dictionary = _runner.render_state(_render_fraction)
+		_append_timeline_metric("presented_frames", {"presentation_tick": shared_tick, "local_simulation_tick": _runner.simulation_tick, "local_render_x": float(local_pose.get("world_x", 0.0)), "remote": remote_presented, "camera_left": _camera_left, "local_usec": Time.get_ticks_usec()})
 	if _round_started:
 		_update_hud()
 	_sync_player_views()
@@ -335,6 +358,15 @@ func _on_remote_sample(peer_id: int, sample: Dictionary) -> void:
 	else:
 		MultiplayerV2Service.diagnostics.increment_metric("track_rejections_owner_%d" % peer_id)
 	_remote_locomotion[peer_id] = str(sample.get("locomotion_state", "running"))
+	if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec <= 2_000_000:
+		_append_timeline_metric("remote_samples", {"peer_id": peer_id, "sample_tick": int(sample.get("simulation_tick", -1)), "local_tick": _world_tick, "world_x": float(sample.get("world_x", 0.0)), "received_usec": Time.get_ticks_usec()})
+
+func _append_timeline_metric(key: String, value: Dictionary) -> void:
+	var entries: Array = MultiplayerV2Service.diagnostics.metrics.get("start_timeline_" + key, [])
+	entries.append(value)
+	while entries.size() > 128:
+		entries.pop_front()
+	MultiplayerV2Service.diagnostics.metrics["start_timeline_" + key] = entries
 
 func _on_terminal_report(peer_id: int, report: Dictionary) -> void:
 	var next_state := str(report.get("state", "dead"))
@@ -398,17 +430,30 @@ func _on_round_failed(reason: String) -> void:
 	_on_room_changed_for_abort(MultiplayerV2Service.room_state)
 
 func _on_room_changed_for_abort(room: Dictionary) -> void:
-	if (not _round_aborted and _result.is_empty()) or str(room.get("phase", "")) != "OPEN":
-		return
-	_navigate_lobby()
+	# Room phase changes are global state. Each local results page stays open
+	# until this client explicitly records its own return.
+	if _round_aborted and _result.is_empty():
+		_status_label.text = tr("The round was aborted. Return to the lobby when you are ready.")
+
+func _on_membership_removed(reason: String) -> void:
+	_round_started = false
+	_result_panel.visible = true
+	_result_text.clear()
+	_result_text.append_text(reason)
+	_return_lobby_button.text = tr("Back to menu")
+	_status_label.visible = true
+	_status_label.text = reason
+	queue_redraw()
 
 func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 	if round_id != _round_id:
 		return
 	_round_started = true
 	_world_tick = 0
+	_local_start_deadline_usec = int(MultiplayerV2Service._round_coordinator.clock.started_at_usec)
+	_first_physics_step_usec = -1
 	_status_label.text = tr("RUN")
-	MultiplayerV2Service.diagnostics.record_event("first_local_simulation", {"round_id": round_id, "tick": _runner.simulation_tick})
+	MultiplayerV2Service.diagnostics.record_event("round_timeline_started", {"round_id": round_id, "deadline_local_usec": _local_start_deadline_usec, "clock_uncertainty_usec": float(MultiplayerV2Service._round_coordinator.clock.offset_uncertainty_usec), "initial_tick": _world_tick})
 
 func _update_spectator_camera() -> void:
 	if str(_runner.player_state.get("state", "running")) == "running" or str(_runner.player_state.get("state", "")) == "pending_barrel":
@@ -473,7 +518,16 @@ func _draw() -> void:
 	_draw_players()
 
 func _draw_players() -> void:
-	for member in _frozen_roster:
+	var draw_order := _frozen_roster.duplicate(true)
+	var local_peer := int(MultiplayerV2Service.session.get("local_peer_id", 1))
+	draw_order.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var a_local := int(a.get("player_slot", -1)) == local_peer
+		var b_local := int(b.get("player_slot", -1)) == local_peer
+		if a_local != b_local:
+			return not a_local
+		return int(a.get("player_slot", -1)) < int(b.get("player_slot", -1))
+	)
+	for member in draw_order:
 		var peer_id := int(member.get("player_slot", 1))
 		var pose := _player_render_pose(member)
 		var screen_position: Vector2 = pose.position
@@ -563,12 +617,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		_pending_flip_direction = -int(_runner.player_state.get("gravity_direction", 1))
 
 func _return_to_lobby() -> void:
-	if MultiplayerV2Service.is_room_owner():
-		_return_lobby_button.disabled = true
-		_return_lobby_button.text = tr("Opening lobby…")
-		MultiplayerV2Service.return_to_lobby()
-	else:
-		_navigate_lobby()
+	if not MultiplayerV2Service.has_room():
+		_leave_v2()
+		return
+	_return_lobby_button.disabled = true
+	_return_lobby_button.text = tr("Returning…")
+	MultiplayerV2Service.return_to_lobby()
 
 func _navigate_lobby() -> void:
 	if _lobby_navigation_pending:
@@ -578,7 +632,7 @@ func _navigate_lobby() -> void:
 	get_tree().change_scene_to_file("res://ui/main_menu.tscn")
 
 func _on_lobby_request_finished(action: String, success: bool, message: String) -> void:
-	if action == "return_to_lobby" and not success:
+	if action in ["return_to_lobby", "return_member"] and not success:
 		_return_lobby_button.disabled = false
 		_return_lobby_button.text = tr("Return to lobby")
 		_result_text.clear()
@@ -587,6 +641,10 @@ func _on_lobby_request_finished(action: String, success: bool, message: String) 
 func _save_diagnostics() -> void:
 	var report := MultiplayerV2Service.diagnostics.export_report()
 	report["current_state"] = MultiplayerV2Service.current_diagnostic_state()
+	if not _result.is_empty():
+		report["frozen_result"] = _result.duplicate(true)
+		report["frozen_roster"] = _frozen_roster.duplicate(true)
+		report["frozen_terminal_poses"] = _remote_terminal_poses.duplicate(true)
 	var saved_path := DiagnosticsExport.save_report(report, DiagnosticsExport.make_filename(report, "match"))
 	_export_notice_generation += 1
 	_export_confirmation.text = tr("Diagnostics saved: %s") % saved_path

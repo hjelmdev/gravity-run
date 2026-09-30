@@ -9,11 +9,19 @@ var samples: Array[Dictionary] = []
 var render_tick := 0.0
 var target_delay_ticks := DEFAULT_BUFFER_SECONDS * 60.0
 var initialized := false
+var shared_presentation_tick := -1.0
 
 func reset() -> void:
 	samples.clear()
 	render_tick = 0.0
 	initialized = false
+	shared_presentation_tick = -1.0
+
+func set_shared_presentation_tick(value: float) -> void:
+	shared_presentation_tick = maxf(value, 0.0)
+	if not samples.is_empty():
+		render_tick = shared_presentation_tick
+		initialized = true
 
 func add_sample(sample: Dictionary) -> bool:
 	var tick := int(sample.get("simulation_tick", -1))
@@ -31,13 +39,16 @@ func add_sample(sample: Dictionary) -> bool:
 	samples.insert(insert_at, sample.duplicate(true))
 	while samples.size() > MAX_HISTORY:
 		samples.pop_front()
-	if not initialized:
+	if shared_presentation_tick >= 0.0:
+		render_tick = shared_presentation_tick
+		initialized = true
+	elif not initialized:
 		render_tick = float(tick) - target_delay_ticks
 		initialized = true
 	return true
 
 func advance(delta: float) -> void:
-	if initialized and delta > 0.0:
+	if initialized and shared_presentation_tick < 0.0 and delta > 0.0:
 		render_tick += delta * 60.0
 
 func sample_at_render_time() -> Dictionary:
