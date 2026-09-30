@@ -1181,6 +1181,9 @@ msgstr "Föll av banan"
 msgid "Player"
 msgstr "Spelare"
 
+msgid "Watching %s"
+msgstr "Följer %s"
+
 msgid "RUN"
 msgstr "SPRING"
 

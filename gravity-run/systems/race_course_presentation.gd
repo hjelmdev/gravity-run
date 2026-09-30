@@ -27,6 +27,8 @@ var _render_profile_max_usec := 0
 var _render_profile_draw_count := 0
 var _render_profile_surface_queries := 0
 var _render_profile_enabled := false
+var _start_draw_deadline_usec := -1
+var _first_start_draw_profile: Dictionary = {}
 var _surface_index
 
 static func create_hazard(scene: PackedScene, at_position: Vector2, size: Vector2, from_ceiling: bool, surface_rotation: float = 0.0) -> Node2D:
@@ -69,11 +71,13 @@ func load_manifest(course_manifest: Resource) -> String:
 				for index in range(int(event.get("count", 1))):
 					var spike := create_hazard(SpikeScene, Vector2(start_x + float(index) * float(event.get("spacing", 32.0)), float(event.get("y", surface_y))), Vector2(CourseGenerator.SPIKE_WIDTH, CourseGenerator.SPIKE_HEIGHT), from_ceiling)
 					spike.name = "Spike_%s_%d" % [event_id, index]
+					_tag_presentation_target(spike, "%s:%d" % [event_id, index], kind, false)
 					add_child(spike)
 					event_nodes["%s_%d" % [event_id, index]] = spike
 			"block":
 				var block := create_hazard(BlockScene, Vector2(x, float(event.get("y", surface_y))), Vector2(float(event.get("width", 48.0)), float(event.get("height", 72.0))), from_ceiling)
 				block.name = "Block_%s" % event_id
+				_tag_presentation_target(block, event_id, kind, false)
 				add_child(block)
 				event_nodes[event_id] = block
 			"barrels":
@@ -87,6 +91,7 @@ func load_manifest(course_manifest: Resource) -> String:
 					var barrel := create_hazard(BarrelScene, Vector2(x + spawn_offset - chain_width * 0.5 + float(index) * spacing, float(event.get("y", floor_y))), Vector2(HazardRules.BARREL_WIDTH, float(event.get("height", HazardRules.BARREL_WIDTH))), false)
 					barrel.call("set_motion_speed_multiplier", speed_multiplier)
 					barrel.name = "Barrel_%s" % barrel_id
+					_tag_presentation_target(barrel, barrel_id, "barrel", true)
 					add_child(barrel)
 					event_nodes[barrel_id] = barrel
 			"gap":
@@ -94,6 +99,7 @@ func load_manifest(course_manifest: Resource) -> String:
 				gap.position = Vector2(x, 0.0)
 				gap.call("configure", float(event.get("width", 160.0)), from_ceiling)
 				gap.name = "Gap_%s" % event_id
+				_tag_presentation_target(gap, event_id, kind, false)
 				add_child(gap)
 				event_nodes[event_id] = gap
 			"step":
@@ -103,6 +109,7 @@ func load_manifest(course_manifest: Resource) -> String:
 				step.position = Vector2(x, 0.0)
 				step.call("configure_step", start_y, end_y, from_ceiling, bool(event.get("spiked", false)))
 				step.name = "Step_%s" % event_id
+				_tag_presentation_target(step, event_id, kind, false)
 				add_child(step)
 				event_nodes[event_id] = step
 				if from_ceiling: ceiling_y = end_y
@@ -114,6 +121,7 @@ func load_manifest(course_manifest: Resource) -> String:
 				slope.position.x = float(event.get("start_x", x - 220.0))
 				slope.call("configure", start_y, end_y, from_ceiling)
 				slope.name = "Slope_%s" % event_id
+				_tag_presentation_target(slope, event_id, kind, false)
 				add_child(slope)
 				event_nodes[event_id] = slope
 				if from_ceiling: ceiling_y = end_y
@@ -137,12 +145,30 @@ func load_manifest(course_manifest: Resource) -> String:
 	_render_step_positions.sort()
 	return ""
 
+func _tag_presentation_target(node: Node2D, stable_id: String, kind: String, moving: bool) -> void:
+	# One metadata contract lets diagnostics include existing and future course
+	# entities without adding a probe for every hazard type.
+	node.set_meta("presentation_target", true)
+	node.set_meta("presentation_target_id", stable_id)
+	node.set_meta("presentation_target_kind", kind)
+	node.set_meta("presentation_target_moving", moving)
+	node.set_meta("presentation_target_obstacle", kind in ["block", "spikes", "barrel"])
+
 func set_camera_left(camera_left: float) -> void:
 	_camera_left = maxf(camera_left, 0.0)
 	queue_redraw()
 
 func set_render_profile_enabled(enabled: bool) -> void:
 	_render_profile_enabled = enabled
+
+func begin_start_profile(deadline_usec: int) -> void:
+	_start_draw_deadline_usec = deadline_usec
+	_first_start_draw_profile.clear()
+
+func take_start_draw_profile() -> Dictionary:
+	var result := _first_start_draw_profile.duplicate(false)
+	_first_start_draw_profile.clear()
+	return result
 
 func set_world_state(world_state: Dictionary) -> void:
 	var barrels: Variant = world_state.get("barrels", [])
@@ -209,6 +235,8 @@ func _draw() -> void:
 		_render_profile_total_usec += draw_elapsed_usec
 		_render_profile_max_usec = maxi(_render_profile_max_usec, draw_elapsed_usec)
 		_render_profile_draw_count += 1
+		if _start_draw_deadline_usec >= 0 and _first_start_draw_profile.is_empty():
+			_first_start_draw_profile = {"at_usec": Time.get_ticks_usec(), "duration_usec": draw_elapsed_usec, "relative_to_deadline_usec": Time.get_ticks_usec() - _start_draw_deadline_usec, "kind": "terrain_and_finish_line_draw"}
 
 func take_render_profile() -> Dictionary:
 	var result := {"terrain_draw_count": _render_profile_draw_count, "terrain_total_usec": _render_profile_total_usec, "terrain_max_usec": _render_profile_max_usec, "surface_query_count": _render_profile_surface_queries}

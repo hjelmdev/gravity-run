@@ -19,6 +19,8 @@ const START_TRACE_SECONDS := 4.0
 const PRESENTATION_DELAY_TICKS := 1.0
 const LOCAL_POSE_HISTORY := 256
 const COUNTDOWN_START_FLASH_USEC := 350_000
+const FLOW_TRACE_MAX_FRAMES := 512
+const FLOW_TRACE_MAX_WINDOWS := 5
 
 const CameraScript := preload("res://systems/runner_camera.gd")
 
@@ -85,6 +87,21 @@ var _last_presentation_tick := 0.0
 var _profiling_enabled := false
 var _hud_root: Control
 var _viewport_size := Vector2.ZERO
+var _flow_trace_windows := 0
+var _flow_trace_moving_target_sampled := false
+var _flow_trace_frame_index := 0
+var _flow_trace_active := false
+var _flow_trace_started_usec := -1
+var _flow_trace_frames: Array[Dictionary] = []
+var _flow_trace_static_target: Node2D
+var _flow_trace_static_id := ""
+var _flow_trace_moving_target: Node2D
+var _flow_trace_moving_id := ""
+var _flow_trace_view_metrics: Dictionary = {}
+var _flow_trace_browser_start_index := 0
+var _flow_trace_camera_instance_id := 0
+var _flow_trace_viewport_size := Vector2.ZERO
+var _start_profile_recorded: Dictionary = {}
 
 func _ready() -> void:
 	set_process_unhandled_input(true)
@@ -148,6 +165,7 @@ func _configure_profiling() -> void:
 
 func _exit_tree() -> void:
 	_close_barrel_frame_trace("match_scene_exit")
+	_close_flow_trace("match_scene_exit")
 
 func _build_overlay() -> void:
 	var overlay := CanvasLayer.new()
@@ -470,11 +488,17 @@ func _process(delta: float) -> void:
 	if _round_started:
 		_update_hud()
 	_sync_player_views()
+	if _profiling_enabled and _round_started:
+		var flow_trace_started_usec := Time.get_ticks_usec()
+		_capture_common_course_flow_frame(delta)
+		_profile_phase("common_course_flow_trace", flow_trace_started_usec)
 	if _result.is_empty():
 		_record_presentation_diagnostic(delta)
 	if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec > int(START_TRACE_SECONDS * 1_000_000.0):
 		MultiplayerV2Service.diagnostics.freeze_round_trace("start_window_complete")
 	queue_redraw()
+	if _profiling_enabled:
+		_capture_first_course_draw_profile()
 
 func _step_local_round() -> void:
 	if _profiling_enabled:
@@ -486,7 +510,12 @@ func _step_local_round() -> void:
 
 func _step_local_round_impl() -> void:
 	_world_tick += 1
-	if not _world.step_to(_world_tick):
+	var start_step_profile := _profiling_enabled and not _start_profile_recorded.has("first_world_step")
+	var world_step_started_usec := Time.get_ticks_usec() if start_step_profile else 0
+	var world_step_advanced := bool(_world.step_to(_world_tick))
+	if start_step_profile:
+		_record_start_stage("first_world_step", Time.get_ticks_usec(), {"duration_usec": Time.get_ticks_usec() - world_step_started_usec, "simulation_tick": _world_tick, "advanced": world_step_advanced})
+	if not world_step_advanced:
 		return
 	if _world_tick % 60 == 0:
 		MultiplayerV2Service.report_world_hash(_world_tick, _world.entity_ledger.revision, _world.state_hash())
@@ -622,6 +651,7 @@ func _on_interaction_resolved(request_id: String, accepted: bool, reason: String
 
 func _on_results_received(result: Dictionary) -> void:
 	_result = result.duplicate(true)
+	_close_flow_trace("results_received")
 	MultiplayerV2Service.diagnostics.freeze_round_trace("results_received")
 	_result_panel.visible = true
 	_status_label.visible = false
@@ -636,9 +666,18 @@ func _frozen_member(peer_id: int) -> Dictionary:
 			return member
 	return {}
 
+static func spectator_display_name(peer_id: int, roster: Array, fallback: String = "Player") -> String:
+	for member in roster:
+		if not member is Dictionary or int(member.get("player_slot", -1)) != peer_id:
+			continue
+		var display_name := str(member.get("display_name", "")).strip_edges()
+		return display_name if not display_name.is_empty() else fallback
+	return fallback
+
 func _on_round_failed(reason: String) -> void:
 	_round_aborted = true
 	_round_started = false
+	_close_flow_trace("round_aborted")
 	_countdown_label.visible = false
 	MultiplayerV2Service.diagnostics.freeze_round_trace("round_aborted")
 	_result_panel.visible = true
@@ -665,6 +704,7 @@ func _on_membership_removed(reason: String) -> void:
 func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 	if round_id != _round_id:
 		return
+	var callback_started_usec := Time.get_ticks_usec()
 	_round_started = true
 	_world_tick = 0
 	_local_start_deadline_usec = int(MultiplayerV2Service._round_coordinator.clock.started_at_usec)
@@ -677,12 +717,22 @@ func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 		_presentation_work_counts[key] = 0
 	_last_barrel_probe.clear()
 	_close_barrel_frame_trace("round_restarted")
+	_close_flow_trace("round_restarted")
+	_flow_trace_windows = 0
+	_flow_trace_moving_target_sampled = false
+	_flow_trace_frame_index = 0
+	_flow_trace_active = false
+	_start_profile_recorded.clear()
+	if _profiling_enabled and _course_presentation.has_method("begin_start_profile"):
+		_course_presentation.call("begin_start_profile", _local_start_deadline_usec)
 	_countdown_flash_until_usec = _local_start_deadline_usec + COUNTDOWN_START_FLASH_USEC
 	_status_label.text = tr("RUN")
 	MultiplayerV2Service.diagnostics.record_event("round_timeline_started", {"round_id": round_id, "deadline_local_usec": _local_start_deadline_usec, "clock_uncertainty_usec": float(MultiplayerV2Service._round_coordinator.clock.offset_uncertainty_usec), "initial_tick": _world_tick})
 	MultiplayerV2Service.diagnostics.begin_round_trace(round_id, int(MultiplayerV2Service.session.get("local_peer_id", -1)), str(MultiplayerV2Service.session.get("role", "")), _local_start_deadline_usec, float(MultiplayerV2Service._round_coordinator.clock.offset_uncertainty_usec))
 	MultiplayerV2Service.diagnostics.record_event("presentation_timing_config", {"shared_presentation_delay_ticks": PRESENTATION_DELAY_TICKS, "moving_barrels_use_shared_presentation_time": true, "browser_raf_available": OS.has_feature("web"), "profiling_enabled": _profiling_enabled})
 	_update_start_countdown()
+	if _profiling_enabled:
+		_record_start_stage("round_started_callback", callback_started_usec, {"callback_duration_usec": Time.get_ticks_usec() - callback_started_usec, "callback_lateness_usec": maxi(callback_started_usec - _local_start_deadline_usec, 0)})
 
 func _update_spectator_camera() -> void:
 	if str(_runner.player_state.get("state", "running")) == "running" or str(_runner.player_state.get("state", "")) == "pending_barrel":
@@ -866,7 +916,7 @@ func _intervals_from_json(raw: Variant) -> Array[float]:
 func _install_browser_frame_diagnostics() -> void:
 	if not OS.has_feature("web"):
 		return
-	var script := "(function(){if(window.__gravityRunRafDiag)return;var d={intervals:[],last:null,take:function(){var canvas=document.getElementById('canvas');var r=canvas?canvas.getBoundingClientRect():{width:0,height:0};var out={intervals:d.intervals,device_pixel_ratio:window.devicePixelRatio||1,canvas_css_width:r.width,canvas_css_height:r.height};d.intervals=[];return JSON.stringify(out);}};window.__gravityRunRafDiag=d;function pulse(t){if(d.last!==null){d.intervals.push(t-d.last);if(d.intervals.length>512)d.intervals.shift();}d.last=t;window.requestAnimationFrame(pulse);}window.requestAnimationFrame(pulse);})()"
+	var script := "(function(){if(window.__gravityRunRafDiag)return;var d={intervals:[],samples:[],last:null,frameIndex:0,take:function(){var canvas=document.getElementById('canvas');var r=canvas?canvas.getBoundingClientRect():{width:0,height:0};var out={intervals:d.intervals,device_pixel_ratio:window.devicePixelRatio||1,canvas_css_width:r.width,canvas_css_height:r.height};d.intervals=[];return JSON.stringify(out);},beginTrace:function(){var canvas=document.getElementById('canvas');var r=canvas?canvas.getBoundingClientRect():{width:0,height:0};return JSON.stringify({frame_index:d.frameIndex,browser_now_ms:performance.now(),device_pixel_ratio:window.devicePixelRatio||1,canvas_css_width:r.width,canvas_css_height:r.height});},takeTrace:function(from){var canvas=document.getElementById('canvas');var r=canvas?canvas.getBoundingClientRect():{width:0,height:0};var retained=d.samples.length?d.samples[0].frame_index:d.frameIndex;var out={samples:d.samples.filter(function(s){return s.frame_index>=from;}),dropped_samples:Math.max(0,retained-from),browser_now_ms:performance.now(),device_pixel_ratio:window.devicePixelRatio||1,canvas_css_width:r.width,canvas_css_height:r.height};return JSON.stringify(out);}};window.__gravityRunRafDiag=d;function pulse(t){if(d.last!==null){d.intervals.push(t-d.last);if(d.intervals.length>512)d.intervals.shift();}d.last=t;d.samples.push({frame_index:d.frameIndex,performance_ms:t});d.frameIndex++;if(d.samples.length>2048)d.samples.shift();window.requestAnimationFrame(pulse);}window.requestAnimationFrame(pulse);})()"
 	JavaScriptBridge.eval(script)
 
 func _take_browser_frame_window() -> Dictionary:
@@ -877,6 +927,210 @@ func _take_browser_frame_window() -> Dictionary:
 		return {}
 	var parsed: Variant = JSON.parse_string(encoded)
 	return parsed if parsed is Dictionary else {}
+
+func _capture_common_course_flow_frame(delta: float) -> void:
+	var now_usec := Time.get_ticks_usec()
+	if not _flow_trace_active:
+		if _flow_trace_windows >= FLOW_TRACE_MAX_WINDOWS:
+			return
+		var visible_static := _find_visible_course_target(false)
+		var visible_moving := _find_visible_course_target(true)
+		# Always preserve the opening after start; later windows are reserved for
+		# actual visible course entities so the budget reaches obstacle flow.
+		if _flow_trace_windows > 0 and visible_static.is_empty() and visible_moving.is_empty():
+			return
+		if _flow_trace_windows >= FLOW_TRACE_MAX_WINDOWS - 1 and not _flow_trace_moving_target_sampled and visible_moving.is_empty():
+			return
+		_begin_flow_trace_window(now_usec, visible_static, visible_moving)
+	var static_valid := is_instance_valid(_flow_trace_static_target)
+	var moving_valid := is_instance_valid(_flow_trace_moving_target)
+	if _render_camera == null or _render_camera.get_instance_id() != _flow_trace_camera_instance_id:
+		_close_flow_trace("camera_changed")
+		return
+	if get_viewport().get_visible_rect().size != _flow_trace_viewport_size:
+		_close_flow_trace("viewport_changed")
+		return
+	if not static_valid and not _flow_trace_static_id.is_empty():
+		_close_flow_trace("static_target_removed")
+		return
+	if not moving_valid and not _flow_trace_moving_id.is_empty():
+		_close_flow_trace("moving_target_removed")
+		return
+	if static_valid and not _node_is_visible_in_canvas(_flow_trace_static_target):
+		_close_flow_trace("static_target_visibility_lost")
+		return
+	if moving_valid and not _node_is_visible_in_canvas(_flow_trace_moving_target):
+		_close_flow_trace("moving_target_visibility_lost")
+		return
+	if not static_valid:
+		var newly_visible := _find_visible_course_target(false)
+		if not newly_visible.is_empty():
+			_set_flow_static_target(newly_visible)
+	if not moving_valid:
+		var newly_moving := _find_visible_course_target(true)
+		if not newly_moving.is_empty():
+			_set_flow_moving_target(newly_moving)
+			_flow_trace_moving_target_sampled = true
+	var now_frame_usec := Time.get_ticks_usec()
+	var viewport := get_viewport()
+	var canvas_transform := viewport.get_canvas_transform()
+	var local_state: Dictionary = _runner.player_state
+	var local_pose: Dictionary = _local_presentation_pose if not _local_presentation_pose.is_empty() else _runner.render_state(_render_fraction)
+	var row := {"at_usec": now_frame_usec, "frame_index": _flow_trace_frame_index, "render_delta_seconds": delta, "simulation_tick": _world_tick, "presentation_tick": _last_presentation_tick, "local_pose_tick": float(_local_presentation_pose.get("tick", _runner.simulation_tick)), "world_render_fraction": _last_world_render_fraction, "physics_interpolation_fraction": _render_fraction, "phase": "spectator" if _spectator_peer_id > 0 else ("finished" if not _result.is_empty() else "running"), "local_player": {"state": str(local_state.get("state", "running")), "blocked": bool(local_state.get("blocked", false)), "simulated_speed_px_s": float(local_pose.get("velocity_x", 0.0)), "world_position": _vector_dict(Vector2(float(local_pose.get("world_x", 0.0)), float(local_pose.get("y", 0.0))))}, "camera": _camera_trace_state(canvas_transform), "static_target": _flow_target_trace(_flow_trace_static_target, _flow_trace_static_id, false), "moving_target": _flow_target_trace(_flow_trace_moving_target, _flow_trace_moving_id, true)}
+	_flow_trace_frames.append(row)
+	_flow_trace_frame_index += 1
+	if _flow_trace_frames.size() >= FLOW_TRACE_MAX_FRAMES:
+		_close_flow_trace("sample_window_complete")
+
+func _begin_flow_trace_window(now_usec: int, static_target: Dictionary, moving_target: Dictionary) -> void:
+	_flow_trace_active = true
+	_flow_trace_started_usec = now_usec
+	_flow_trace_frames.clear()
+	_flow_trace_static_target = null
+	_flow_trace_static_id = ""
+	_flow_trace_moving_target = null
+	_flow_trace_moving_id = ""
+	if not static_target.is_empty():
+		_set_flow_static_target(static_target)
+	if not moving_target.is_empty():
+		_set_flow_moving_target(moving_target)
+		_flow_trace_moving_target_sampled = true
+	var viewport := get_viewport()
+	_flow_trace_view_metrics = {"viewport_size": _vector_dict(viewport.get_visible_rect().size), "window_size": _vector_dict(DisplayServer.window_get_size()), "device_pixel_ratio": 1.0, "canvas_css_size": _vector_dict(viewport.get_visible_rect().size), "raf_clock": "browser performance.now timestamps are mapped to Godot monotonic usec using a before/after bridge bracket at window close"}
+	_flow_trace_camera_instance_id = _render_camera.get_instance_id() if is_instance_valid(_render_camera) else 0
+	_flow_trace_viewport_size = viewport.get_visible_rect().size
+	if OS.has_feature("web"):
+		var encoded := str(JavaScriptBridge.eval("window.__gravityRunRafDiag ? window.__gravityRunRafDiag.beginTrace() : ''"))
+		var metrics: Variant = JSON.parse_string(encoded) if not encoded.is_empty() else {}
+		if metrics is Dictionary:
+			_flow_trace_browser_start_index = int(metrics.get("frame_index", 0))
+			for key in ["device_pixel_ratio", "canvas_css_width", "canvas_css_height"]:
+				if metrics.has(key): _flow_trace_view_metrics[key] = metrics[key]
+	_flow_trace_windows += 1
+
+func _set_flow_static_target(target: Dictionary) -> void:
+	_flow_trace_static_target = target.get("node") as Node2D
+	_flow_trace_static_id = str(target.get("id", ""))
+
+func _set_flow_moving_target(target: Dictionary) -> void:
+	_flow_trace_moving_target = target.get("node") as Node2D
+	_flow_trace_moving_id = str(target.get("id", ""))
+
+func _find_visible_course_target(moving: bool) -> Dictionary:
+	if _course_presentation == null:
+		return {}
+	var local_x := float(_local_presentation_pose.get("world_x", _runner.player_state.get("world_x", 0.0)))
+	var selected: Dictionary = {}
+	var selected_distance := INF
+	for node_value in _course_presentation.event_nodes.values():
+		if not is_instance_valid(node_value) or not node_value is Node2D:
+			continue
+		var node := node_value as Node2D
+		if not node.has_meta("presentation_target") or not bool(node.get_meta("presentation_target_obstacle", false)) or bool(node.get_meta("presentation_target_moving", false)) != moving:
+			continue
+		if not _node_is_visible_in_canvas(node):
+			continue
+		var event_id := str(node.get_meta("presentation_target_id", ""))
+		var kind := str(node.get_meta("presentation_target_kind", ""))
+		if event_id.is_empty():
+			continue
+		var distance := absf(node.global_position.x - local_x)
+		if distance < selected_distance:
+			selected = {"id": event_id, "kind": kind, "node": node}
+			selected_distance = distance
+	return selected
+
+func _node_is_visible_in_canvas(node: Node2D) -> bool:
+	if not is_instance_valid(node) or not node.is_visible_in_tree():
+		return false
+	var canvas_position := node.get_global_transform_with_canvas().origin
+	var rect := get_viewport().get_visible_rect()
+	return canvas_position.x >= rect.position.x - 64.0 and canvas_position.x <= rect.end.x + 64.0 and canvas_position.y >= rect.position.y - 96.0 and canvas_position.y <= rect.end.y + 96.0
+
+func _camera_trace_state(canvas_transform: Transform2D) -> Dictionary:
+	return {"target_position": _vector_dict(Vector2(_camera_left + CAMERA_PLAYER_X, 0.0)), "applied_position": _vector_dict(_render_camera.global_position), "zoom": _vector_dict(_render_camera.zoom), "viewport_canvas_transform": _transform_dict(canvas_transform), "viewport_canvas_size": _vector_dict(get_viewport().get_visible_rect().size), "canvas_metrics": _flow_trace_view_metrics.duplicate(false)}
+
+func _flow_target_trace(node: Node2D, stable_id: String, moving: bool) -> Dictionary:
+	if not is_instance_valid(node):
+		return {"id": stable_id, "valid": false}
+	var result := {"id": stable_id, "kind": str(node.get_meta("presentation_target_kind", "unknown")), "visible": _node_is_visible_in_canvas(node), "global_position": _vector_dict(node.global_position), "canvas_position": _vector_dict(node.get_global_transform_with_canvas().origin), "rotation": node.global_rotation, "moving": moving}
+	if moving and str(node.get_meta("presentation_target_kind", "")) == "barrel" and _world != null:
+		var probe: Dictionary = _world.barrel_presentation_probe(stable_id, _last_presentation_tick, _last_world_render_fraction)
+		result["previous"] = probe.get("previous", {})
+		result["current"] = probe.get("current", {})
+		result["displayed"] = probe.get("displayed", {})
+		for barrel in _world.barrels:
+			if str(barrel.get("entity_id", "")) == stable_id:
+				result["lifecycle"] = {"spawned": bool(barrel.get("spawned", false)), "falling": bool(barrel.get("falling", false)), "destroyed": bool(barrel.get("destroyed", false)), "simulation_tick": _world.tick}
+				break
+	return result
+
+func _close_flow_trace(reason: String) -> void:
+	if not _flow_trace_active:
+		return
+	var ended_usec := Time.get_ticks_usec()
+	var browser_trace := _take_browser_trace_window() if OS.has_feature("web") else {}
+	var browser_samples: Array = browser_trace.get("samples", []) if browser_trace is Dictionary else []
+	var bridge_before := int(browser_trace.get("bridge_before_usec", ended_usec)) if browser_trace is Dictionary else ended_usec
+	var bridge_after := int(browser_trace.get("bridge_after_usec", ended_usec)) if browser_trace is Dictionary else ended_usec
+	var browser_now_usec := float(browser_trace.get("browser_now_ms", 0.0)) * 1000.0 if browser_trace is Dictionary else 0.0
+	var clock_offset_usec := float(bridge_before + bridge_after) * 0.5 - browser_now_usec if browser_trace is Dictionary else 0.0
+	for sample in browser_samples:
+		if sample is Dictionary:
+			sample["godot_monotonic_usec_estimate"] = int(float(sample.get("performance_ms", 0.0)) * 1000.0 + clock_offset_usec)
+	var trace_close_reason := reason
+	if browser_trace is Dictionary:
+		for pair in [["device_pixel_ratio", "device_pixel_ratio"], ["canvas_css_width", "canvas_css_width"], ["canvas_css_height", "canvas_css_height"]]:
+			var metric_name: String = pair[0]
+			var trace_name: String = pair[1]
+			var ending_value: float = float(browser_trace.get(metric_name, _flow_trace_view_metrics.get(trace_name, 0.0)))
+			if not is_equal_approx(ending_value, float(_flow_trace_view_metrics.get(trace_name, ending_value))):
+				trace_close_reason = "canvas_scale_changed"
+	MultiplayerV2Service.diagnostics.record_event("common_course_flow_trace", {"window_index": _flow_trace_windows, "started_at_usec": _flow_trace_started_usec, "ended_at_usec": ended_usec, "duration_usec": maxi(ended_usec - _flow_trace_started_usec, 0), "close_reason": trace_close_reason, "static_target_id": _flow_trace_static_id, "moving_target_id": _flow_trace_moving_id, "sample_count": _flow_trace_frames.size(), "dropped_samples": 0, "frame_index_start": _flow_trace_frame_index - _flow_trace_frames.size(), "frame_index_end": _flow_trace_frame_index - 1, "view_metrics": _flow_trace_view_metrics, "browser_raf": {"start_frame_index": _flow_trace_browser_start_index, "sample_count": browser_samples.size(), "dropped_samples": int(browser_trace.get("dropped_samples", 0)) if browser_trace is Dictionary else 0, "clock_mapping_offset_usec": clock_offset_usec, "bridge_uncertainty_usec": maxi(bridge_after - bridge_before, 0), "samples": browser_samples}, "frames": _flow_trace_frames})
+	_flow_trace_active = false
+	_flow_trace_started_usec = -1
+	_flow_trace_frames.clear()
+	_flow_trace_static_target = null
+	_flow_trace_static_id = ""
+	_flow_trace_moving_target = null
+	_flow_trace_moving_id = ""
+	_flow_trace_view_metrics.clear()
+	_flow_trace_camera_instance_id = 0
+	_flow_trace_viewport_size = Vector2.ZERO
+
+func _take_browser_trace_window() -> Dictionary:
+	if not OS.has_feature("web"):
+		return {}
+	var before_usec := Time.get_ticks_usec()
+	var encoded := str(JavaScriptBridge.eval("window.__gravityRunRafDiag ? window.__gravityRunRafDiag.takeTrace(%d) : ''" % _flow_trace_browser_start_index))
+	var after_usec := Time.get_ticks_usec()
+	var parsed: Variant = JSON.parse_string(encoded) if not encoded.is_empty() else {}
+	if parsed is Dictionary:
+		parsed["bridge_before_usec"] = before_usec
+		parsed["bridge_after_usec"] = after_usec
+		return parsed
+	return {}
+
+static func _vector_dict(value: Vector2) -> Dictionary:
+	return {"x": value.x, "y": value.y}
+
+static func _transform_dict(value: Transform2D) -> Dictionary:
+	return {"x": _vector_dict(value.x), "y": _vector_dict(value.y), "origin": _vector_dict(value.origin)}
+
+func _record_start_stage(name: String, at_usec: int, details: Dictionary = {}) -> void:
+	if _start_profile_recorded.has(name):
+		return
+	_start_profile_recorded[name] = at_usec
+	var entry := {"stage": name, "at_usec": at_usec, "relative_to_deadline_usec": at_usec - _local_start_deadline_usec, "simulation_tick": _world_tick}
+	entry.merge(details, true)
+	MultiplayerV2Service.diagnostics.record_event("start_stage_profile", entry)
+
+func _capture_first_course_draw_profile() -> void:
+	if _course_presentation == null or not _course_presentation.has_method("take_start_draw_profile"):
+		return
+	var sample: Dictionary = _course_presentation.call("take_start_draw_profile")
+	if not sample.is_empty() and not _start_profile_recorded.has("first_course_draw"):
+		_record_start_stage("first_course_draw", int(sample.get("at_usec", Time.get_ticks_usec())), sample)
 
 func _diagnostic_obstacle_transform() -> Dictionary:
 	if _manifest == null or _course_presentation == null:
@@ -1011,7 +1265,11 @@ func _update_hud() -> void:
 	if state_name == "pending_barrel":
 		_status_label.text = tr("Waiting for shared barrel decision…")
 	elif state_name in ["dead", "finished"]:
-		_status_label.text = tr("Spectating peer %d") % _spectator_peer_id if _spectator_peer_id > 0 else tr("Waiting for host result…")
+		if _spectator_peer_id > 0:
+			var display_name := spectator_display_name(_spectator_peer_id, _frozen_roster, tr("Player"))
+			_status_label.text = tr("Watching %s") % display_name
+		else:
+			_status_label.text = tr("Waiting for host result…")
 	else:
 		_status_label.text = ""
 
@@ -1075,6 +1333,7 @@ func _player_render_pose(member: Dictionary) -> Dictionary:
 	return {"position": Vector2(world_x, y), "gravity": gravity, "locomotion": locomotion}
 
 func _sync_player_views() -> void:
+	var started_usec := Time.get_ticks_usec() if _profiling_enabled and _round_started else 0
 	for member in _frozen_roster:
 		var peer_id := int(member.get("player_slot", 1))
 		var runner_value: Variant = _player_views.get(peer_id)
@@ -1094,6 +1353,8 @@ func _sync_player_views() -> void:
 			sprite.stop()
 		elif not sprite.is_playing():
 			sprite.play("run")
+	if _profiling_enabled and _round_started and not _start_profile_recorded.has("first_figure_presentation"):
+		_record_start_stage("first_figure_presentation", Time.get_ticks_usec(), {"duration_usec": Time.get_ticks_usec() - started_usec, "player_count": _player_views.size()})
 
 func _unhandled_input(event: InputEvent) -> void:
 	if _debug_open:
