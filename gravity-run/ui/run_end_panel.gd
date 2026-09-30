@@ -2,6 +2,7 @@ extends CanvasLayer
 
 const COPY_ICON_SCRIPT := preload("res://ui/copy_icon.gd")
 
+var _diagnostic_save_button: Button
 var _distance_m := 0
 var _coins := 0
 var _name_edit: LineEdit
@@ -45,6 +46,7 @@ func _ready() -> void:
 	AchievementService.run_unlocks_changed.connect(_on_run_achievements_changed)
 
 func show_result(raw_distance: float, coins: int, challenge_code: String = "", is_challenge_run: bool = false, run_id: String = "") -> void:
+	_diagnostic_save_button.visible = bool(get_parent().get("render_diagnostics_enabled"))
 	_shown_run_id = run_id
 	_distance_m = int(raw_distance / 10.0)
 	_coins = coins
@@ -274,6 +276,11 @@ func _build_ui() -> void:
 	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_status_label.add_theme_color_override("font_color", Color("b8c7dc"))
 	layout.add_child(_status_label)
+
+	_diagnostic_save_button = _make_button(tr("Save diagnostics"))
+	_diagnostic_save_button.visible = false
+	_diagnostic_save_button.pressed.connect(func() -> void: _status_label.text = str(get_parent().call("save_render_diagnostics")))
+	layout.add_child(_diagnostic_save_button)
 
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 10)

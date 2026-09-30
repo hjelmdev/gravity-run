@@ -1120,3 +1120,69 @@ msgstr "SPRING!"
 
 msgid "You were eliminated"
 msgstr "Du åkte ut"
+
+msgid "Round complete"
+msgstr "Rundan är slut"
+
+msgid "Connected through host"
+msgstr "Ansluten via hosten"
+
+msgid "Close menu"
+msgstr "Stäng menyn"
+
+msgid "Opening lobby…"
+msgstr "Öppnar lobbyn…"
+
+msgid "Menu"
+msgstr "Meny"
+
+msgid "Position sample send rate"
+msgstr "Sändfrekvens för spelarposition"
+
+msgid "Save V2 diagnostics"
+msgstr "Spara V2-diagnostik"
+
+msgid "Diagnostics saved: %s"
+msgstr "Diagnostik sparad: %s"
+
+msgid "Smoothness diagnostics"
+msgstr "Diagnostik för bildflyt"
+
+msgid "Record smoothness"
+msgstr "Spela in bildflyt"
+
+msgid "Enable recording, resume and play, then return here to save."
+msgstr "Aktivera inspelning och fortsätt spela. Återvänd hit för att spara."
+
+msgid "Save diagnostics"
+msgstr "Spara diagnostik"
+
+msgid "Eliminated"
+msgstr "Utslagen"
+
+msgid "Connection lost"
+msgstr "Anslutningen förlorades"
+
+msgid "Finished"
+msgstr "I mål"
+
+msgid "Spikes"
+msgstr "Spikar"
+
+msgid "Block"
+msgstr "Block"
+
+msgid "Barrel"
+msgstr "Tunna"
+
+msgid "Fell off the course"
+msgstr "Föll av banan"
+
+msgid "Player"
+msgstr "Spelare"
+
+msgid "RUN"
+msgstr "SPRING"
+
+msgid "Host session confirmed."
+msgstr "Anslutningen till värden är bekräftad."

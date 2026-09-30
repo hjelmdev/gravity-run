@@ -1,5 +1,7 @@
 extends Node2D
 
+const ResultsView := preload("res://ui/race_results_view.gd")
+
 const LocalRunnerScript := preload("res://systems/multiplayer_v2/v2_local_runner.gd")
 const WorldSimulationScript := preload("res://systems/multiplayer_v2/v2_world_simulation.gd")
 const RemoteTrackScript := preload("res://systems/multiplayer_v2/v2_remote_track.gd")
@@ -31,7 +33,6 @@ var _remote_tracks: Dictionary = {}
 var _remote_terminal: Dictionary = {}
 var _remote_terminal_poses: Dictionary = {}
 var _remote_locomotion: Dictionary = {}
-var _slot_by_peer: Dictionary = {}
 var _player_views: Dictionary = {}
 var _course_root: Node2D
 var _course_presentation: Node2D
@@ -40,15 +41,25 @@ var _spectator_peer_id := 0
 var _last_spectator_event_peer_id := -1
 var _result: Dictionary = {}
 var _status_label: Label
-var _distance_label: Label
 var _result_panel: PanelContainer
 var _result_text: RichTextLabel
+var _results_view: ScrollContainer
+var _return_lobby_button: Button
+var _debug_panel: PanelContainer
+var _debug_toggle: Button
+var _export_confirmation: Label
+var _frozen_roster: Array[Dictionary] = []
+var _debug_open := false
+var _lobby_navigation_pending := false
+var _export_notice_generation := 0
 var _touch_start := Vector2.ZERO
 var _touch_index := -1
 
 func _ready() -> void:
 	set_process_unhandled_input(true)
 	MultiplayerV2Service.room_changed.connect(_on_room_changed_for_abort)
+	MultiplayerV2Service.lobby_returned.connect(_navigate_lobby)
+	MultiplayerV2Service.lobby_request_finished.connect(_on_lobby_request_finished)
 	_manifest = MultiplayerV2Service.current_manifest
 	_round_id = str(MultiplayerV2Service.session.get("round_id", ""))
 	if _manifest == null:
@@ -101,31 +112,57 @@ func _build_overlay() -> void:
 	_status_label.add_theme_font_size_override("font_size", 17)
 	status_style(_status_label)
 	overlay.add_child(_status_label)
-	_distance_label = Label.new()
-	_distance_label.position = Vector2(20.0, 46.0)
-	_distance_label.add_theme_font_size_override("font_size", 14)
-	_distance_label.add_theme_color_override("font_color", Color("c5d3e5"))
-	overlay.add_child(_distance_label)
-	var tools := HBoxContainer.new()
-	tools.position = Vector2(20.0, 70.0)
-	overlay.add_child(tools)
+	_debug_toggle = Button.new()
+	_debug_toggle.text = tr("Menu")
+	_debug_toggle.position = Vector2(20.0, 58.0)
+	_debug_toggle.custom_minimum_size = Vector2(112.0, 42.0)
+	_debug_toggle.pressed.connect(_toggle_debug_panel)
+	overlay.add_child(_debug_toggle)
+	_debug_panel = PanelContainer.new()
+	_debug_panel.position = Vector2(20.0, 108.0)
+	_debug_panel.custom_minimum_size = Vector2(300.0, 110.0)
+	_debug_panel.visible = false
+	var debug_style := StyleBoxFlat.new()
+	debug_style.bg_color = Color("18243a")
+	debug_style.border_color = Color("42d6c5")
+	debug_style.set_border_width_all(1)
+	debug_style.set_corner_radius_all(8)
+	debug_style.content_margin_left = 12
+	debug_style.content_margin_right = 12
+	debug_style.content_margin_top = 10
+	debug_style.content_margin_bottom = 10
+	_debug_panel.add_theme_stylebox_override("panel", debug_style)
+	overlay.add_child(_debug_panel)
+	var tools := VBoxContainer.new()
+	_debug_panel.add_child(tools)
+	var rate_row := HBoxContainer.new()
+	tools.add_child(rate_row)
 	var rate_label := Label.new()
-	rate_label.text = tr("Position rate")
-	tools.add_child(rate_label)
+	rate_label.text = tr("Position sample send rate")
+	rate_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rate_row.add_child(rate_label)
 	var rate := OptionButton.new()
 	rate.add_item("30 Hz", 30)
 	rate.add_item("60 Hz", 60)
 	rate.select(0 if MultiplayerV2Service.get_snapshot_rate() == 30 else 1)
 	rate.item_selected.connect(func(index: int) -> void: MultiplayerV2Service.set_snapshot_rate(rate.get_item_id(index)))
-	tools.add_child(rate)
+	rate_row.add_child(rate)
 	var export_button := Button.new()
 	export_button.text = tr("Save V2 diagnostics")
 	export_button.pressed.connect(_save_diagnostics)
 	tools.add_child(export_button)
+	_export_confirmation = Label.new()
+	_export_confirmation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_export_confirmation.add_theme_font_size_override("font_size", 12)
+	_export_confirmation.add_theme_color_override("font_color", Color("42d6c5"))
+	_export_confirmation.visible = false
+	tools.add_child(_export_confirmation)
 	_result_panel = PanelContainer.new()
 	_result_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_result_panel.position = Vector2(-225.0, -160.0)
-	_result_panel.size = Vector2(450.0, 320.0)
+	_result_panel.anchor_left = 0.15
+	_result_panel.anchor_right = 0.85
+	_result_panel.anchor_top = 0.08
+	_result_panel.anchor_bottom = 0.92
 	_result_panel.visible = false
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color("18243a")
@@ -143,23 +180,31 @@ func _build_overlay() -> void:
 	_result_text = RichTextLabel.new()
 	_result_text.fit_content = true
 	_result_text.scroll_active = false
-	_result_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_result_text.custom_minimum_size.y = 30
 	result_layout.add_child(_result_text)
+	_results_view = ResultsView.new()
+	result_layout.add_child(_results_view)
+	_results_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var actions := HBoxContainer.new()
 	result_layout.add_child(actions)
 	var rematch := Button.new()
-	rematch.text = tr("Return to V2 lobby")
+	_return_lobby_button = rematch
+	rematch.text = tr("Return to lobby")
+	rematch.custom_minimum_size.y = 42
 	rematch.pressed.connect(_return_to_lobby)
 	actions.add_child(rematch)
 	var back := Button.new()
-	back.text = tr("Leave V2")
+	back.text = tr("Leave race")
 	back.pressed.connect(_leave_v2)
 	actions.add_child(back)
+	# Keep diagnostic controls reachable when the result panel is open.
+	overlay.move_child(_debug_panel, overlay.get_child_count() - 1)
+	overlay.move_child(_debug_toggle, overlay.get_child_count() - 1)
 
 func _build_peer_slots() -> void:
 	for member in MultiplayerV2Service.get_active_round_roster():
+		_frozen_roster.append(member.duplicate(true))
 		var peer_id := int(member.get("player_slot", 1))
-		_slot_by_peer[peer_id] = peer_id - 1
 		var runner := PlayerScene.instantiate() as Node2D
 		runner.name = "Runner_%d" % peer_id
 		_course_root.add_child(runner)
@@ -194,8 +239,9 @@ func _process(delta: float) -> void:
 	if _manifest == null or _runner == null or _course_presentation == null:
 		return
 	_render_fraction = Engine.get_physics_interpolation_fraction()
-	for track in _remote_tracks.values():
-		track.advance(delta)
+	for peer_id in _remote_tracks:
+		if str(_remote_terminal.get(peer_id, "running")) == "running":
+			_remote_tracks[peer_id].advance(delta)
 	_previous_camera_left = _camera_left
 	_update_spectator_camera()
 	_render_camera.configure(get_viewport_rect().size, CAMERA_PLAYER_X)
@@ -205,7 +251,8 @@ func _process(delta: float) -> void:
 	if _round_started:
 		_update_hud()
 	_sync_player_views()
-	MultiplayerV2Service.diagnostics.record_frame({"tick": _runner.simulation_tick, "world_tick": _world.tick, "x": float(_runner.player_state.get("world_x", 0.0)), "y": float(_runner.player_state.get("y", 0.0)), "camera_left": _camera_left, "camera_delta_x": _camera_left - _previous_camera_left, "render_fraction": _render_fraction, "render_delta_ms": delta * 1000.0, "fps": Engine.get_frames_per_second(), "window_focused": DisplayServer.window_is_focused()})
+	if _result.is_empty():
+		MultiplayerV2Service.diagnostics.record_frame({"phase": "spectator" if _spectator_peer_id > 0 else "running", "tick": _runner.simulation_tick, "world_tick": _world.tick, "x": float(_runner.player_state.get("world_x", 0.0)), "y": float(_runner.player_state.get("y", 0.0)), "camera_left": _camera_left, "camera_delta_x": _camera_left - _previous_camera_left, "render_fraction": _render_fraction, "render_delta_ms": delta * 1000.0, "fps": Engine.get_frames_per_second(), "window_focused": DisplayServer.window_is_focused()})
 	queue_redraw()
 
 func _step_local_round() -> void:
@@ -220,6 +267,7 @@ func _step_local_round() -> void:
 	if str(_runner.player_state.get("state", "")) != "running":
 		return
 	var state: Dictionary = _runner.player_state
+	var previous_state: Dictionary = state.duplicate(true)
 	var candidate_x := minf(float(state.get("world_x", 0.0)) + Motion.distance_for_delta(FIXED_DELTA, _runner.run_speed_multiplier), float(_manifest.finish_x))
 	var candidate := state.duplicate(true)
 	candidate["world_x"] = candidate_x
@@ -236,26 +284,34 @@ func _step_local_round() -> void:
 	var sequence_before := int(_runner.input_sequence)
 	var flip := _pending_flip_direction
 	_pending_flip_direction = 0
-	var sample: Dictionary = _runner.step(flip, float(floor_info.y), float(ceiling_info.y), bool(floor_info.supported), bool(ceiling_info.supported), false, target_x)
 	_runner.set_blocked(blocked)
+	var sample: Dictionary = _runner.step(flip, float(floor_info.y), float(ceiling_info.y), bool(floor_info.supported), bool(ceiling_info.supported), false, target_x)
 	if int(_runner.input_sequence) > sequence_before:
 		var audit := {"round_id": _round_id, "owner_peer_id": int(MultiplayerV2Service.session.get("local_peer_id", 1)), "input_seq": _runner.input_sequence, "simulation_tick": _runner.simulation_tick, "kind": "gravity_flip", "requested_direction": flip, "accepted": int(_runner.player_state.get("gravity_direction", gravity_before)) != gravity_before, "gravity_direction": int(_runner.player_state.get("gravity_direction", gravity_before))}
 		MultiplayerV2Service.report_input_audit(audit)
+	var proposed_state: Dictionary = _runner.player_state.duplicate(true)
+	var swept: Dictionary = _world.first_static_terminal_contact(previous_state, proposed_state)
 	contact = _world.player_contact(_runner.player_state)
+	if not swept.is_empty():
+		contact = swept
+		_runner.player_state.world_x = float(swept.world_x)
+		_runner.player_state.y = float(swept.y)
 	if str(contact.get("kind", "")) == "shared_interaction":
 		_request_shared_barrel(contact)
 		return
 	if str(contact.get("kind", "")) == "terminal":
+		MultiplayerV2Service.diagnostics.record_event("local_terminal_contact", {"tick": _runner.simulation_tick, "previous_pose": previous_state, "proposed_pose": proposed_state, "terminal_pose": _runner.player_state.duplicate(true), "contact": contact, "speed": Motion.speed_for_multiplier(_runner.run_speed_multiplier)})
+		MultiplayerV2Service.diagnostics.preserve_terminal_frames()
 		_runner.stop("dead")
-		MultiplayerV2Service.submit_local_terminal("dead", str(contact.get("reason", "hazard")), _runner.simulation_tick, float(_runner.player_state.world_x), float(_runner.player_state.y))
+		MultiplayerV2Service.submit_local_terminal("dead", str(contact.get("reason", "hazard")), _runner.simulation_tick, float(_runner.player_state.world_x), float(_runner.player_state.y), int(_runner.player_state.gravity_direction))
 		return
 	if float(_runner.player_state.get("y", 0.0)) < -64.0 or float(_runner.player_state.get("y", 0.0)) > float(_manifest.world_height) + 64.0:
 		_runner.stop("dead")
-		MultiplayerV2Service.submit_local_terminal("dead", "out_of_bounds", _runner.simulation_tick, float(_runner.player_state.world_x), float(_runner.player_state.y))
+		MultiplayerV2Service.submit_local_terminal("dead", "out_of_bounds", _runner.simulation_tick, float(_runner.player_state.world_x), float(_runner.player_state.y), int(_runner.player_state.gravity_direction))
 		return
 	if float(_runner.player_state.world_x) >= float(_manifest.finish_x):
 		_runner.stop("finished")
-		MultiplayerV2Service.submit_local_terminal("finished", "finish_line", _runner.simulation_tick, float(_runner.player_state.world_x), float(_runner.player_state.y))
+		MultiplayerV2Service.submit_local_terminal("finished", "finish_line", _runner.simulation_tick, float(_runner.player_state.world_x), float(_runner.player_state.y), int(_runner.player_state.gravity_direction))
 		return
 	MultiplayerV2Service.send_sample(sample)
 
@@ -321,12 +377,17 @@ func _on_interaction_resolved(request_id: String, accepted: bool, reason: String
 func _on_results_received(result: Dictionary) -> void:
 	_result = result.duplicate(true)
 	_result_panel.visible = true
+	_status_label.visible = false
 	_result_text.clear()
-	_result_text.append_text("[center][b]V2 round complete[/b][/center]\n\n")
-	for row in result.get("placements", []):
-		var state_name := tr("finished") if str(row.get("state", "")) == "finished" else tr("eliminated")
-		_result_text.append_text("#%d  Peer %d — %s (%s)\n" % [result.get("placements", []).find(row) + 1, int(row.get("owner_peer_id", -1)), state_name, str(row.get("reason", ""))])
+	_result_text.append_text("[center][b]%s[/b][/center]" % tr("Round complete"))
+	_results_view.show_rows(result.get("placements", []))
 	_status_label.text = tr("The host confirmed the result.")
+
+func _frozen_member(peer_id: int) -> Dictionary:
+	for member in _frozen_roster:
+		if int(member.get("player_slot", -1)) == peer_id:
+			return member
+	return {}
 
 func _on_round_failed(reason: String) -> void:
 	_round_aborted = true
@@ -337,10 +398,9 @@ func _on_round_failed(reason: String) -> void:
 	_on_room_changed_for_abort(MultiplayerV2Service.room_state)
 
 func _on_room_changed_for_abort(room: Dictionary) -> void:
-	if not _round_aborted or str(room.get("phase", "")) != "OPEN":
+	if (not _round_aborted and _result.is_empty()) or str(room.get("phase", "")) != "OPEN":
 		return
-	AppNavigation.request_multiplayer_v2_lobby()
-	get_tree().change_scene_to_file("res://ui/main_menu.tscn")
+	_navigate_lobby()
 
 func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 	if round_id != _round_id:
@@ -354,12 +414,12 @@ func _update_spectator_camera() -> void:
 	if str(_runner.player_state.get("state", "running")) == "running" or str(_runner.player_state.get("state", "")) == "pending_barrel":
 		_spectator_peer_id = 0
 		var local_peer := int(MultiplayerV2Service.session.get("local_peer_id", 1))
-		_camera_left = maxf(float(_runner.render_state(_render_fraction).get("world_x", 0.0)) + float(_slot_by_peer.get(local_peer, 0)) * 18.0 - CAMERA_PLAYER_X, 0.0)
+		_camera_left = maxf(float(_runner.render_state(_render_fraction).get("world_x", 0.0)) - CAMERA_PLAYER_X, 0.0)
 		return
 	if _spectator_peer_id != 0 and str(_remote_terminal.get(_spectator_peer_id, "running")) == "running":
 		var current := _remote_track_sample(_spectator_peer_id)
 		if bool(current.get("valid", false)) and not bool(current.get("stale", true)):
-			_camera_left = maxf(float(current.get("world_x", 0.0)) + float(_slot_by_peer.get(_spectator_peer_id, 0)) * 18.0 - CAMERA_PLAYER_X, 0.0)
+			_camera_left = maxf(float(current.get("world_x", 0.0)) - CAMERA_PLAYER_X, 0.0)
 			return
 	var candidates: Array[Dictionary] = []
 	for peer_id in _remote_tracks.keys():
@@ -377,7 +437,7 @@ func _update_spectator_camera() -> void:
 	_spectator_peer_id = int(candidates[0].peer_id) if not candidates.is_empty() else 0
 	if _spectator_peer_id > 0:
 		var selected := _remote_track_sample(_spectator_peer_id)
-		_camera_left = maxf(float(selected.get("world_x", 0.0)) + float(_slot_by_peer.get(_spectator_peer_id, 0)) * 18.0 - CAMERA_PLAYER_X, 0.0)
+		_camera_left = maxf(float(selected.get("world_x", 0.0)) - CAMERA_PLAYER_X, 0.0)
 	if _spectator_peer_id != _last_spectator_event_peer_id:
 		MultiplayerV2Service.diagnostics.record_event("spectator_target", {"peer_id": _spectator_peer_id, "camera_left": _camera_left})
 		_last_spectator_event_peer_id = _spectator_peer_id
@@ -386,7 +446,8 @@ func _remote_track_sample(peer_id: int) -> Dictionary:
 	if not _remote_tracks.has(peer_id):
 		return {}
 	var result: Dictionary = _remote_tracks[peer_id].sample_at_render_time()
-	MultiplayerV2Service.diagnostics.metrics["remote_track_%d" % peer_id] = {"valid": bool(result.get("valid", false)), "stale": bool(result.get("stale", true)), "sequence": int(result.get("sample_seq", -1)), "render_tick": float(result.get("render_tick", -1.0)), "sample_age_ticks": float(result.get("render_tick", 0.0)) - float(result.get("simulation_tick", 0.0)), "world_x": float(result.get("world_x", 0.0))}
+	var terminal := str(_remote_terminal.get(peer_id, "running")) != "running"
+	MultiplayerV2Service.diagnostics.metrics["remote_track_%d" % peer_id] = {"valid": bool(result.get("valid", false)), "terminal": terminal, "stale": false if terminal else bool(result.get("stale", true)), "sequence": int(result.get("sample_seq", -1)), "render_tick": float(result.get("render_tick", -1.0)), "sample_age_ticks": 0.0 if terminal else float(result.get("render_tick", 0.0)) - float(result.get("simulation_tick", 0.0)), "world_x": float(result.get("world_x", 0.0))}
 	return result
 
 func _update_hud() -> void:
@@ -400,8 +461,6 @@ func _update_hud() -> void:
 		_status_label.text = tr("Spectating peer %d") % _spectator_peer_id if _spectator_peer_id > 0 else tr("Waiting for host result…")
 	else:
 		_status_label.text = tr("V2 · tick %d · %s") % [_runner.simulation_tick, tr("Host") if MultiplayerV2Service.is_room_owner() else tr("Guest")]
-	var distance := maxi(0, int(float(_runner.player_state.get("world_x", 0.0)) - float(_manifest.start_x)))
-	_distance_label.text = tr("Distance: %d / %d") % [distance, int(_manifest.course_length_px)]
 
 func _draw() -> void:
 	if _manifest == null:
@@ -414,15 +473,20 @@ func _draw() -> void:
 	_draw_players()
 
 func _draw_players() -> void:
-	for member in MultiplayerV2Service.get_active_round_roster():
+	for member in _frozen_roster:
 		var peer_id := int(member.get("player_slot", 1))
 		var pose := _player_render_pose(member)
 		var screen_position: Vector2 = pose.position
-		draw_string(ThemeDB.fallback_font, screen_position + Vector2(-16.0, -Motion.SIZE.y * 0.5 - 8.0), str(member.get("display_name", "Runner")), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("edf3ff"))
+		var label_text := str(member.get("display_name", "Runner"))
+		var font := ThemeDB.fallback_font
+		var font_size := 10
+		var text_width := font.get_string_size(label_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+		var font_height := font.get_height(font_size)
+		var baseline_y := screen_position.y - Motion.SIZE.y * 0.5 - 7.0 if int(pose.gravity) > 0 else screen_position.y + Motion.SIZE.y * 0.5 + font_height + 7.0
+		draw_string(font, Vector2(screen_position.x - text_width * 0.5, baseline_y), label_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color("edf3ff"))
 
 func _player_render_pose(member: Dictionary) -> Dictionary:
 	var peer_id := int(member.get("player_slot", 1))
-	var slot := int(_slot_by_peer.get(peer_id, 0))
 	var world_x := float(_manifest.start_x)
 	var y := float(_manifest.initial_floor_y) - Motion.SIZE.y * 0.5
 	var gravity := 1
@@ -445,11 +509,11 @@ func _player_render_pose(member: Dictionary) -> Dictionary:
 			var terminal: Dictionary = _remote_terminal_poses.get(peer_id, {})
 			world_x = float(terminal.get("world_x", world_x))
 			y = float(terminal.get("y", y))
-	var offset := float(slot) * 18.0
-	return {"position": Vector2(world_x + offset, y), "gravity": gravity, "locomotion": locomotion}
+			gravity = int(terminal.get("gravity_direction", gravity))
+	return {"position": Vector2(world_x, y), "gravity": gravity, "locomotion": locomotion}
 
 func _sync_player_views() -> void:
-	for member in MultiplayerV2Service.get_active_round_roster():
+	for member in _frozen_roster:
 		var peer_id := int(member.get("player_slot", 1))
 		var runner_value: Variant = _player_views.get(peer_id)
 		if not is_instance_valid(runner_value) or not runner_value is Node2D:
@@ -470,6 +534,8 @@ func _sync_player_views() -> void:
 			sprite.play("run")
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _debug_open:
+		return
 	if not _round_started or str(_runner.player_state.get("state", "")) not in ["running", "pending_barrel"]:
 		return
 	if event is InputEventScreenTouch:
@@ -498,14 +564,45 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _return_to_lobby() -> void:
 	if MultiplayerV2Service.is_room_owner():
+		_return_lobby_button.disabled = true
+		_return_lobby_button.text = tr("Opening lobby…")
 		MultiplayerV2Service.return_to_lobby()
+	else:
+		_navigate_lobby()
+
+func _navigate_lobby() -> void:
+	if _lobby_navigation_pending:
+		return
+	_lobby_navigation_pending = true
 	AppNavigation.request_multiplayer_v2_lobby()
 	get_tree().change_scene_to_file("res://ui/main_menu.tscn")
+
+func _on_lobby_request_finished(action: String, success: bool, message: String) -> void:
+	if action == "return_to_lobby" and not success:
+		_return_lobby_button.disabled = false
+		_return_lobby_button.text = tr("Return to lobby")
+		_result_text.clear()
+		_result_text.add_text(message)
 
 func _save_diagnostics() -> void:
 	var report := MultiplayerV2Service.diagnostics.export_report()
 	report["current_state"] = MultiplayerV2Service.current_diagnostic_state()
-	_status_label.text = DiagnosticsExport.save_report(report, DiagnosticsExport.make_filename(report, "match"))
+	var saved_path := DiagnosticsExport.save_report(report, DiagnosticsExport.make_filename(report, "match"))
+	_export_notice_generation += 1
+	_export_confirmation.text = tr("Diagnostics saved: %s") % saved_path
+	_export_confirmation.visible = true
+	var generation := _export_notice_generation
+	get_tree().create_timer(5.0).timeout.connect(func() -> void:
+		if generation == _export_notice_generation and is_instance_valid(_export_confirmation):
+			_export_confirmation.visible = false
+	)
+
+func _toggle_debug_panel() -> void:
+	_debug_open = not _debug_open
+	_debug_panel.visible = _debug_open
+	_debug_toggle.text = tr("Close menu") if _debug_open else tr("Menu")
+	# A menu interaction cannot carry through as a gravity-flip input.
+	_pending_flip_direction = 0
 
 func _leave_v2() -> void:
 	MultiplayerV2Service.leave_room()

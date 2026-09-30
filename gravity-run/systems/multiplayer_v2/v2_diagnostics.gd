@@ -8,11 +8,13 @@ var session: Dictionary = {}
 var frames: Array[Dictionary] = []
 var events: Array[Dictionary] = []
 var metrics: Dictionary = {}
+var terminal_frames: Array[Dictionary] = []
 var dropped_frames := 0
 var dropped_events := 0
 
 func begin_session(metadata: Dictionary) -> void:
 	frames.clear()
+	terminal_frames.clear()
 	events.clear()
 	metrics.clear()
 	dropped_frames = 0
@@ -25,7 +27,10 @@ func record_frame(frame: Dictionary) -> void:
 	if frames.size() >= MAX_FRAMES:
 		frames.pop_front()
 		dropped_frames += 1
-	frames.append(frame.duplicate(true))
+	var captured := frame.duplicate(true)
+	captured["round_id"] = str(session.get("round_id", ""))
+	captured["at_unix_usec"] = int(Time.get_unix_time_from_system() * 1_000_000.0)
+	frames.append(captured)
 
 func record_event(event_name: String, details: Dictionary = {}) -> void:
 	if events.size() >= MAX_EVENTS:
@@ -39,5 +44,8 @@ func increment_metric(name: String, amount: int = 1) -> void:
 func observe_max(name: String, value: float) -> void:
 	metrics[name] = maxf(float(metrics.get(name, value)), value)
 
+func preserve_terminal_frames() -> void:
+	terminal_frames = frames.slice(maxi(0, frames.size() - 120)).duplicate(true)
+
 func export_report() -> Dictionary:
-	return {"session": session.duplicate(true), "metrics": metrics.duplicate(true), "frames": frames.duplicate(true), "events": events.duplicate(true), "dropped_frames": dropped_frames, "dropped_events": dropped_events, "exported_at_unix": Time.get_unix_time_from_system()}
+	return {"session": session.duplicate(true), "terminal_frames": terminal_frames.duplicate(true), "metrics": metrics.duplicate(true), "frames": frames.duplicate(true), "events": events.duplicate(true), "dropped_frames": dropped_frames, "dropped_events": dropped_events, "exported_at_unix": Time.get_unix_time_from_system()}

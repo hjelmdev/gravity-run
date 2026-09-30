@@ -20,7 +20,7 @@ func _run() -> void:
 	root.add_child(camera)
 	camera.configure(Vector2(960, 540), 180.0)
 	for speed in [475.0, 500.0, 507.35, 525.0]:
-		for fps in [30, 60, 75, 120, 144]:
+		for fps in [30, 50, 60, 75, 90, 120, 144, 165, 239, 240]:
 			var sampler := Presentation.new()
 			sampler.reset(Vector2(180, 438))
 			var tick := 0
@@ -41,6 +41,7 @@ func _run() -> void:
 			_check(sampler.sample(0.3) == sampler.current, "blocked player does not drift")
 			sampler.reset(Vector2(180, 438))
 			_check(sampler.sample(0.5) == Vector2(180, 438), "restart cannot interpolate old round")
+	_test_irregular_frames(camera)
 	var built: Dictionary = Builder.new().build(918273645, 45000, 4)
 	var simulation := Simulation.new()
 	_check(simulation.configure(built.manifest, [{"user_id": "host", "run_speed_percent": 10147}]).is_empty(), "host fixture")
@@ -56,7 +57,10 @@ func _run() -> void:
 	scene.set_physics_process(false)
 	var player: Node2D = scene.get_node("Player")
 	var collision_before: Rect2 = player.get_player_rect()
+	scene.set_render_diagnostics_enabled(true)
 	scene._process(1.0 / 144.0)
+	_check(scene._render_diagnostic_frames.size() == 1, "singleplayer diagnostics capture render pose")
+	_check(scene.camera.physics_interpolation_mode == Node.PHYSICS_INTERPOLATION_MODE_OFF and not scene.camera.position_smoothing_enabled, "singleplayer camera cannot add a second interpolation/smoothing loop")
 	_check(player.get_player_rect() == collision_before, "singleplayer render offset must preserve collision rect")
 	_check(scene.get_node("Camera2D").get_script() == CameraScript, "singleplayer uses shared camera")
 	scene.free()
@@ -64,6 +68,27 @@ func _run() -> void:
 	_test_v2_scene(built.manifest)
 	print("Unified presentation tests: %s" % ("PASS" if failures == 0 else "FAIL"))
 	quit(0 if failures == 0 else 1)
+
+func _test_irregular_frames(camera: Camera2D) -> void:
+	var sampler := Presentation.new()
+	sampler.reset(Vector2(180, 438))
+	var time := 0.0
+	var tick := 0
+	var last_screen := 0.0
+	var frame_pattern := [0.004, 0.009, 0.032, 0.006, 0.020, 0.014]
+	for frame in range(600):
+		var delta: float = frame_pattern[frame % frame_pattern.size()]
+		time += delta
+		var next_tick := int(floor(time * 60.0 + 0.000001))
+		while tick < next_tick:
+			tick += 1
+			sampler.push(Vector2(180 + 507.35 * tick / 60.0, 438))
+		var pose := sampler.sample(time * 60.0 - tick)
+		camera.follow(pose)
+		var screen := 8000.0 - float(camera.left)
+		if frame > 2:
+			_check(absf((last_screen - screen) / delta - 507.35) < 0.15, "stationary obstacle has constant render speed through irregular frames and catch-up ticks")
+		last_screen = screen
 
 func _test_v2_scene(manifest: Resource) -> void:
 	var service := root.get_node("MultiplayerV2Service")
@@ -86,14 +111,17 @@ func _test_v2_scene(manifest: Resource) -> void:
 	match_scene._process(1.0 / 144.0)
 	_check(match_scene._player_views[2].visible and match_scene._player_views[3].visible, "both remote runners remain visible inside local camera")
 	_check(match_scene._player_views[2].position.y != match_scene._player_views[3].position.y, "remote poses retain different vertical positions")
+	for peer in [2, 3]:
+		var remote_pose: Dictionary = match_scene._remote_track_sample(peer)
+		_check(is_equal_approx(match_scene._player_views[peer].position.x, float(remote_pose.get("world_x", -1.0))), "peer %d render x equals sampled collision world x" % peer)
 	match_scene._on_terminal_report(1, {"state": "dead", "world_x": 1500.0, "y": 438.0})
 	match_scene._process(1.0 / 144.0)
 	var target := int(match_scene._spectator_peer_id)
 	_check(target > 1, "host death selects a valid living remote runner")
-	_check(absf(match_scene._player_views[target].position.x - match_scene._camera_left - match_scene.CAMERA_PLAYER_X) < 0.01, "spectator camera and displayed slot offset follow the same pose")
+	_check(absf(match_scene._player_views[target].position.x - match_scene._camera_left - match_scene.CAMERA_PLAYER_X) < 0.01, "spectator camera follows the unshifted displayed pose")
 	match_scene._on_terminal_report(2, {"state": "finished", "world_x": 1900.0, "y": 408.0})
 	match_scene._process(1.0 / 144.0)
-	_check(is_equal_approx(match_scene._player_views[2].position.x, 1918.0), "remote terminal pose freezes at confirmed position")
+	_check(is_equal_approx(match_scene._player_views[2].position.x, 1900.0), "remote terminal pose freezes at confirmed collision position without slot offset")
 	_check(match_scene._spectator_peer_id == 3, "spectator moves to remaining running guest")
 	_check(match_scene._runner.render_state(0.1).world_x == match_scene._runner.render_state(0.9).world_x, "terminal local V2 runner does not oscillate between ticks")
 	match_scene.free()

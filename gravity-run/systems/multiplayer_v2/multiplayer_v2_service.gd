@@ -13,6 +13,7 @@ const ValidationScript := preload("res://systems/multiplayer_v2/v2_validation.gd
 const RoundCoordinatorScript := preload("res://systems/multiplayer_v2/v2_round_coordinator.gd")
 const ManifestBuilderScript := preload("res://systems/course_manifest_builder.gd")
 const DestructibleRulesScript := preload("res://systems/multiplayer_v2/v2_destructible_rules.gd")
+const RaceResults := preload("res://systems/race_results.gd")
 const Motion := preload("res://systems/runner_motion.gd")
 
 signal session_changed(session: Dictionary)
@@ -34,8 +35,9 @@ signal world_event_committed(commit: Dictionary)
 signal world_baseline_received(baseline: Dictionary)
 signal world_interaction_resolved(request_id: String, accepted: bool, message: String, commit: Dictionary)
 signal results_received(result: Dictionary)
+signal lobby_returned
 
-const V2_GAME_VERSION := "2.1.20260930.2"
+const V2_GAME_VERSION := "2.1.20260930.3"
 const MAX_PLAYERS := 5
 const POSITION_RATE_HZ := 30
 
@@ -89,6 +91,9 @@ var _reconnect_sync_pending: Dictionary = {}
 var _reconnect_sync_requests: Dictionary = {}
 var _reconnect_sync_since_usec: Dictionary = {}
 var _reconnect_sync_elapsed := 0.0
+var _sync_request_ids: Dictionary = {}
+var _session_confirmed_peers: Dictionary = {}
+var _return_in_flight := false
 var _pending_round_failure: Dictionary = {}
 var _pending_round_failure_since_usec := -1
 var _received_round_failures: Dictionary = {}
@@ -142,6 +147,8 @@ func _process(delta: float) -> void:
 			_lobby_poll_elapsed = 0.0
 			refresh_room()
 	if _active:
+		diagnostics.session["phase"] = str(room_state.get("phase", ""))
+		diagnostics.session["lobby_generation"] = int(room_state.get("lobby_generation", -1))
 		_sample_accumulator = minf(_sample_accumulator + delta, _sample_period * 2.0)
 		_clock_ping_elapsed += delta
 		if str(session.get("role", "")) == "guest" and not _round_coordinator.clock.is_synchronized() and _clock_ping_elapsed >= 0.5:
@@ -311,7 +318,7 @@ func get_start_blockers() -> PackedStringArray:
 			blockers.append("member_not_ready:%s" % str(member.get("display_name", "Runner")))
 		if str(member.get("loaded_manifest_hash", "")) != str(room_state.get("manifest_hash", "")):
 			blockers.append("manifest_unacknowledged:%s" % str(member.get("display_name", "Runner")))
-		if _reconnect_sync_pending.has(int(member.get("player_slot", 1))):
+		if int(member.get("player_slot", 1)) != 1 and (not _session_confirmed_peers.has(int(member.get("player_slot", 1))) or _reconnect_sync_pending.has(int(member.get("player_slot", 1)))):
 			blockers.append("reconnect_sync_pending:%s" % str(member.get("display_name", "Runner")))
 	var connected := connected_peer_ids()
 	for member in members:
@@ -486,8 +493,7 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 				_webrtc_transport.update_room(room_state)
 			room_changed.emit(room_state.duplicate(true))
 			if action == "return_to_lobby":
-				_round_coordinator.reset_for_lobby()
-				_round_id = ""
+				_complete_lobby_return()
 				for target in connected_peer_ids():
 					send_control(int(target), "RETURN_TO_LOBBY", {"room": room_state.duplicate(true)})
 				_ensure_manifest()
@@ -511,6 +517,8 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 				room_changed.emit(room_state.duplicate(true))
 		lobby_request_finished.emit(action, success, message)
 	else:
+		if action == "return_to_lobby":
+			_return_in_flight = false
 		var display_message := message
 		if action == "prepare_round" and message.contains("room_not_preparable"):
 			display_message = tr("The room changed before the race could start. Lobby state refreshed.")
@@ -729,7 +737,11 @@ func send_interaction(request: Dictionary) -> void:
 		rpc_endpoint.send_interaction(packet)
 
 func send_control(peer_id: int, kind: String, payload: Dictionary) -> void:
-	if _active:
+	# A data channel may become connected just before the MultiplayerAPI peer.
+	# The protocol's bounded retries deliver controls after both are ready.
+	if network_api == null or network_api.multiplayer_peer == null or network_api.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_CONNECTED:
+		return
+	if _active and connected_peer_ids().has(peer_id):
 		if kind in ["PREPARE_ROUND", "PREPARE_RECEIVED", "PREPARE_REJECTED", "PREPARE_FAILED", "PREPARED", "COMMIT_START", "START_ACK", "CANCEL_START", "START_ABORT", "ROUND_FAILED", "ROUND_FAILED_ACK", "ROUND_ABORT", "RECONNECT_SYNC", "RECONNECT_SYNC_ACK", "RECONNECT_SYNC_CONFIRMED", "RECONNECT_SYNC_COMPLETE"]:
 			diagnostics.record_event("control_sent", {"kind": kind, "peer_id": peer_id, "attempt_id": str(payload.get("attempt_id", _start_attempt_id)), "round_id": str(payload.get("round_id", _round_id)), "generation": int(payload.get("lobby_generation", room_state.get("lobby_generation", -1))), "manifest_hash": str(payload.get("manifest_hash", ""))})
 		var packet := _session_envelope()
@@ -738,6 +750,7 @@ func send_control(peer_id: int, kind: String, payload: Dictionary) -> void:
 
 func begin_round(round_id: String, roster_revision: int) -> void:
 	_round_id = round_id
+	diagnostics.terminal_frames.clear()
 	_round_roster_revision = roster_revision
 	_sample_accumulator = 0.0
 	_last_sample_by_peer.clear()
@@ -948,6 +961,11 @@ func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary
 		return
 	match kind:
 		"RECONNECT_SYNC":
+			var request_id := str(payload.get("sync_request_id", ""))
+			if request_id.is_empty():
+				return
+			_sync_request_ids[sender_peer_id] = request_id
+			_session_confirmed_peers.erase(sender_peer_id)
 			_reconnect_sync_pending[sender_peer_id] = true
 			if not _reconnect_sync_since_usec.has(sender_peer_id):
 				_reconnect_sync_since_usec[sender_peer_id] = Time.get_ticks_usec()
@@ -959,6 +977,8 @@ func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary
 			_reconnect_sync_requests[sender_peer_id] = payload.duplicate(true)
 			_send_reconnect_sync_response(sender_peer_id, payload)
 		"RECONNECT_SYNC_CONFIRMED":
+			if str(payload.get("sync_request_id", "")) != str(_sync_request_ids.get(sender_peer_id, "")) or not _sync_request_ids.has(sender_peer_id):
+				return
 			var host_revision := world_simulation.entity_ledger.revision if world_simulation != null else 0
 			var guest_revision := int(payload.get("client_world_revision", -1))
 			if str(payload.get("round_id", "")) != _round_id or not reconnect_world_revision_matches(host_revision, guest_revision):
@@ -967,11 +987,12 @@ func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary
 				_send_reconnect_sync_response(sender_peer_id, prior_request)
 				return
 			diagnostics.record_event("reconnect_session_confirmed", {"peer_id": sender_peer_id, "round_id": _round_id, "client_tick": int(payload.get("client_tick", -1)), "host_tick": world_simulation.tick if world_simulation != null else 0, "world_revision": host_revision})
+			_session_confirmed_peers[sender_peer_id] = true
 			_mark_peer_contact(sender_peer_id, "RECONNECT_SYNC_CONFIRMED")
 			_reconnect_sync_pending.erase(sender_peer_id)
 			_reconnect_sync_requests.erase(sender_peer_id)
 			_reconnect_sync_since_usec.erase(sender_peer_id)
-			send_control(sender_peer_id, "RECONNECT_SYNC_COMPLETE", {"round_id": _round_id, "world_tick": world_simulation.tick if world_simulation != null else 0, "world_revision": host_revision})
+			send_control(sender_peer_id, "RECONNECT_SYNC_COMPLETE", {"sync_request_id": str(_sync_request_ids[sender_peer_id]), "round_id": _round_id, "world_tick": world_simulation.tick if world_simulation != null else 0, "world_revision": host_revision})
 		"PREPARE_FAILED":
 			if str(payload.get("attempt_id", "")) != _start_attempt_id or str(payload.get("round_id", "")) != _round_id:
 				return
@@ -1044,6 +1065,8 @@ func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary
 func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 	match kind:
 		"RECONNECT_SYNC_ACK":
+			if str(payload.get("sync_request_id", "")) != str(_sync_request_ids.get(1, "")) or not _sync_request_ids.has(1):
+				return
 			var expected_round := str(payload.get("round_id", ""))
 			var host_revision := int(payload.get("world_revision", -1))
 			var local_revision := world_simulation.entity_ledger.revision if world_simulation != null else 0
@@ -1054,8 +1077,10 @@ func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 				return
 			var progress := _local_reconnect_progress()
 			diagnostics.record_event("reconnect_sync_ack_accepted", {"round_id": _round_id, "client_tick": int(progress.client_tick), "host_tick": int(payload.get("world_tick", 0)), "world_revision": local_revision})
-			send_control(1, "RECONNECT_SYNC_CONFIRMED", {"round_id": _round_id, "client_tick": int(progress.client_tick), "client_world_tick": int(progress.world_tick), "client_world_revision": local_revision})
+			send_control(1, "RECONNECT_SYNC_CONFIRMED", {"sync_request_id": str(_sync_request_ids[1]), "round_id": _round_id, "client_tick": int(progress.client_tick), "client_world_tick": int(progress.world_tick), "client_world_revision": local_revision})
 		"RECONNECT_SYNC_COMPLETE":
+			if str(payload.get("sync_request_id", "")) != str(_sync_request_ids.get(1, "")) or not _sync_request_ids.has(1):
+				return
 			var host_revision := int(payload.get("world_revision", -1))
 			var local_revision := world_simulation.entity_ledger.revision if world_simulation != null else 0
 			if str(payload.get("round_id", "")) != _round_id or not reconnect_world_revision_matches(host_revision, local_revision):
@@ -1064,7 +1089,9 @@ func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 				return
 			_reconnect_sync_pending.erase(1)
 			_reconnect_sync_since_usec.erase(1)
+			_session_confirmed_peers[1] = true
 			_mark_peer_contact(1, "RECONNECT_SYNC_COMPLETE")
+			transport_state_changed.emit("connected", tr("Host session confirmed."))
 			diagnostics.record_event("reconnect_session_confirmed", {"peer_id": 1, "round_id": _round_id, "world_tick": int(payload.get("world_tick", 0)), "world_revision": local_revision, "api_peer_id": network_api.get_unique_id() if network_api != null else -1})
 		"START_ABORT":
 			pass
@@ -1121,16 +1148,7 @@ func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 				return
 			room_state = next_room.duplicate(true)
 			room_state["network_mode"] = "v2"
-			_round_coordinator.reset_for_lobby()
-			_round_id = ""
-			_start_in_flight = false
-			_prepare_scene_requested_round_id = ""
-			diagnostics.record_event("return_to_lobby_applied", {"generation": int(room_state.get("lobby_generation", -1)), "attempt_id": _start_attempt_id})
-			terminal_status.clear()
-			_result_committed = false
-			_committed_result.clear()
-			_result_acks.clear()
-			_terminal_delivery_pending.clear()
+			_complete_lobby_return()
 			room_changed.emit(room_state.duplicate(true))
 			_ensure_manifest()
 		"CLOCK_PONG":
@@ -1163,16 +1181,43 @@ func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 				terminal_report_received.emit(terminal_owner, payload.duplicate(true))
 			send_control(1, "TERMINAL_ACK", {"owner_peer_id": terminal_owner, "event_id": terminal_event_id})
 		"RESULT_COMMIT":
-			var result_id := str(payload.get("result_id", ""))
-			var placements: Variant = payload.get("placements", null)
-			if not result_id.is_empty() and placements is Array and placements.size() == room_state.get("members", []).size():
-				results_received.emit(payload.duplicate(true))
-				send_control(1, "RESULT_ACK", {"result_id": result_id})
+			_accept_result_commit(payload)
 		"WORLD_HASH":
 			pass
 		"HOST_ABORT":
 			round_failed.emit(str(payload.get("reason", "host_disconnected")))
 	control_received.emit(1, kind, payload.duplicate(true))
+
+func _accept_result_commit(payload: Dictionary) -> bool:
+	var result_id := str(payload.get("result_id", ""))
+	var placements: Variant = payload.get("placements", null)
+	var roster := get_active_round_roster()
+	if _round_id.is_empty() or str(payload.get("round_id", "")) != _round_id or result_id.is_empty() or not placements is Array or placements.size() != roster.size() or int(payload.get("result_revision", -1)) < 1:
+		return false
+	var seen: Dictionary = {}
+	for row in placements:
+		if not row is Dictionary:
+			return false
+		var peer_id := int(row.get("owner_peer_id", -1))
+		if seen.has(peer_id) or int(row.get("place", 0)) < 1 or int(row.get("place", 0)) > roster.size():
+			return false
+		var found := false
+		for member in roster:
+			if int(member.get("player_slot", -2)) == peer_id:
+				found = true
+		if not found:
+			return false
+		seen[peer_id] = true
+	if _result_committed and result_id != str(_committed_result.get("result_id", "")):
+		return false
+	if not _result_committed:
+		_result_committed = true
+		_committed_result = payload.duplicate(true)
+		_round_coordinator.finish_round()
+		room_state["phase"] = "FINISHED"
+		results_received.emit(_committed_result.duplicate(true))
+	send_control(1, "RESULT_ACK", {"result_id": result_id})
+	return true
 
 func mark_local_prepared() -> void:
 	if not _active or _round_id.is_empty():
@@ -1204,14 +1249,14 @@ func _on_round_started(round_id: String, descriptor: Dictionary) -> void:
 func configure_world_simulation(world: MultiplayerV2WorldSimulation) -> void:
 	world_simulation = world
 
-func submit_local_terminal(state_name: String, reason: String, tick_value: int, world_x: float, y: float) -> void:
+func submit_local_terminal(state_name: String, reason: String, tick_value: int, world_x: float, y: float, gravity_direction: int = 1) -> void:
 	if state_name not in ["dead", "finished"] or _round_id.is_empty():
 		return
 	if not _validate_local_peer_mapping("terminal"):
 		_round_coordinator.cancel("peer_mapping_mismatch")
 		return
 	var report := _session_envelope()
-	report.merge({"owner_peer_id": int(session.get("local_peer_id", 1)), "simulation_tick": tick_value, "state": state_name, "reason": reason, "world_x": world_x, "y": y, "event_id": "%s:%d:%s" % [_round_id, int(session.get("local_peer_id", 1)), state_name]}, true)
+	report.merge({"owner_peer_id": int(session.get("local_peer_id", 1)), "simulation_tick": tick_value, "state": state_name, "reason": reason, "world_x": world_x, "y": y, "gravity_direction": gravity_direction, "event_id": "%s:%d:%s" % [_round_id, int(session.get("local_peer_id", 1)), state_name]}, true)
 	if str(session.get("role", "")) == "host":
 		_commit_terminal(1, report)
 	else:
@@ -1238,6 +1283,14 @@ func _commit_terminal(owner_peer_id: int, report: Dictionary) -> void:
 		return
 	var commit := report.duplicate(true)
 	commit["confirmed_at_host_usec"] = Time.get_ticks_usec()
+	commit["owner_peer_id"] = owner_peer_id
+	var latest: Dictionary = _last_sample_state_by_peer.get(owner_peer_id, {})
+	if not commit.has("world_x"):
+		commit["world_x"] = float(latest.get("world_x", current_manifest.start_x if current_manifest != null else 0.0))
+	if not commit.has("y"):
+		commit["y"] = float(latest.get("y", 0.0))
+	if not commit.has("gravity_direction"):
+		commit["gravity_direction"] = int(latest.get("gravity_direction", 1))
 	terminal_status[owner_peer_id] = commit
 	terminal_report_received.emit(owner_peer_id, commit.duplicate(true))
 	for target in connected_peer_ids():
@@ -1249,21 +1302,16 @@ func _commit_terminal(owner_peer_id: int, report: Dictionary) -> void:
 func _maybe_finish_round() -> void:
 	if str(session.get("role", "")) != "host" or room_state.is_empty() or _result_committed:
 		return
-	for member in room_state.get("members", []):
-		var owner_peer := int(member.get("player_slot", 1))
-		if not terminal_status.has(owner_peer):
+	var roster := get_active_round_roster()
+	if roster.is_empty():
+		return
+	for member in roster:
+		if not terminal_status.has(int(member.get("player_slot", 1))):
 			return
-	var placements: Array[Dictionary] = []
-	for report in terminal_status.values():
-		placements.append({"owner_peer_id": int(report.get("owner_peer_id", -1)), "state": str(report.get("state", "dead")), "reason": str(report.get("reason", "")), "finish_tick": int(report.get("simulation_tick", -1)), "world_x": float(report.get("world_x", 0.0))})
-	placements.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		if str(a.state) == "finished" and str(b.state) != "finished": return true
-		if str(a.state) != "finished" and str(b.state) == "finished": return false
-		var a_tick := int(a.finish_tick)
-		var b_tick := int(b.finish_tick)
-		return a_tick < b_tick if a_tick != b_tick else int(a.owner_peer_id) < int(b.owner_peer_id)
-	)
-	var result := {"round_id": _round_id, "lobby_generation": _round_roster_revision, "result_revision": 1, "result_id": "%s:%d" % [_round_id, _round_roster_revision], "placements": placements, "world_revision": world_simulation.entity_ledger.revision if world_simulation != null else 0, "reason": "all_terminal"}
+	var start_x := float(current_manifest.start_x) if current_manifest != null else 0.0
+	var result := RaceResults.build(roster, terminal_status.values(), start_x, "all_terminal", true)
+	result.merge({"round_id": _round_id, "lobby_generation": int(room_state.get("lobby_generation", 0)), "result_revision": 1, "result_id": "%s:%d" % [_round_id, _round_roster_revision], "world_revision": world_simulation.entity_ledger.revision if world_simulation != null else 0}, true)
+	_round_coordinator.finish_round()
 	_result_committed = true
 	_committed_result = result.duplicate(true)
 	_result_retry_elapsed = 0.0
@@ -1326,7 +1374,7 @@ func _local_reconnect_progress() -> Dictionary:
 	var latest_frame: Dictionary = diagnostics.frames.back() if not diagnostics.frames.is_empty() else {}
 	var world_tick := world_simulation.tick if world_simulation != null else int(latest_frame.get("world_tick", 0))
 	var world_revision := world_simulation.entity_ledger.revision if world_simulation != null else 0
-	return {"round_id": _round_id, "client_tick": int(latest_frame.get("tick", 0)), "world_tick": world_tick, "world_revision": world_revision}
+	return {"round_id": _round_id, "client_tick": int(latest_frame.get("tick", 0)), "world_tick": world_tick, "world_revision": world_revision, "client_world_revision": world_revision, "sync_request_id": str(_sync_request_ids.get(1, ""))}
 
 func _send_reconnect_sync_request() -> void:
 	if not _active or str(session.get("role", "")) != "guest" or not _reconnect_sync_pending.has(1) or not connected_peer_ids().has(1):
@@ -1336,12 +1384,12 @@ func _send_reconnect_sync_request() -> void:
 	send_control(1, "RECONNECT_SYNC", progress)
 
 func _send_reconnect_sync_response(peer_id: int, request: Dictionary) -> void:
-	if world_simulation != null:
+	if world_simulation != null and not _round_id.is_empty():
 		send_control(peer_id, "WORLD_BASELINE", {"world_baseline": world_simulation.entity_ledger.baseline()})
 	var host_tick := world_simulation.tick if world_simulation != null else 0
 	var host_revision := world_simulation.entity_ledger.revision if world_simulation != null else 0
 	diagnostics.record_event("reconnect_sync_response_sent", {"peer_id": peer_id, "round_id": _round_id, "client_tick": int(request.get("client_tick", -1)), "client_world_tick": int(request.get("world_tick", -1)), "client_world_revision": int(request.get("world_revision", -1)), "host_tick": host_tick, "host_world_revision": host_revision})
-	send_control(peer_id, "RECONNECT_SYNC_ACK", {"round_id": _round_id, "world_tick": host_tick, "world_revision": host_revision, "baseline_required": world_simulation != null})
+	send_control(peer_id, "RECONNECT_SYNC_ACK", {"sync_request_id": str(request.get("sync_request_id", "")), "round_id": _round_id, "world_tick": host_tick, "world_revision": host_revision, "baseline_required": world_simulation != null and not _round_id.is_empty()})
 
 func _process_reconnect_sync(delta: float) -> void:
 	if _reconnect_sync_pending.is_empty():
@@ -1356,7 +1404,7 @@ func _process_reconnect_sync(delta: float) -> void:
 		return
 	for peer_id_value in _reconnect_sync_requests.keys():
 		var peer_id := int(peer_id_value)
-		if _reconnect_sync_pending.has(peer_id) and Time.get_ticks_usec() - int(_reconnect_sync_since_usec.get(peer_id, Time.get_ticks_usec())) >= DISCONNECT_GRACE_USEC:
+		if _round_coordinator.state == RoundCoordinatorScript.State.RUNNING and _reconnect_sync_pending.has(peer_id) and Time.get_ticks_usec() - int(_reconnect_sync_since_usec.get(peer_id, Time.get_ticks_usec())) >= DISCONNECT_GRACE_USEC:
 			if _round_coordinator.state == RoundCoordinatorScript.State.RUNNING and not terminal_status.has(peer_id):
 				var failure_report := {"round_id": _round_id, "owner_peer_id": peer_id, "simulation_tick": _last_seen_tick_by_peer.get(peer_id, 0), "state": "disconnected", "reason": "reconnect_sync_timeout", "event_id": "%s:%d:sync-timeout" % [_round_id, peer_id]}
 				diagnostics.record_event("reconnect_sync_timed_out", {"peer_id": peer_id, "round_id": _round_id, "elapsed_usec": Time.get_ticks_usec() - int(_reconnect_sync_since_usec.get(peer_id, Time.get_ticks_usec()))})
@@ -1402,6 +1450,8 @@ func _reset_peer_liveness() -> void:
 	_reconnect_sync_requests.clear()
 	_reconnect_sync_since_usec.clear()
 	_reconnect_sync_elapsed = 0.0
+	_sync_request_ids.clear()
+	_session_confirmed_peers.clear()
 	_last_host_heartbeat_usec = -1
 
 func _local_transport_is_reconnecting() -> bool:
@@ -1522,6 +1572,8 @@ func current_diagnostic_state() -> Dictionary:
 		"coordinator_state_name": _coordinator_state_name(_round_coordinator.state),
 		"local_peer_id": int(session.get("local_peer_id", -1)),
 		"role": str(session.get("role", "")),
+		"confirmed_peers": _session_confirmed_peers.keys(),
+		"sync_pending_peers": _reconnect_sync_pending.keys(),
 		"build_id": str(ProjectSettings.get_setting("application/config/version", ""))
 	}
 
@@ -1532,6 +1584,7 @@ static func _coordinator_state_name(value: int) -> String:
 		RoundCoordinatorScript.State.COMMITTING: return "COMMITTING"
 		RoundCoordinatorScript.State.RUNNING: return "RUNNING"
 		RoundCoordinatorScript.State.CANCELLED: return "CANCELLED"
+		RoundCoordinatorScript.State.FINISHED: return "FINISHED"
 	return "UNKNOWN"
 
 func _validate_round_descriptor(descriptor: Dictionary) -> String:
@@ -1575,16 +1628,29 @@ func _validate_local_peer_mapping(stage: String) -> bool:
 	return valid
 
 func return_to_lobby() -> void:
-	if is_room_owner() and has_room():
-		var context := "return:%d" % Time.get_ticks_msec()
-		_pending_lobby_context = context
-		_lobby_contexts[context] = "return_to_lobby"
-		_lobby_provider.return_to_lobby(str(room_state.get("room_id", "")), _identity_adapter.token(), context)
+	if not is_room_owner() or not has_room() or _return_in_flight:
+		return
+	_return_in_flight = true
+	var context := "return:%d" % Time.get_ticks_msec()
+	_pending_lobby_context = context
+	_lobby_contexts[context] = "return_to_lobby"
+	_lobby_provider.return_to_lobby(str(room_state.get("room_id", "")), _identity_adapter.token(), context)
+
+func _complete_lobby_return() -> void:
+	_return_in_flight = false
+	_round_coordinator.reset_for_lobby()
+	_round_id = ""
+	_start_in_flight = false
+	_prepare_scene_requested_round_id = ""
+	terminal_status.clear()
 	_result_committed = false
 	_committed_result.clear()
 	_result_acks.clear()
 	_terminal_delivery_pending.clear()
-	transport_state_changed.emit("lobby", "Returned to V2 lobby.")
+	world_simulation = null
+	diagnostics.session["round_id"] = ""
+	diagnostics.record_event("return_to_lobby_applied", {"generation": int(room_state.get("lobby_generation", -1)), "attempt_id": _start_attempt_id})
+	lobby_returned.emit()
 
 func _process_world_interaction(owner_peer_id: int, request: Dictionary) -> void:
 	var request_id := str(request.get("request_id", ""))
@@ -1740,20 +1806,27 @@ func _packet_session_error(packet: Dictionary, allow_next_generation: bool) -> S
 		return "round_mismatch"
 	return ""
 
+func _begin_session_sync(peer_id: int, reason: String) -> void:
+	var now := Time.get_ticks_usec()
+	_reconnect_sync_pending[peer_id] = true
+	_reconnect_sync_requests.erase(peer_id)
+	_reconnect_sync_since_usec[peer_id] = now
+	_session_confirmed_peers.erase(peer_id)
+	_sync_request_ids[peer_id] = "%d:%d:%s" % [int(session.get("local_peer_id", 1)), now, Crypto.new().generate_random_bytes(4).hex_encode()]
+	diagnostics.record_event("session_sync_started", {"peer_id": peer_id, "reason": reason, "sync_request_id": _sync_request_ids[peer_id], "generation": int(room_state.get("lobby_generation", -1))})
+	if not is_room_owner() and peer_id == 1:
+		call_deferred("_send_reconnect_sync_request")
+
 func _on_peer_connected(peer_id: int) -> void:
 	diagnostics.increment_metric("peer_connected_events")
 	var is_reconnect := _disconnect_since_usec.has(peer_id)
-	if is_reconnect:
-		_reconnect_sync_pending[peer_id] = true
-		_reconnect_sync_requests.erase(peer_id)
-		_reconnect_sync_since_usec[peer_id] = int(_disconnect_since_usec[peer_id])
+	_begin_session_sync(peer_id, "reconnect" if is_reconnect else "initial_connection")
 	diagnostics.record_event("peer_transport_connected_unconfirmed", {"peer_id": peer_id, "outage_usec": Time.get_ticks_usec() - int(_disconnect_since_usec.get(peer_id, Time.get_ticks_usec())), "api_peer_id": network_api.get_unique_id() if network_api != null else -1, "session_peer_id": int(session.get("local_peer_id", -1))})
 	transport_state_changed.emit("reconnecting", "Peer %d transport connected; validating session." % peer_id)
-	if is_reconnect and not is_room_owner() and peer_id == 1:
-		call_deferred("_send_reconnect_sync_request")
 
 func _on_peer_disconnected(peer_id: int) -> void:
 	diagnostics.increment_metric("peer_disconnected_events")
+	_session_confirmed_peers.erase(peer_id)
 	var now := Time.get_ticks_usec()
 	if not _disconnect_since_usec.has(peer_id):
 		_disconnect_since_usec[peer_id] = now
@@ -1817,7 +1890,7 @@ func _check_disconnect_grace() -> void:
 			var contact_fresh := last_contact >= 0 and now - last_contact < 3_000_000
 			if peer_id in connected and _reconnect_sync_pending.has(peer_id):
 				var sync_started := int(_reconnect_sync_since_usec.get(peer_id, now))
-				if now - sync_started >= DISCONNECT_GRACE_USEC:
+				if _round_coordinator.state == RoundCoordinatorScript.State.RUNNING and now - sync_started >= DISCONNECT_GRACE_USEC:
 					diagnostics.record_event("reconnect_sync_timed_out", {"peer_id": peer_id, "round_id": _round_id, "elapsed_usec": now - sync_started})
 					if _round_coordinator.state == RoundCoordinatorScript.State.RUNNING and not terminal_status.has(peer_id):
 						var failure_report := {"round_id": _round_id, "owner_peer_id": peer_id, "simulation_tick": _last_seen_tick_by_peer.get(peer_id, 0), "state": "disconnected", "reason": "reconnect_sync_timeout", "event_id": "%s:%d:sync-timeout" % [_round_id, peer_id]}
@@ -1830,13 +1903,6 @@ func _check_disconnect_grace() -> void:
 				continue
 			if not _disconnect_since_usec.has(peer_id):
 				_disconnect_since_usec[peer_id] = last_contact + 3_000_000 if last_contact >= 0 else now
-			if str(session.get("role", "")) == "guest" and liveness_restart_due(now, last_contact, int(_last_reconnect_attempt_usec.get(peer_id, -1))):
-				_last_reconnect_attempt_usec[peer_id] = now
-				_reconnect_generation[peer_id] = int(_reconnect_generation.get(peer_id, 0)) + 1
-				if peer_id == 1 and network_api != null and network_api.get_unique_id() != int(session.get("local_peer_id", -1)):
-					_recreate_guest_network_peer("api_peer_id_reset")
-				else:
-					_restart_peer_link(peer_id)
 			if _round_coordinator.state == RoundCoordinatorScript.State.RUNNING and now - int(_disconnect_since_usec[peer_id]) >= DISCONNECT_GRACE_USEC:
 				var report := {"round_id": _round_id, "owner_peer_id": peer_id, "simulation_tick": _last_seen_tick_by_peer.get(peer_id, 0), "state": "disconnected", "reason": "connection_grace_expired", "event_id": "%s:%d:disconnected" % [_round_id, peer_id]}
 				diagnostics.record_event("peer_marked_disconnected", {"peer_id": peer_id, "grace_usec": now - int(_disconnect_since_usec[peer_id])})
@@ -1844,13 +1910,17 @@ func _check_disconnect_grace() -> void:
 	else:
 		var host_contact := int(_last_heartbeat_usec.get(1, -1))
 		var host_contact_fresh := host_contact >= 0 and now - host_contact < 3_000_000
-		if 1 in connected and host_contact_fresh:
+		if 1 in connected and host_contact_fresh and not _reconnect_sync_pending.has(1):
 			return
 		if not _disconnect_since_usec.has(1):
 			_disconnect_since_usec[1] = host_contact + 3_000_000 if host_contact >= 0 else now
 		var api_peer_mismatch := network_api != null and network_api.get_unique_id() != int(session.get("local_peer_id", -1))
-		var retry_transport := not connected.has(1) or (_reconnect_sync_pending.has(1) and api_peer_mismatch)
-		if retry_transport and liveness_restart_due(now, host_contact, int(_last_reconnect_attempt_usec.get(1, -1))):
+		if connected.has(1) and not _reconnect_sync_pending.has(1) and not host_contact_fresh:
+			_begin_session_sync(1, "liveness_timeout")
+		var sync_expired := _reconnect_sync_pending.has(1) and now - int(_reconnect_sync_since_usec.get(1, now)) >= DISCONNECT_GRACE_USEC
+		var initial_transport_expired := not connected.has(1) and host_contact < 0 and now - int(_disconnect_since_usec.get(1, now)) >= DISCONNECT_GRACE_USEC
+		var retry_transport := not connected.has(1) or api_peer_mismatch or sync_expired
+		if retry_transport and (liveness_restart_due(now, host_contact, int(_last_reconnect_attempt_usec.get(1, -1))) or ((sync_expired or initial_transport_expired) and now - int(_last_reconnect_attempt_usec.get(1, -2_000_000)) >= RECONNECT_RETRY_USEC)):
 			_last_reconnect_attempt_usec[1] = now
 			_reconnect_generation[1] = int(_reconnect_generation.get(1, 0)) + 1
 			if api_peer_mismatch:
@@ -1887,6 +1957,7 @@ func close_session(reason: String = "left_room") -> void:
 	_pending_round_failure_since_usec = -1
 	_round_abort_pending.clear()
 	_round_abort_return_pending = false
+	_return_in_flight = false
 	if not session.is_empty():
 		diagnostics.record_event("session_closed", {"reason": reason})
 	session.clear()

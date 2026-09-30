@@ -290,9 +290,11 @@ func _on_room_changed(room: Dictionary) -> void:
 		if not is_local and is_online:
 			var peer_id := int(member.get("player_slot", 1))
 			var link_label := Label.new()
-			link_label.text = tr("P2P connected") if peer_id in connected_peers else tr("Connecting…")
+			var through_host := not MultiplayerV2Service.is_room_owner() and peer_id != 1
+			var link_ready := 1 in connected_peers if through_host else peer_id in connected_peers
+			link_label.text = tr("Connected through host") if through_host and link_ready else (tr("P2P connected") if link_ready else tr("Connecting…"))
 			link_label.add_theme_font_size_override("font_size", 11)
-			link_label.add_theme_color_override("font_color", Color("42d6c5") if peer_id in connected_peers else Color("b8c7dc"))
+			link_label.add_theme_color_override("font_color", Color("42d6c5") if link_ready else Color("b8c7dc"))
 			row.add_child(link_label)
 		var skin_id := posmod(int(member.get("skin_id", 0)), SkinPalette.SKIN_COUNT)
 		if is_local:

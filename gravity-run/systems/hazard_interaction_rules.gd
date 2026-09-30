@@ -49,6 +49,41 @@ static func step_spike_triangles(x: float, start_y: float, end_y: float, from_ce
 		]))
 	return triangles
 
+static func swept_rect_polygon_fraction(rect: Rect2, displacement: Vector2, polygon: PackedVector2Array) -> float:
+	# Continuous separating-axis test for a moving AABB and a convex static polygon.
+	if polygon.size() < 3:
+		return -1.0
+	var axes := PackedVector2Array([Vector2.RIGHT, Vector2.DOWN])
+	for index in range(polygon.size()):
+		var edge := polygon[(index + 1) % polygon.size()] - polygon[index]
+		if edge.length_squared() > 0.000001:
+			axes.append(Vector2(-edge.y, edge.x).normalized())
+	var enter := 0.0
+	var exit := 1.0
+	var center := rect.get_center()
+	var half := rect.size * 0.5
+	for axis in axes:
+		var low := polygon[0].dot(axis)
+		var high := low
+		for point in polygon:
+			low = minf(low, point.dot(axis))
+			high = maxf(high, point.dot(axis))
+		var radius := absf(axis.x) * half.x + absf(axis.y) * half.y
+		var rectangle_min := center.dot(axis) - radius
+		var rectangle_max := center.dot(axis) + radius
+		var velocity := displacement.dot(axis)
+		if absf(velocity) < 0.000001:
+			if rectangle_max < low or rectangle_min > high:
+				return -1.0
+			continue
+		var first := (low - rectangle_max) / velocity
+		var last := (high - rectangle_min) / velocity
+		enter = maxf(enter, minf(first, last))
+		exit = minf(exit, maxf(first, last))
+		if enter > exit:
+			return -1.0
+	return enter
+
 static func triangle_intersects_rect(triangle: PackedVector2Array, rect: Rect2) -> bool:
 	if triangle.size() != 3:
 		return false

@@ -11,7 +11,7 @@ const ACK_MARGIN_USEC := 500_000
 const PREPARE_RETRY_USEC := 1_000_000
 const PREPARE_TIMEOUT_USEC := 15_000_000
 
-enum State { IDLE, PREPARING, COMMITTING, RUNNING, CANCELLED }
+enum State { IDLE, PREPARING, COMMITTING, RUNNING, CANCELLED, FINISHED }
 
 var state := State.IDLE
 var round_id := ""
@@ -31,7 +31,7 @@ var clock := MultiplayerV2RoundClock.new()
 var round_descriptor: Dictionary = {}
 
 func prepare_as_host(descriptor: Dictionary, peers: Array[int], now_usec: int) -> bool:
-	if state not in [State.IDLE, State.CANCELLED, State.RUNNING]:
+	if state not in [State.IDLE, State.CANCELLED, State.RUNNING, State.FINISHED]:
 		return false
 	_reset_round(descriptor, peers, true)
 	state = State.PREPARING
@@ -47,7 +47,7 @@ func receive_prepare_as_guest(descriptor: Dictionary) -> bool:
 	var incoming_generation := int(descriptor.get("lobby_generation", -1))
 	if state == State.PREPARING and incoming_round_id == round_id:
 		return true
-	if state not in [State.IDLE, State.CANCELLED, State.RUNNING]:
+	if state not in [State.IDLE, State.CANCELLED, State.RUNNING, State.FINISHED]:
 		if incoming_generation <= lobby_generation:
 			return false
 	_reset_round(descriptor, [], false)
@@ -123,6 +123,9 @@ func cancel(reason: String, failure_phase: String = "coordinator", notify_peer: 
 	elif not is_host and notify_peer:
 		control_requested.emit(1, "PREPARE_FAILED", payload)
 	round_failed.emit(reason)
+
+func finish_round() -> void:
+	state = State.FINISHED
 
 func reset_for_lobby() -> void:
 	_reset_round({}, [], false)

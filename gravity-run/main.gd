@@ -67,12 +67,18 @@ const CameraScript := preload("res://systems/runner_camera.gd")
 var _presentation := Presentation.new()
 var _render_player_position := Vector2(180.0, 438.0)
 var _render_course_distance := 0.0
+var render_diagnostics_enabled := false
+var _render_diagnostic_frames: Array[Dictionary] = []
+var _render_diagnostic_tick := 0
+const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_export.gd")
 
 func _ready() -> void:
 	course_generator = COURSE_GENERATOR_SCRIPT.new()
 	loot_spawn_planner = LOOT_PLANNER_SCRIPT.new()
 	_default_ruleset = COURSE_RULESET_SCRIPT.new()
 	camera.set_script(CameraScript)
+	camera.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	camera.position_smoothing_enabled = false
 	camera.enabled = true
 	camera.make_current()
 	_sync_screen_size()
@@ -91,6 +97,8 @@ func _ready() -> void:
 	_start_run()
 
 func _start_run() -> void:
+	_render_diagnostic_tick = 0
+	_render_diagnostic_frames.clear()
 	run_end_panel.visible = false
 	if not demo_mode:
 		AchievementService.begin_run()
@@ -194,7 +202,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_tree().change_scene_to_file("res://ui/main_menu.tscn")
 			get_viewport().set_input_as_handled()
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if not is_instance_valid(player):
 		return
 	_render_player_position = _presentation.sample(Engine.get_physics_interpolation_fraction())
@@ -202,7 +210,33 @@ func _process(_delta: float) -> void:
 	var sprite := player.get_node("AnimatedSprite2D") as AnimatedSprite2D
 	sprite.position = _render_player_position - player.position + Vector2(0.0, -float(player.call("get_gravity_direction")))
 	_update_camera()
+	if render_diagnostics_enabled and not game_over:
+		_record_render_diagnostic(delta)
 	queue_redraw()
+
+func set_render_diagnostics_enabled(enabled: bool) -> void:
+	render_diagnostics_enabled = enabled
+	if enabled:
+		_render_diagnostic_frames.clear()
+
+func _record_render_diagnostic(delta: float) -> void:
+	var reference: Dictionary = {}
+	var left := float(camera.get("left"))
+	for obstacle in obstacles:
+		if not is_instance_valid(obstacle) or obstacle.get_script() == null:
+			continue
+		if str(obstacle.get_script().resource_path).ends_with("barrel.gd"):
+			continue
+		if obstacle.position.x >= left and obstacle.position.x <= left + screen_width:
+			reference = {"id": obstacle.get_instance_id(), "world_x": obstacle.position.x, "screen_x": (obstacle.position.x - left) * camera.zoom.x}
+			break
+	if _render_diagnostic_frames.size() >= 4096:
+		_render_diagnostic_frames.pop_front()
+	_render_diagnostic_frames.append({"at_usec": Time.get_ticks_usec(), "phase": "terminal" if game_over else "running", "render_delta_ms": delta * 1000.0, "tick": _render_diagnostic_tick, "fraction": Engine.get_physics_interpolation_fraction(), "previous_x": _presentation.previous.x, "current_x": _presentation.current.x, "render_x": _render_player_position.x, "camera_left": left, "render_course_distance": _render_course_distance, "speed": _run_speed(), "blocked": run_blocked, "reference": reference, "fps": Engine.get_frames_per_second()})
+
+func save_render_diagnostics() -> String:
+	var report := {"session": {"network_mode": "singleplayer", "build_id": str(ProjectSettings.get_setting("application/config/version", "")), "godot_version": Engine.get_version_info(), "seed": _active_seed, "viewport": [screen_width, screen_height], "zoom": camera.zoom.x}, "frames": _render_diagnostic_frames.duplicate(true), "exported_at_unix": Time.get_unix_time_from_system()}
+	return DiagnosticsExport.save_report(report, "singleplayer_smoothness_%d.json" % Time.get_unix_time_from_system())
 
 func _physics_process(delta: float) -> void:
 	if game_over:
@@ -212,6 +246,7 @@ func _physics_process(delta: float) -> void:
 				_start_run()
 		return
 
+	_render_diagnostic_tick += 1
 	var speed := _run_speed()
 	_update_speed_debug()
 	var movement_multiplier := _equipment_speed_multiplier() * float(player.call("get_speed_multiplier"))

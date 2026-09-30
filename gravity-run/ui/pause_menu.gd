@@ -27,6 +27,8 @@ func _process(_delta: float) -> void:
 	_apply_pause_state()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if bool(get_parent().get("game_over")):
+		return
 	if event.is_action_pressed("ui_cancel") and is_instance_valid(_inventory_screen):
 		_close_inventory()
 		get_viewport().set_input_as_handled()
@@ -166,11 +168,48 @@ func _show_pause_actions() -> void:
 	options_button.pressed.connect(_show_control_options)
 	menu_layout.add_child(options_button)
 
+	if get_parent().has_method("save_render_diagnostics"):
+		var diagnostics_button := Button.new()
+		diagnostics_button.text = tr("Smoothness diagnostics")
+		diagnostics_button.custom_minimum_size.y = 40
+		diagnostics_button.pressed.connect(_show_smoothness_diagnostics)
+		menu_layout.add_child(diagnostics_button)
+
 	var menu_button := Button.new()
 	menu_button.text = tr("Return to game hub")
 	menu_button.custom_minimum_size = Vector2(0.0, 44.0)
 	menu_button.pressed.connect(_quit_to_main_menu)
 	menu_layout.add_child(menu_button)
+
+func _show_smoothness_diagnostics() -> void:
+	_clear_menu_layout()
+	var capture := CheckButton.new()
+	capture.text = tr("Record smoothness")
+	capture.button_pressed = bool(get_parent().get("render_diagnostics_enabled"))
+	capture.toggled.connect(func(enabled: bool) -> void: get_parent().call("set_render_diagnostics_enabled", enabled))
+	menu_layout.add_child(capture)
+	var hint := Label.new()
+	hint.text = tr("Enable recording, resume and play, then return here to save.")
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	menu_layout.add_child(hint)
+	var notice := Label.new()
+	notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	var save := Button.new()
+	save.text = tr("Save diagnostics")
+	save.custom_minimum_size.y = 44
+	save.pressed.connect(func() -> void: notice.text = str(get_parent().call("save_render_diagnostics")))
+	menu_layout.add_child(save)
+	menu_layout.add_child(notice)
+	var resume := Button.new()
+	resume.text = tr("Resume")
+	resume.custom_minimum_size.y = 44
+	resume.pressed.connect(_set_paused.bind(false))
+	menu_layout.add_child(resume)
+	var back := Button.new()
+	back.text = tr("Back")
+	back.custom_minimum_size.y = 44
+	back.pressed.connect(_show_pause_actions)
+	menu_layout.add_child(back)
 
 func _show_control_options() -> void:
 	_clear_menu_layout()

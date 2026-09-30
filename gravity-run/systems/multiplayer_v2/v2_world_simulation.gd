@@ -163,6 +163,56 @@ func _player_contact_against(player_state: Dictionary, barrel_state: Array) -> D
 			return {"kind": "shared_interaction", "reason": "barrel_contact", "entity_id": str(barrel.entity_id), "event_id": str(barrel.event_id), "incarnation": int(barrel.incarnation)}
 	return {}
 
+func first_static_terminal_contact(previous: Dictionary, proposed: Dictionary) -> Dictionary:
+	if manifest == null:
+		return {}
+	var start := Vector2(float(previous.world_x), float(previous.y))
+	var end := Vector2(float(proposed.world_x), float(proposed.y))
+	var rect := Rect2(start - Motion.SIZE * 0.5, Motion.SIZE)
+	var best: Dictionary = {}
+	var first_fraction := 2.0
+	for event in manifest.events:
+		var kind := str(event.get("kind", ""))
+		var entity_id := str(event.get("event_id", ""))
+		if kind in ["block", "step"] and not entity_ledger.is_active(entity_id):
+			continue
+		# Cull distant events before constructing their polygon groups.
+		var event_x := float(event.get("start_x", event.get("x", 0.0)))
+		var reach := float(event.get("width", 48.0)) + float(event.get("count", 1)) * float(event.get("spacing", CourseGeneratorScript.SPIKE_GROUP_SPACING)) + 64.0
+		if maxf(start.x, end.x) + Motion.SIZE.x < event_x - reach or minf(start.x, end.x) - Motion.SIZE.x > event_x + reach:
+			continue
+		var polygons: Array[PackedVector2Array] = []
+		var reason := kind
+		if kind == "block":
+			var height := float(event.get("height", 72.0))
+			var width := float(event.get("width", 48.0))
+			var edge_y := float(event.get("y", 0.0))
+			var y := edge_y if bool(event.get("from_ceiling", false)) else edge_y - height
+			var bounds := Rect2(float(event.get("x", 0.0)) - width * 0.5, y, width, height)
+			polygons.append(PackedVector2Array([bounds.position, Vector2(bounds.end.x, bounds.position.y), bounds.end, Vector2(bounds.position.x, bounds.end.y)]))
+		elif kind == "spikes":
+			polygons = HazardRules.spike_group_triangles(float(event.get("start_x", event.get("x", 0.0))), float(event.get("y", 0.0)), int(event.get("count", 1)), float(event.get("spacing", CourseGeneratorScript.SPIKE_GROUP_SPACING)), CourseGeneratorScript.SPIKE_WIDTH, CourseGeneratorScript.SPIKE_HEIGHT, bool(event.get("from_ceiling", false)))
+		elif kind == "step" and bool(event.get("spiked", false)):
+			reason = "step_spikes"
+			polygons = HazardRules.step_spike_triangles(float(event.get("x", 0.0)), float(event.get("start_y", 0.0)), float(event.get("end_y", 0.0)), bool(event.get("from_ceiling", false)))
+		for polygon in polygons:
+			var fraction := HazardRules.swept_rect_polygon_fraction(rect, end - start, polygon)
+			if fraction < 0.0 or fraction >= first_fraction:
+				continue
+			var pose := start.lerp(end, fraction)
+			if kind == "step":
+				var contact_state := proposed.duplicate(true)
+				contact_state.world_x = pose.x
+				contact_state.y = pose.y
+				if str(player_contact(contact_state).get("kind", "")) == "blocked":
+					continue
+			first_fraction = fraction
+			var geometry: Array = []
+			for vertex in polygon:
+				geometry.append([vertex.x, vertex.y])
+			best = {"kind": "terminal", "reason": reason, "entity_id": entity_id, "event_id": entity_id, "fraction": fraction, "world_x": pose.x, "y": pose.y, "geometry": geometry}
+	return best
+
 func apply_world_commit(commit: Dictionary) -> String:
 	var result := entity_ledger.apply_commit(commit)
 	if result not in ["applied", "duplicate"]:

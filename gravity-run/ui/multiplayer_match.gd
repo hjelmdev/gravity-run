@@ -7,6 +7,8 @@ const CourseGenerator := preload("res://systems/course_generator.gd")
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const TerminalEventRules := preload("res://systems/multiplayer_terminal_event.gd")
 const CoursePresentationScript := preload("res://systems/race_course_presentation.gd")
+const RaceResults := preload("res://systems/race_results.gd")
+const ResultsView := preload("res://ui/race_results_view.gd")
 const ResultMedalScript := preload("res://ui/result_medal.gd")
 
 const WORLD_HEIGHT := 540.0
@@ -2080,10 +2082,10 @@ func _build_hud() -> void:
 	_results_panel.anchor_top = 0.5
 	_results_panel.anchor_right = 0.5
 	_results_panel.anchor_bottom = 0.5
-	_results_panel.offset_left = -260
-	_results_panel.offset_right = 260
-	_results_panel.offset_top = -205
-	_results_panel.offset_bottom = 205
+	_results_panel.anchor_left = 0.15
+	_results_panel.anchor_right = 0.85
+	_results_panel.anchor_top = 0.08
+	_results_panel.anchor_bottom = 0.92
 	_results_panel.visible = false
 	var panel_style := StyleBoxFlat.new()
 	panel_style.bg_color = Color("18243a")
@@ -2120,6 +2122,7 @@ func _build_hud() -> void:
 	results_layout.add_child(_return_request_notice)
 	_results_list = VBoxContainer.new()
 	_results_list.add_theme_constant_override("separation", 5)
+	_results_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	results_layout.add_child(_results_list)
 	_return_lobby_button = Button.new()
 	_return_lobby_button.text = tr("Return everyone to lobby") if MultiplayerService.is_room_owner() else tr("Ask host to return")
@@ -2224,17 +2227,18 @@ func _show_results() -> void:
 		for player in players:
 			if player is Dictionary:
 				states.append(player.duplicate(true))
-	states.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		var a_finished := str(a.get("state", "")) == "finished"
-		var b_finished := str(b.get("state", "")) == "finished"
-		if a_finished != b_finished:
-			return a_finished
-		if a_finished and int(a.get("finish_tick", -1)) != int(b.get("finish_tick", -1)):
-			return int(a.get("finish_tick", -1)) < int(b.get("finish_tick", -1))
-		if not is_equal_approx(float(a.get("world_x", 0.0)), float(b.get("world_x", 0.0))):
-			return float(a.get("world_x", 0.0)) > float(b.get("world_x", 0.0))
-		return str(a.get("user_id", "")) < str(b.get("user_id", ""))
-	)
+	var frozen_roster: Array = []
+	var terminal_reports: Array = []
+	for index in range(states.size()):
+		var member: Dictionary = states[index].duplicate(true)
+		member["player_slot"] = index + 1
+		frozen_roster.append(member)
+		var report := member.duplicate(true)
+		report["owner_peer_id"] = index + 1
+		report["simulation_tick"] = int(member.get("finish_tick", -1))
+		terminal_reports.append(report)
+	var model := RaceResults.build(frozen_roster, terminal_reports, float(_manifest.get("start_x")), str(result_snapshot.get("finish_reason", _finish_reason)), false)
+	states.assign(model.placements)
 	var winner_name := ""
 	if not states.is_empty():
 		var first_state: Dictionary = states[0]
@@ -2257,41 +2261,11 @@ func _show_results() -> void:
 	_result_label.text = winner_text + "\n" + reason_text
 	_update_return_request_notice()
 	for child in _results_list.get_children():
+		_results_list.remove_child(child)
 		child.queue_free()
-	var previous_place := 0
-	var previous_distance := NAN
-	for index in range(states.size()):
-		var state: Dictionary = states[index]
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 12)
-		var rank := Label.new()
-		rank.custom_minimum_size.x = 48
-		rank.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		var state_distance := float(state.get("world_x", 0.0))
-		var place := index + 1
-		if index > 0 and is_equal_approx(state_distance, previous_distance) and str(state.get("state", "")) != "finished" and str(states[index - 1].get("state", "")) != "finished":
-			place = previous_place
-		rank.text = "#%d" % place
-		if index < 3:
-			var medal := Control.new()
-			medal.set_script(ResultMedalScript)
-			medal.set("place", place)
-			medal.custom_minimum_size = Vector2(38, 34)
-			medal.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			row.add_child(medal)
-		row.add_child(rank)
-		var player_name := Label.new()
-		player_name.text = str(state.get("display_name", tr("Runner")))
-		player_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		row.add_child(player_name)
-		var player_distance := distance_m(float(state.get("world_x", 0.0)), float(_manifest.get("start_x")))
-		var distance_label := Label.new()
-		distance_label.text = "%d m" % player_distance
-		distance_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		row.add_child(distance_label)
-		_results_list.add_child(row)
-		previous_place = place
-		previous_distance = state_distance
+	var view := ResultsView.new()
+	_results_list.add_child(view)
+	view.show_rows(states)
 	MultiplayerDiagnostics.record_post_match_event("results_visible_requested", {"tick": int(_snapshot.get("tick", -1)), "player_count": states.size()})
 	if not _results_frame_event_pending:
 		_results_frame_event_pending = true
