@@ -33,4 +33,4 @@ Godot rapporterade i denna låsta körmiljö att den inte kunde skriva `user://l
 
 ## Återstår att mäta i webbläsare
 
-Profileringskoden är implementerad, men detta är inte belägg för att det upplevda fart–stopp–fart-problemet är löst. Kör värd och två gäster i två rundor på 30 Hz med `v2_profile=1`, spara allas exporter och jämför samma statiska hinder och tunna genom `common_course_flow_trace`. Kontrollera därutöver en senare rörlig entitet; använd en skärminspelning endast som kompletterande belägg. V2-sidan har inte publicerats i den här ändringen.
+Profileringskoden är implementerad, men detta är inte belägg för att det upplevda fart–stopp–fart-problemet är löst. På den publicerade versionen: kör värd och två gäster i två rundor på 30 Hz med `v2_profile=1`, spara allas exporter och jämför samma statiska hinder och tunna genom `common_course_flow_trace`. Kontrollera därutöver en senare rörlig entitet; använd en skärminspelning endast som kompletterande belägg.
