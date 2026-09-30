@@ -237,9 +237,14 @@ func _join_room() -> void:
 	_status.text = tr("Joining room…")
 
 func _toggle_ready() -> void:
+	var cycle := int(_room.get("lobby_cycle", 0))
+	var content_revision := int(_room.get("content_revision", 0))
 	for member_value in _room.get("members", []):
 		if member_value is Dictionary and str(member_value.get("user_id", "")) == MultiplayerV2Service.identity_user_id:
-			MultiplayerV2Service.set_ready(not bool(member_value.get("is_ready", false)))
+			var loadout_hash := str(member_value.get("loadout_hash", ""))
+			var current_loadout_hash := MultiplayerV2Service.local_loadout_hash()
+			var ready_here := bool(member_value.get("is_ready", false)) and int(member_value.get("ready_cycle", 0)) == cycle and int(member_value.get("ready_content_revision", 0)) == content_revision and not loadout_hash.is_empty() and loadout_hash == current_loadout_hash and str(member_value.get("ready_loadout_hash", "")) == loadout_hash
+			MultiplayerV2Service.set_ready(not ready_here)
 			return
 
 func _change_skin(direction: int) -> void:
@@ -263,6 +268,8 @@ func _on_room_changed(room: Dictionary) -> void:
 	_clear_members()
 	var local_ready := false
 	var local_manifest_ready := false
+	var current_cycle := int(room.get("lobby_cycle", 0))
+	var local_loadout_hash := MultiplayerV2Service.local_loadout_hash()
 	var local_manifest_hash := str(room.get("manifest_hash", ""))
 	var connected_peers := MultiplayerV2Service.connected_peer_ids()
 	for member_value in room.get("members", []):
@@ -270,14 +277,19 @@ func _on_room_changed(room: Dictionary) -> void:
 			continue
 		var member: Dictionary = member_value
 		var is_local := str(member.get("user_id", "")) == MultiplayerV2Service.identity_user_id
-		var ready_text := tr("Ready") if bool(member.get("is_ready", false)) else tr("Not ready")
+		var member_loadout_hash := str(member.get("loadout_hash", ""))
+		var is_ready_this_cycle := bool(member.get("is_ready", false)) and int(member.get("ready_cycle", 0)) == current_cycle and int(member.get("ready_content_revision", 0)) == int(room.get("content_revision", 0)) and not member_loadout_hash.is_empty() and str(member.get("ready_loadout_hash", "")) == member_loadout_hash
+		var has_returned := int(member.get("returned_for_cycle", 0)) >= current_cycle
+		var ready_text := tr("Ready") if is_ready_this_cycle else tr("Not ready")
+		if not has_returned:
+			ready_text = tr("Has not returned to this lobby cycle")
 		var is_online := bool(member.get("is_connected", true))
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)
 		row.custom_minimum_size.y = 32.0
 		var ready_indicator := Control.new()
 		ready_indicator.set_script(ReadyIndicatorScript)
-		ready_indicator.set("is_ready", bool(member.get("is_ready", false)))
+		ready_indicator.set("is_ready", is_ready_this_cycle and has_returned)
 		ready_indicator.set("is_online", is_online)
 		ready_indicator.custom_minimum_size = Vector2(22.0, 22.0)
 		ready_indicator.tooltip_text = ready_text if is_online else tr("Offline")
@@ -322,10 +334,16 @@ func _on_room_changed(room: Dictionary) -> void:
 			row.add_child(next_skin)
 		_players.add_child(row)
 		if is_local:
-			local_ready = bool(member.get("is_ready", false))
+			local_ready = is_ready_this_cycle and has_returned and member_loadout_hash == local_loadout_hash
 			local_manifest_ready = str(member.get("loaded_manifest_hash", "")) == local_manifest_hash and not local_manifest_hash.is_empty()
+		elif MultiplayerV2Service.is_room_owner() and int(member.get("player_slot", 1)) > 1:
+			var kick_button := _button(tr("Kick"))
+			kick_button.custom_minimum_size = Vector2(54, 34)
+			kick_button.tooltip_text = tr("Remove this player from the open lobby")
+			kick_button.pressed.connect(MultiplayerV2Service.kick_member.bind(str(member.get("user_id", "")), int(member.get("player_slot", -1))))
+			row.add_child(kick_button)
 	_ready_button.text = tr("Not ready") if local_ready else tr("Ready")
-	_ready_button.disabled = str(room.get("phase", "")) != "OPEN" or not local_manifest_ready or not MultiplayerV2Service.local_peer_mapping_valid()
+	_ready_button.disabled = str(room.get("phase", "")) != "OPEN" or not local_manifest_ready or not MultiplayerV2Service.local_peer_mapping_valid() or not _local_member_returned(room)
 	_start_button.visible = MultiplayerV2Service.is_room_owner()
 	var blockers := MultiplayerV2Service.get_start_blockers()
 	_start_button.disabled = not blockers.is_empty()
@@ -333,6 +351,8 @@ func _on_room_changed(room: Dictionary) -> void:
 	_reconnect_button.visible = not MultiplayerV2Service.is_room_owner() and not _has_host_connection()
 	if not MultiplayerV2Service.local_peer_mapping_valid():
 		_status.text = tr("The assigned player slot does not match this connection. Reconnect before readying.")
+	elif str(room.get("phase", "")) == "FINISHED":
+		_status.text = tr("Waiting for the host to open the next lobby cycle.")
 	elif str(room.get("phase", "")) == "PREPARING_COURSE":
 		_status.text = tr("The race is preparing. Waiting for every player to accept the same round.")
 	elif str(room.get("phase", "")) == "RUNNING":
@@ -340,16 +360,45 @@ func _on_room_changed(room: Dictionary) -> void:
 	elif str(room.get("manifest_hash", "")).is_empty():
 		_status.text = tr("Preparing the shared course…")
 	else:
-		if not _has_host_connection() and not MultiplayerV2Service.is_room_owner():
+		var waiting_for_return := _waiting_member_name(room, "returned_for_cycle", current_cycle)
+		var waiting_for_ready := _waiting_member_name(room, "ready_cycle", current_cycle)
+		if not waiting_for_return.is_empty():
+			_status.text = tr("Waiting for %s to return from results.") % waiting_for_return
+		elif not _has_host_connection() and not MultiplayerV2Service.is_room_owner():
 			_status.text = tr("Waiting for a direct connection to the host…")
 		elif not local_manifest_ready:
 			_status.text = tr("Checking the shared course…")
 		elif not local_ready:
 			_status.text = tr("Mark yourself ready when you are ready.")
+		elif not waiting_for_ready.is_empty():
+			_status.text = tr("Waiting for %s to get ready.") % waiting_for_ready
 		else:
 			_status.text = tr("Room ready. Waiting for players.")
 	if not MultiplayerV2Service.last_start_failure.is_empty():
 		_status.text = tr("Last start attempt failed: %s") % MultiplayerV2Service.last_start_failure
+
+func _local_member_returned(room: Dictionary) -> bool:
+	for member_value in room.get("members", []):
+		if member_value is Dictionary and str(member_value.get("user_id", "")) == MultiplayerV2Service.identity_user_id:
+			return int(member_value.get("returned_for_cycle", 0)) >= int(room.get("lobby_cycle", 0))
+	return false
+
+func _waiting_member_name(room: Dictionary, field: String, required_value: int) -> String:
+	for member_value in room.get("members", []):
+		if not member_value is Dictionary:
+			continue
+		var member: Dictionary = member_value
+		if str(member.get("user_id", "")) == MultiplayerV2Service.identity_user_id:
+			continue
+		var current_value := int(member.get(field, 0))
+		if field == "ready_cycle":
+			var loadout_hash := str(member.get("loadout_hash", ""))
+			if current_value == required_value and int(member.get("ready_content_revision", 0)) == int(room.get("content_revision", 0)) and not loadout_hash.is_empty() and str(member.get("ready_loadout_hash", "")) == loadout_hash:
+				continue
+		elif current_value >= required_value:
+			continue
+		return str(member.get("display_name", "Runner"))
+	return ""
 
 func _clear_members() -> void:
 	if not is_instance_valid(_players):
@@ -403,7 +452,7 @@ func _refresh_controls() -> void:
 	if is_instance_valid(_join_button):
 		_join_button.disabled = _busy or in_room
 	if is_instance_valid(_ready_button):
-		_ready_button.disabled = not in_room or str(_room.get("phase", "")) != "OPEN" or not MultiplayerV2Service.local_peer_mapping_valid()
+		_ready_button.disabled = not in_room or str(_room.get("phase", "")) != "OPEN" or not MultiplayerV2Service.local_peer_mapping_valid() or not _local_member_returned(_room)
 	if is_instance_valid(_start_button):
 		_start_button.visible = in_room and MultiplayerV2Service.is_room_owner()
 		_start_button.disabled = not in_room or not MultiplayerV2Service.get_start_blockers().is_empty()
@@ -434,6 +483,8 @@ func _start_blocker_message(blockers: PackedStringArray) -> String:
 	if blockers.is_empty():
 		return tr("Start the race when everyone is ready.")
 	for blocker in blockers:
+		if str(blocker).begins_with("member_not_returned"):
+			return tr("Every player must return from the previous result screen before the next race.")
 		if str(blocker) == "local_peer_id_mismatch":
 			return tr("The assigned player slot does not match this connection. Reconnect before starting.")
 		if str(blocker).begins_with("transport_missing"):

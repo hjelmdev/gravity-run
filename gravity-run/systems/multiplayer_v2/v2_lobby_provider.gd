@@ -23,16 +23,16 @@ func create_room(display_name: String, is_public: bool, game_version: String, ge
 	_call("create_room", "multiplayer_v2_create_room", {"p_display_name": display_name, "p_is_public": is_public, "p_game_version": game_version, "p_generator_version": generator_version, "p_seed": seed_value, "p_course_length_px": course_length_px}, token, context)
 
 func join_room(room_code: String, display_name: String, game_version: String, generator_version: int, token: String, context: String) -> void:
-	_call("join_room", "multiplayer_v2_join_room", {"p_room_code": room_code, "p_display_name": display_name, "p_game_version": game_version, "p_generator_version": generator_version, "p_v2_protocol_version": 1}, token, context)
+	_call("join_room", "multiplayer_v2_join_room", {"p_room_code": room_code, "p_display_name": display_name, "p_game_version": game_version, "p_generator_version": generator_version, "p_v2_protocol_version": 2}, token, context)
 
 func list_rooms(token: String, context: String) -> void:
 	_call("list_rooms", "multiplayer_v2_list_public_rooms", {}, token, context)
 
-func refresh_room(room_id: String, token: String, context: String) -> void:
-	_call("refresh_room", "multiplayer_v2_refresh_room", {"p_room_id": room_id}, token, context)
+func refresh_room(room_id: String, loadout_hash: String, token: String, context: String) -> void:
+	_call("refresh_room", "multiplayer_v2_refresh_room", {"p_room_id": room_id, "p_loadout_hash": loadout_hash}, token, context)
 
-func set_ready(room_id: String, ready: bool, token: String, context: String) -> void:
-	_call("set_ready", "multiplayer_v2_set_ready", {"p_room_id": room_id, "p_ready": ready}, token, context)
+func set_ready(room_id: String, ready: bool, cycle: int, content_revision: int, loadout_hash: String, token: String, context: String) -> void:
+	_call("set_ready", "multiplayer_v2_set_ready", {"p_room_id": room_id, "p_ready": ready, "p_expected_cycle": cycle, "p_expected_content_revision": content_revision, "p_loadout_hash": loadout_hash}, token, context)
 
 func set_skin(room_id: String, skin_id: int, token: String, context: String) -> void:
 	_call("set_skin", "multiplayer_v2_set_skin", {"p_room_id": room_id, "p_skin_id": skin_id}, token, context)
@@ -53,8 +53,14 @@ func start_prepare(room_id: String, token: String, context: String) -> void:
 func set_phase(room_id: String, phase: String, token: String, context: String) -> void:
 	_call("set_phase", "multiplayer_v2_set_phase", {"p_room_id": room_id, "p_phase": phase}, token, context)
 
-func return_to_lobby(room_id: String, token: String, context: String) -> void:
-	_call("return_to_lobby", "multiplayer_v2_return_to_lobby", {"p_room_id": room_id}, token, context)
+func return_to_lobby(room_id: String, cycle: int, token: String, context: String) -> void:
+	_call("return_to_lobby", "multiplayer_v2_return_to_lobby", {"p_room_id": room_id, "p_expected_cycle": cycle}, token, context)
+
+func return_member(room_id: String, cycle: int, token: String, context: String) -> void:
+	_call("return_member", "multiplayer_v2_return_member", {"p_room_id": room_id, "p_expected_cycle": cycle}, token, context)
+
+func kick_member(room_id: String, user_id: String, slot: int, cycle: int, token: String, context: String) -> void:
+	_call("kick_member", "multiplayer_v2_kick_member", {"p_room_id": room_id, "p_target_user_id": user_id, "p_target_slot": slot, "p_expected_cycle": cycle}, token, context)
 
 func _call(action: String, rpc_name: String, payload: Dictionary, token: String, context: String) -> void:
 	if token.is_empty():
