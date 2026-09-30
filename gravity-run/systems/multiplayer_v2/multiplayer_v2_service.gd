@@ -38,7 +38,7 @@ signal results_received(result: Dictionary)
 signal lobby_returned
 signal membership_removed(reason: String)
 
-const V2_GAME_VERSION := "2.1.20260930.4"
+const V2_GAME_VERSION := "2.1.20260930.5"
 const MAX_PLAYERS := 5
 const POSITION_RATE_HZ := 30
 
@@ -1645,9 +1645,19 @@ static func should_apply_return_to_lobby(current_room: Dictionary, incoming_room
 	return int(incoming_room.get("lobby_generation", -1)) >= int(current_room.get("lobby_generation", -1))
 
 func current_diagnostic_state() -> Dictionary:
+	var direct_peers := Array(connected_peer_ids())
+	var logical_peers: Array[int] = []
+	for member in room_state.get("members", []):
+		logical_peers.append(int(member.get("player_slot", -1)))
+	var pending_direct_peers: Array[int] = []
+	for peer_value in _reconnect_sync_pending.keys():
+		if _is_direct_session_peer(int(peer_value)):
+			pending_direct_peers.append(int(peer_value))
 	return {
 		"room": {"room_id": str(room_state.get("room_id", "")), "room_session_id": str(room_state.get("room_session_id", "")), "phase": str(room_state.get("phase", "")), "lobby_generation": int(room_state.get("lobby_generation", -1)), "manifest_hash": str(room_state.get("manifest_hash", ""))},
-		"active_peers": Array(connected_peer_ids()),
+		"active_peers": direct_peers.duplicate(),
+		"direct_transport_peers": direct_peers,
+		"logical_roster_peers": logical_peers,
 		"round_id": _round_id,
 		"attempt_id": _start_attempt_id,
 		"coordinator_state": _round_coordinator.state,
@@ -1655,7 +1665,7 @@ func current_diagnostic_state() -> Dictionary:
 		"local_peer_id": int(session.get("local_peer_id", -1)),
 		"role": str(session.get("role", "")),
 		"confirmed_peers": _session_confirmed_peers.keys(),
-		"sync_pending_peers": _reconnect_sync_pending.keys(),
+		"sync_pending_peers": pending_direct_peers,
 		"build_id": str(ProjectSettings.get_setting("application/config/version", ""))
 	}
 
@@ -1900,6 +1910,13 @@ func _packet_session_error(packet: Dictionary, allow_next_generation: bool) -> S
 	return ""
 
 func _begin_session_sync(peer_id: int, reason: String) -> void:
+	if not _is_direct_session_peer(peer_id):
+		_reconnect_sync_pending.erase(peer_id)
+		_reconnect_sync_requests.erase(peer_id)
+		_reconnect_sync_since_usec.erase(peer_id)
+		_session_confirmed_peers.erase(peer_id)
+		diagnostics.record_event("logical_peer_session_sync_ignored", {"peer_id": peer_id, "role": str(session.get("role", "")), "reason": reason})
+		return
 	var now := Time.get_ticks_usec()
 	_reconnect_sync_pending[peer_id] = true
 	_reconnect_sync_requests.erase(peer_id)
@@ -1910,14 +1927,26 @@ func _begin_session_sync(peer_id: int, reason: String) -> void:
 	if not is_room_owner() and peer_id == 1:
 		call_deferred("_send_reconnect_sync_request")
 
+func _is_direct_session_peer(peer_id: int) -> bool:
+	var role := str(session.get("role", ""))
+	if role == "host":
+		return peer_id >= 2 and peer_id <= MAX_PLAYERS and _is_roster_peer(peer_id)
+	return role == "guest" and peer_id == 1
+
 func _on_peer_connected(peer_id: int) -> void:
 	diagnostics.increment_metric("peer_connected_events")
+	if not _is_direct_session_peer(peer_id):
+		_begin_session_sync(peer_id, "logical_roster_peer_event")
+		return
 	var is_reconnect := bool(_ever_confirmed_peers.get(peer_id, false)) or _disconnect_since_usec.has(peer_id)
 	_begin_session_sync(peer_id, "reconnect" if is_reconnect else "initial_connection")
 	diagnostics.record_event("peer_transport_connected_unconfirmed", {"peer_id": peer_id, "connection_kind": "reconnect" if is_reconnect else "first_connection", "outage_usec": Time.get_ticks_usec() - int(_disconnect_since_usec.get(peer_id, Time.get_ticks_usec())), "api_peer_id": network_api.get_unique_id() if network_api != null else -1, "session_peer_id": int(session.get("local_peer_id", -1))})
 	transport_state_changed.emit("connecting", "Peer %d transport connected; validating its first session." % peer_id if not is_reconnect else "Peer %d transport reconnected; validating its session." % peer_id)
 
 func _note_session_confirmed(peer_id: int, local_role: String) -> void:
+	if not _is_direct_session_peer(peer_id):
+		diagnostics.record_event("logical_peer_session_confirmation_ignored", {"peer_id": peer_id, "role": local_role})
+		return
 	var was_confirmed := bool(_ever_confirmed_peers.get(peer_id, false))
 	_session_confirmed_peers[peer_id] = true
 	_ever_confirmed_peers[peer_id] = true
@@ -1926,6 +1955,11 @@ func _note_session_confirmed(peer_id: int, local_role: String) -> void:
 
 func _on_peer_disconnected(peer_id: int) -> void:
 	diagnostics.increment_metric("peer_disconnected_events")
+	if not _is_direct_session_peer(peer_id):
+		_reconnect_sync_pending.erase(peer_id)
+		_session_confirmed_peers.erase(peer_id)
+		diagnostics.record_event("logical_peer_disconnect_ignored", {"peer_id": peer_id, "role": str(session.get("role", ""))})
+		return
 	_session_confirmed_peers.erase(peer_id)
 	var now := Time.get_ticks_usec()
 	if not _disconnect_since_usec.has(peer_id):

@@ -43,6 +43,12 @@ func _deliver(from: TestService, to: TestService, sender: int) -> void:
 func _run() -> void:
 	var host := _make_service(true)
 	var guest := _make_service(false)
+	host._on_peer_connected(3)
+	guest._on_peer_connected(3)
+	_check(not host._reconnect_sync_pending.has(3), "host does not validate an unrostered logical peer")
+	_check(not guest._reconnect_sync_pending.has(3), "guest does not start a direct handshake for another guest's logical slot")
+	var topology: Dictionary = guest.current_diagnostic_state()
+	_check(topology.direct_transport_peers == [1] and topology.logical_roster_peers == [1, 2], "diagnostics distinguish a guest's direct host link from its full logical roster")
 	# First connection has no prior outage: it must nevertheless validate.
 	host._on_peer_connected(2)
 	guest._on_peer_connected(1)
