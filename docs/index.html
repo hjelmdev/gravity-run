@@ -178,7 +178,7 @@
 			const pageScope = new URL('./', location.href).href;
 			const gameScopes = ['./game/', './game-v2/', './multiplayer-v2/', './multiplayer-v2/game/'].map((path) => new URL(path, location.href).href);
 			const cachePrefix = 'Gravity Run-sw-cache-';
-			const loadGame = () => { document.getElementById('game-frame').src = './game-v2/index.html?build=v2-30-60-vertical-r2-20260930'; };
+			const loadGame = () => { document.getElementById('game-frame').src = './game-v2/index.html?build=v2-obstacle-flow-20260930'; };
 			navigator.serviceWorker.getRegistrations().then(async (registrations) => {
 				const oldWorkers = registrations.filter((registration) => registration.scope === pageScope || gameScopes.includes(registration.scope));
 				if (oldWorkers.length === 0) {
@@ -191,7 +191,7 @@
 				location.reload();
 			}).catch(() => loadGame());
 		} else {
-			document.getElementById('game-frame').src = './game-v2/index.html?build=v2-30-60-vertical-r2-20260930';
+			document.getElementById('game-frame').src = './game-v2/index.html?build=v2-obstacle-flow-20260930';
 		}
 	})();
 	</script>
