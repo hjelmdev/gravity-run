@@ -21,6 +21,7 @@ var _displayed_pose: Dictionary = {}
 var _recovery_correction := Vector2.ZERO
 var _stale_episode := false
 var _last_transition := "initial"
+var vertical_projector: Callable
 
 func reset() -> void:
 	samples.clear()
@@ -180,7 +181,9 @@ func _sample_raw_at_tick(target_tick: float) -> Dictionary:
 	if not after.is_empty():
 		var span := float(after.simulation_tick) - float(before.simulation_tick)
 		var weight := clampf((target_tick - float(before.simulation_tick)) / maxf(span, 0.001), 0.0, 1.0)
-		var result := after.duplicate(true)
+		# Discrete movement state belongs to the latest sample at or before the
+		# presentation tick. Only continuous pose values are interpolated.
+		var result := before.duplicate(true)
 		for key in ["world_x", "y", "velocity_x", "velocity_y"]:
 			result[key] = lerpf(float(before.get(key, after.get(key, 0.0))), float(after.get(key, 0.0)), weight)
 		result["valid"] = true
@@ -194,10 +197,17 @@ func _sample_raw_at_tick(target_tick: float) -> Dictionary:
 	var is_running := str(before.get("locomotion_state", "running")) == "running"
 	var projected_seconds := minf(elapsed, MAX_EXTRAPOLATION_SECONDS) if is_running else 0.0
 	result["world_x"] = float(before.get("world_x", 0.0)) + maxf(float(before.get("velocity_x", 0.0)), 0.0) * projected_seconds
-	# Hold vertical position outside the sample bracket. Without current support
-	# geometry, vertical extrapolation can move a runner through the floor/ceiling.
-	result["y"] = float(before.get("y", 0.0))
-	result["velocity_y"] = 0.0
+	# Project vertical motion with the same simulation rules as the game. The
+	# caller supplies world support geometry; after the normal freshness window
+	# both axes hold and the track becomes stale as before.
+	if projected_seconds > 0.0 and vertical_projector.is_valid():
+		var projected: Dictionary = vertical_projector.call(before.duplicate(true), float(before.get("simulation_tick", 0.0)) + projected_seconds * 60.0)
+		for key in ["y", "velocity_y", "grounded"]:
+			if projected.has(key):
+				result[key] = projected[key]
+	else:
+		result["y"] = float(before.get("y", 0.0))
+		result["velocity_y"] = 0.0
 	result["valid"] = true
 	result["stale"] = elapsed > MAX_EXTRAPOLATION_SECONDS or not is_running
 	result["render_tick"] = target_tick

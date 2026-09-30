@@ -53,7 +53,7 @@ func render_state(fraction: float) -> Dictionary:
 
 func make_sample() -> Dictionary:
 	sample_sequence += 1
-	return {"round_id": round_id, "owner_peer_id": owner_peer_id, "sample_seq": sample_sequence, "simulation_tick": simulation_tick, "world_x": float(player_state.get("world_x", 0.0)), "y": float(player_state.get("y", 0.0)), "velocity_x": Motion.speed_for_multiplier(run_speed_multiplier) if not bool(player_state.get("blocked", false)) else 0.0, "velocity_y": float(player_state.get("vertical_speed", 0.0)), "gravity_direction": int(player_state.get("gravity_direction", 1)), "locomotion_state": str(player_state.get("state", "running")), "last_input_seq": input_sequence}
+	return {"round_id": round_id, "owner_peer_id": owner_peer_id, "sample_seq": sample_sequence, "simulation_tick": simulation_tick, "world_x": float(player_state.get("world_x", 0.0)), "y": float(player_state.get("y", 0.0)), "velocity_x": Motion.speed_for_multiplier(run_speed_multiplier) if not bool(player_state.get("blocked", false)) else 0.0, "velocity_y": float(player_state.get("vertical_speed", 0.0)), "gravity_direction": int(player_state.get("gravity_direction", 1)), "grounded": bool(player_state.get("grounded", false)), "blocked": bool(player_state.get("blocked", false)), "locomotion_state": str(player_state.get("state", "running")), "last_input_seq": input_sequence}
 
 func set_blocked(blocked: bool) -> void:
 	player_state["blocked"] = blocked

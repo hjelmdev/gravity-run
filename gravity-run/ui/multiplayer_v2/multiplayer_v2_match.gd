@@ -66,6 +66,8 @@ var _local_presentation_pose: Dictionary = {}
 var _countdown_label: Label
 var _countdown_flash_until_usec := -1
 var _trace_frame_elapsed := 0.0
+var _last_remote_watch_usec := -1
+var _last_remote_watch_poses: Dictionary = {}
 var _hud_root: Control
 var _viewport_size := Vector2.ZERO
 
@@ -312,12 +314,16 @@ func _sample_local_pose(target_tick: float) -> Dictionary:
 		result["presentation_tick"] = target_tick
 		return result
 	var result := before.duplicate(true)
-	var ahead_ticks := clampf(target_tick - float(before.get("tick", 0.0)), 0.0, 1.25)
+	var ahead_ticks := maxf(target_tick - float(before.get("tick", 0.0)), 0.0)
 	if ahead_ticks > 0.0 and str(before.get("locomotion_state", "running")) == "running":
 		var ahead_seconds := ahead_ticks / 60.0
 		result["world_x"] = float(before.world_x) + float(before.velocity_x) * ahead_seconds
-		if not bool(before.get("grounded", false)):
-			result["y"] = float(before.y) + float(before.vertical_speed) * ahead_seconds
+		var vertical_sample := before.duplicate(true)
+		vertical_sample["velocity_y"] = float(before.get("vertical_speed", 0.0))
+		var projected := _project_remote_vertical(vertical_sample, float(before.tick) + ahead_ticks)
+		result["y"] = float(projected.get("y", before.y))
+		result["vertical_speed"] = float(projected.get("velocity_y", before.vertical_speed))
+		result["grounded"] = bool(projected.get("grounded", before.get("grounded", false)))
 	result["presentation_tick"] = target_tick
 	return result
 
@@ -337,6 +343,7 @@ func _build_peer_slots() -> void:
 			continue
 		var track = RemoteTrackScript.new()
 		track.target_delay_ticks = 0.0
+		track.vertical_projector = Callable(self, "_project_remote_vertical")
 		track.seed({"round_id": _round_id, "owner_peer_id": peer_id, "world_x": float(_manifest.start_x), "y": float(_manifest.initial_floor_y) - Motion.SIZE.y * 0.5, "velocity_x": Motion.BASE_RUN_SPEED, "velocity_y": 0.0, "gravity_direction": 1, "locomotion_state": "running"})
 		_remote_tracks[peer_id] = track
 		_remote_terminal[peer_id] = "running"
@@ -348,6 +355,11 @@ func _physics_process(delta: float) -> void:
 	if _manifest == null or _runner == null:
 		return
 	if not _round_started:
+		return
+	_advance_local_to_shared_clock(delta)
+
+func _advance_local_to_shared_clock(delta: float) -> void:
+	if not _round_started or _manifest == null or _runner == null:
 		return
 	var clock = MultiplayerV2Service._round_coordinator.clock
 	var target_tick := int(floor(clock.tick_at_monotonic_usec(Time.get_ticks_usec())))
@@ -370,6 +382,11 @@ func _physics_process(delta: float) -> void:
 func _process(delta: float) -> void:
 	if _manifest == null or _runner == null or _course_presentation == null:
 		return
+	# Godot's render callback can run between 60 Hz physics callbacks. Advance
+	# fixed-tick simulation to the shared clock before sampling any player pose,
+	# so the local runner and camera do not hit a short projection ceiling.
+	if _round_started:
+		_advance_local_to_shared_clock(0.0)
 	_render_fraction = Engine.get_physics_interpolation_fraction()
 	var shared_tick := 0.0
 	if _round_started:
@@ -402,7 +419,7 @@ func _process(delta: float) -> void:
 		_update_hud()
 	_sync_player_views()
 	if _result.is_empty():
-		MultiplayerV2Service.diagnostics.record_frame({"phase": "spectator" if _spectator_peer_id > 0 else "running", "tick": _runner.simulation_tick, "world_tick": _world.tick, "x": float(_runner.player_state.get("world_x", 0.0)), "y": float(_runner.player_state.get("y", 0.0)), "camera_left": _camera_left, "camera_delta_x": _camera_left - _previous_camera_left, "render_fraction": _render_fraction, "render_delta_ms": delta * 1000.0, "fps": Engine.get_frames_per_second(), "window_focused": DisplayServer.window_is_focused()})
+		_record_presentation_diagnostic(delta)
 	if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec > int(START_TRACE_SECONDS * 1_000_000.0):
 		MultiplayerV2Service.diagnostics.freeze_round_trace("start_window_complete")
 	queue_redraw()
@@ -639,6 +656,53 @@ func _remote_track_sample(peer_id: int) -> Dictionary:
 	result["sample_age_ticks"] = 0.0 if terminal else maxf(float(result.get("render_tick", 0.0)) - float(result.get("simulation_tick", 0.0)), 0.0)
 	MultiplayerV2Service.diagnostics.metrics["remote_track_%d" % peer_id] = {"valid": bool(result.get("valid", false)), "terminal": terminal, "stale": false if terminal else bool(result.get("stale", true)), "sequence": int(result.get("sample_seq", -1)), "render_tick": float(result.get("render_tick", -1.0)), "sample_age_ticks": float(result.get("sample_age_ticks", -1.0)), "world_x": float(result.get("world_x", 0.0)), "render_mode": str(result.get("render_mode", "unknown")), "correction_magnitude": float(result.get("correction_magnitude", 0.0)), "correction_elapsed_seconds": float(result.get("correction_elapsed_seconds", 0.0))}
 	return result
+
+func _project_remote_vertical(sample: Dictionary, target_tick: float) -> Dictionary:
+	var projected := sample.duplicate(true)
+	if _world == null or str(sample.get("locomotion_state", "running")) != "running" or bool(sample.get("blocked", false)):
+		return projected
+	var start_tick := float(sample.get("simulation_tick", target_tick))
+	var remaining := clampf(target_tick - start_tick, 0.0, 6.0)
+	var state := {"y": float(sample.get("y", 0.0)), "vertical_speed": float(sample.get("velocity_y", 0.0)), "gravity_direction": int(sample.get("gravity_direction", 1)), "grounded": bool(sample.get("grounded", false)), "cooldown": float(sample.get("cooldown", 0.0))}
+	var world_x := float(sample.get("world_x", 0.0))
+	var velocity_x := maxf(float(sample.get("velocity_x", Motion.BASE_RUN_SPEED)), 0.0)
+	while remaining > 0.0001:
+		var step_ticks := minf(remaining, 1.0)
+		var delta := step_ticks / 60.0
+		var previous_state := state.duplicate(true)
+		var previous_x := world_x
+		world_x += velocity_x * delta
+		var floor_surface: Dictionary = _world.surface_at(world_x, false)
+		var ceiling_surface: Dictionary = _world.surface_at(world_x, true)
+		Motion.advance_vertical(state, delta, float(floor_surface.get("y", _manifest.initial_floor_y)), float(ceiling_surface.get("y", _manifest.initial_ceiling_y)), bool(floor_surface.get("supported", false)), bool(ceiling_surface.get("supported", false)))
+		var candidate := {"world_x": world_x, "y": float(state.y), "gravity_direction": int(state.gravity_direction), "state": "running", "blocked": false}
+		var contact: Dictionary = _world.player_contact(candidate)
+		if not contact.is_empty():
+			state = previous_state
+			world_x = previous_x
+			break
+		remaining -= step_ticks
+	projected["y"] = float(state.y)
+	projected["velocity_y"] = float(state.vertical_speed)
+	projected["grounded"] = bool(state.grounded)
+	return projected
+
+func _record_presentation_diagnostic(delta: float) -> void:
+	var now_usec := Time.get_ticks_usec()
+	if _last_remote_watch_usec >= 0 and now_usec - _last_remote_watch_usec < 100_000:
+		return
+	_last_remote_watch_usec = now_usec
+	var peers := {}
+	for peer_id in _remote_tracks:
+		var pose := _remote_track_sample(int(peer_id))
+		peers[str(peer_id)] = {"simulation_tick": float(pose.get("simulation_tick", -1.0)), "render_tick": float(pose.get("render_tick", -1.0)), "world_x": float(pose.get("world_x", 0.0)), "y": float(pose.get("y", 0.0)), "velocity_y": float(pose.get("velocity_y", 0.0)), "gravity_direction": int(pose.get("gravity_direction", 1)), "grounded": bool(pose.get("grounded", false)), "blocked": bool(pose.get("blocked", false)), "locomotion_state": str(pose.get("locomotion_state", "unknown")), "render_mode": str(pose.get("render_mode", "unknown")), "sample_age_ticks": float(pose.get("sample_age_ticks", -1.0))}
+	for peer_key in peers:
+		var current: Dictionary = peers[peer_key]
+		var previous: Dictionary = _last_remote_watch_poses.get(peer_key, {})
+		if not previous.is_empty() and (absf(float(current.y) - float(previous.y)) >= 24.0 or int(current.gravity_direction) != int(previous.gravity_direction) or bool(current.grounded) != bool(previous.grounded) or bool(current.blocked) != bool(previous.blocked) or str(current.locomotion_state) != str(previous.locomotion_state)):
+			MultiplayerV2Service.diagnostics.record_event("remote_presentation_change", {"peer_id": int(peer_key), "presentation_tick": float(current.render_tick), "previous": previous, "current": current})
+	_last_remote_watch_poses = peers.duplicate(true)
+	MultiplayerV2Service.diagnostics.record_frame({"phase": "spectator" if _spectator_peer_id > 0 else "running", "tick": _runner.simulation_tick, "world_tick": _world.tick, "x": float(_runner.player_state.get("world_x", 0.0)), "y": float(_runner.player_state.get("y", 0.0)), "camera_left": _camera_left, "camera_delta_x": _camera_left - _previous_camera_left, "render_fraction": _render_fraction, "render_delta_ms": delta * 1000.0, "fps": Engine.get_frames_per_second(), "window_focused": DisplayServer.window_is_focused(), "presentation_tick": float(MultiplayerV2Service._round_coordinator.clock.tick_at_monotonic_usec(now_usec)) if _round_started else -1.0, "remote": peers})
 
 func _update_hud() -> void:
 	if not _result.is_empty():

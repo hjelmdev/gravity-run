@@ -3,6 +3,7 @@ extends SceneTree
 const Protocol := preload("res://systems/multiplayer_v2/v2_protocol.gd")
 const Clock := preload("res://systems/multiplayer_v2/v2_round_clock.gd")
 const Track := preload("res://systems/multiplayer_v2/v2_remote_track.gd")
+const Motion := preload("res://systems/runner_motion.gd")
 const Ledger := preload("res://systems/multiplayer_v2/v2_world_event_ledger.gd")
 const Rules := preload("res://systems/multiplayer_v2/v2_destructible_rules.gd")
 const Builder := preload("res://systems/course_manifest_builder.gd")
@@ -277,14 +278,24 @@ func _initialize() -> void:
 				var presented: Dictionary = network_track.advance_presentation(frame_scale / float(render_rate))
 				_assert(float(presented.world_x) >= previous_presented_x - 0.001, "jitter/loss at %d Hz packets and %d Hz rendering cannot regress on stale recovery" % [packet_rate, render_rate])
 				previous_presented_x = float(presented.world_x)
+	var vertical_track := Track.new()
+	vertical_track.seed({"world_x": 0.0, "y": 260.0, "velocity_x": 500.0, "velocity_y": 1000.0, "gravity_direction": 1, "grounded": false})
+	vertical_track.vertical_projector = Callable(self, "_project_test_vertical")
+	vertical_track.set_shared_presentation_tick(6.0)
+	var vertical_pose: Dictionary = vertical_track.advance_presentation(1.0 / 60.0)
+	_assert(float(vertical_pose.y) > 260.0 and is_equal_approx(float(vertical_pose.y), 278.0) and bool(vertical_pose.grounded), "vertical prediction advances between samples and snaps to support geometry")
 	var trace_diagnostics = preload("res://systems/multiplayer_v2/v2_diagnostics.gd").new()
 	trace_diagnostics.begin_round_trace("trace-one", 2, "guest", 1_000_000, 500.0)
-	trace_diagnostics.record_round_trace("presented_frames", {"presentation_tick": 1.0})
+	for frame_index in range(960):
+		trace_diagnostics.record_round_trace("presented_frames", {"presentation_tick": float(frame_index) / 240.0, "local_usec": 1_000_000 + frame_index * 4167})
 	trace_diagnostics.freeze_round_trace("test_round_end")
 	trace_diagnostics.begin_round_trace("trace-two", 2, "guest", 2_000_000, 500.0)
 	var exported_traces: Dictionary = trace_diagnostics.export_report()
 	_assert(exported_traces.round_traces.size() == 1 and str(exported_traces.round_traces[0].round_id) == "trace-one", "start diagnostics are frozen by round and do not combine rematches")
-	_assert(exported_traces.active_round_trace.has("start_deadline_usec") and int(exported_traces.active_round_trace.schema_version) == 1, "active start trace records its local start deadline and schema")
+	_assert(exported_traces.active_round_trace.has("start_deadline_usec") and int(exported_traces.active_round_trace.schema_version) == 2, "active start trace records its local start deadline and schema")
+	var saved_start_trace: Dictionary = exported_traces.round_traces[0]
+	_assert(saved_start_trace.presented_frames.size() >= 450 and saved_start_trace.presented_frames.size() <= 600, "240 Hz rendering is explicitly sampled at 120 Hz without truncating the four-second trace")
+	_assert(int(saved_start_trace.decimated.get("presented_frames", 0)) > 0 and int(saved_start_trace.dropped.get("presented_frames", 0)) == 0, "trace reports intentional decimation separately from dropped records")
 	var ledger = Ledger.new()
 	ledger.reset([{"entity_id": "shared", "incarnation": 1, "kind": "barrel", "health": 1}])
 	var request: Dictionary = Rules.make_request("round", "shared", 1, "lethal_contact", 10, 2, 0, "claim-a")
@@ -352,3 +363,12 @@ func _assert(condition: bool, message: String) -> void:
 
 func _sample(tick: int, sequence: int, x: float, state: String = "running", vx: float = 100.0) -> Dictionary:
 	return {"simulation_tick": tick, "sample_seq": sequence, "world_x": x, "y": 10.0, "velocity_x": vx, "velocity_y": 0.0, "locomotion_state": state}
+
+func _project_test_vertical(sample: Dictionary, target_tick: float) -> Dictionary:
+	var state := {"y": float(sample.get("y", 0.0)), "vertical_speed": float(sample.get("velocity_y", 0.0)), "gravity_direction": int(sample.get("gravity_direction", 1)), "grounded": bool(sample.get("grounded", false)), "cooldown": 0.0}
+	var remaining := target_tick - float(sample.get("simulation_tick", 0.0))
+	while remaining > 0.0001:
+		var step_ticks := minf(remaining, 1.0)
+		Motion.advance_vertical(state, step_ticks / 60.0, 300.0, 80.0, true, true)
+		remaining -= step_ticks
+	return {"y": float(state.y), "velocity_y": float(state.vertical_speed), "grounded": bool(state.grounded)}
