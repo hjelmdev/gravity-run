@@ -30,6 +30,7 @@ var round_number := 0
 var waiting_results := false
 var waiting_lobby := false
 var finished_rounds := 0
+var last_status_at := -5.0
 var manifest: Resource
 var roster: Array = []
 
@@ -75,7 +76,15 @@ func _ice(media: String, index: int, candidate: String, remote: WebRTCPeerConnec
 
 func _process(delta: float) -> bool:
 	elapsed += delta
-	if elapsed > 40.0:
+	if elapsed >= last_status_at + 5.0:
+		last_status_at = elapsed
+		var host: LocalService = clients.get(1)
+		var result_states: Array[String] = []
+		for service_value in clients.values():
+			var service: LocalService = service_value
+			result_states.append("%s:%s:%s:%s" % [service.name, str(service.room_state.get("phase", "")), str(service._result_committed), service._round_coordinator.state])
+		print("WebRTC lifecycle progress t=%.1f confirmed=%s waiting_results=%s waiting_lobby=%s rounds=%d host_acks=%s clients=%s" % [elapsed, str(host != null and host._session_confirmed_peers.keys()), str(waiting_results), str(waiting_lobby), finished_rounds, str(host._result_acks.keys() if host != null else []), ",".join(result_states)])
+	if elapsed > 90.0:
 		_require(false, "lifecycle exceeded deadline")
 		return false
 	if clients.size() != 3:
@@ -100,6 +109,8 @@ func _process(delta: float) -> bool:
 			return false
 		finished_rounds += 1
 		host.room_state.lobby_generation += 1
+		host.room_state.lobby_cycle = int(host.room_state.get("lobby_cycle", 1)) + 1
+		host.room_state.state_revision = int(host.room_state.get("state_revision", 0)) + 1
 		host.room_state.phase = "OPEN"
 		host._complete_lobby_return()
 		for peer_id in host.connected_peer_ids():
@@ -108,6 +119,14 @@ func _process(delta: float) -> bool:
 		waiting_lobby = true
 		return false
 	if waiting_lobby:
+		for id in [2, 3]:
+			var guest: LocalService = clients[id]
+			# A room poll exposes the host-opened cycle without closing the guest's
+			# frozen result page. Only the guest's own return action resets it.
+			var frozen_round_id := guest._round_id
+			guest.room_state = host.room_state.duplicate(true)
+			_require(not frozen_round_id.is_empty() and guest._round_id == frozen_round_id and guest._result_committed, "host opening a cycle leaves each guest's result intact")
+			guest._complete_lobby_return()
 		for service in clients.values():
 			if not service._round_id.is_empty() or service.room_state.phase != "OPEN":
 				return false

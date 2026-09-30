@@ -221,7 +221,11 @@ func _create_lobby_services() -> void:
 	_round_coordinator.round_started.connect(_on_round_started)
 	_round_coordinator.round_failed.connect(_on_coordinator_round_failed)
 	_round_coordinator.all_prepare_received.connect(_on_coordinator_prepare_received)
-	InventoryService.state_changed.connect(_on_inventory_state_changed)
+	var inventory_service := get_node_or_null("/root/InventoryService")
+	if inventory_service != null:
+		var inventory_callback := Callable(self, "_on_inventory_state_changed")
+		if not inventory_service.is_connected("state_changed", inventory_callback):
+			inventory_service.connect("state_changed", inventory_callback)
 
 func has_room() -> bool:
 	return not room_state.is_empty()
@@ -270,10 +274,13 @@ func _on_inventory_state_changed(_state: Dictionary, _stale: bool, _error_messag
 		refresh_room()
 
 func local_loadout_hash() -> String:
-	var snapshot: Resource = InventoryService.create_run_loadout_snapshot(PlayerProfile.get_character_stats())
 	var signature := "fallback:10000:10000"
-	if snapshot != null and snapshot.has_method("is_valid") and bool(snapshot.call("is_valid")) and snapshot.has_method("get_loadout_signature"):
-		signature = str(snapshot.call("get_loadout_signature"))
+	var inventory_service := get_node_or_null("/root/InventoryService")
+	var player_profile := get_node_or_null("/root/PlayerProfile")
+	if inventory_service != null and player_profile != null:
+		var snapshot: Resource = inventory_service.call("create_run_loadout_snapshot", player_profile.call("get_character_stats"))
+		if snapshot != null and snapshot.has_method("is_valid") and bool(snapshot.call("is_valid")) and snapshot.has_method("get_loadout_signature"):
+			signature = str(snapshot.call("get_loadout_signature"))
 	var hashing := HashingContext.new()
 	if hashing.start(HashingContext.HASH_SHA256) != OK:
 		return ""

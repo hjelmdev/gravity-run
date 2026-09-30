@@ -57,17 +57,21 @@ func _initialize() -> void:
 	reconnect_peer.close()
 	reconnect_transport.free()
 	var roster_transport = V2Transport.new()
+	var roster_peer := WebRTCMultiplayerPeer.new()
+	_assert(roster_peer.create_server([]) == OK, "roster replay fixture creates a WebRTC server peer")
 	var requested_refresh := [false]
 	var signal_events: Array[String] = []
 	roster_transport.roster_refresh_requested.connect(func(_reason: String) -> void: requested_refresh[0] = true)
 	roster_transport.signal_diagnostic.connect(func(event_name: String, _details: Dictionary) -> void: signal_events.append(event_name))
-	roster_transport.configure({"room_id": "test-room", "owner_user_id": "host", "roster_revision": 2, "members": [{"user_id": "host", "player_slot": 1}]}, "host", null)
+	roster_transport.configure({"room_id": "test-room", "owner_user_id": "host", "roster_revision": 2, "members": [{"user_id": "host", "player_slot": 1}]}, "host", roster_peer)
 	var now_unix := int(Time.get_unix_time_from_system())
-	var unknown_offer := {"network_mode": "v2", "room_id": "test-room", "connection_generation": 1, "attempt_id": "synthetic-attempt", "from_user_id": "guest", "to_user_id": "host", "type": "offer", "body": {"sdp_type": "offer", "sdp": "synthetic"}, "sent_at": now_unix, "expires_at": now_unix + 30}
+	var synthetic_sdp := "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:synthetic\r\na=ice-pwd:syntheticpassword0123456789\r\na=ice-options:trickle\r\na=fingerprint:sha-256 00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00\r\na=setup:actpass\r\na=mid:0\r\na=sctp-port:5000\r\n"
+	var unknown_offer := {"network_mode": "v2", "room_id": "test-room", "connection_generation": 1, "attempt_id": "synthetic-attempt", "from_user_id": "guest", "to_user_id": "host", "type": "offer", "body": {"sdp_type": "offer", "sdp": synthetic_sdp}, "sent_at": now_unix, "expires_at": now_unix + 30}
 	roster_transport.handle_signal(unknown_offer)
 	_assert(requested_refresh[0] and roster_transport._unknown_member_signals.size() == 1, "unknown but room-scoped signaling is briefly queued while refreshing membership")
 	roster_transport.update_room({"room_id": "test-room", "owner_user_id": "host", "roster_revision": 3, "members": [{"user_id": "host", "player_slot": 1}, {"user_id": "guest", "player_slot": 2}]})
 	_assert(roster_transport._unknown_member_signals.is_empty() and "signal_replayed" in signal_events, "queued signaling is replayed only after the sender appears in the backend roster")
+	roster_peer.close()
 	roster_transport.free()
 	var event_unix_before := int(Time.get_unix_time_from_system() * 1_000_000.0)
 	diagnostics.record_event("utc-test")
