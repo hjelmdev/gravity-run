@@ -78,6 +78,7 @@ var _last_remote_watch_usec := -1
 var _last_remote_watch_poses: Dictionary = {}
 var _last_cadence_window_usec := -1
 var _last_process_usec := -1
+var _diagnostics_export_in_progress := false
 var _godot_frame_intervals_ms: Array[float] = []
 var _phase_profile: Dictionary = {}
 var _last_barrel_probe: Dictionary = {}
@@ -1432,6 +1433,9 @@ func _on_lobby_request_finished(action: String, success: bool, message: String) 
 		_result_text.add_text(message)
 
 func _save_diagnostics() -> void:
+	if _diagnostics_export_in_progress:
+		return
+	_diagnostics_export_in_progress = true
 	var report := MultiplayerV2Service.diagnostics.export_report()
 	report["current_state"] = MultiplayerV2Service.current_diagnostic_state()
 	if not _result.is_empty():
@@ -1439,6 +1443,7 @@ func _save_diagnostics() -> void:
 		report["frozen_roster"] = _frozen_roster.duplicate(true)
 		report["frozen_terminal_poses"] = _remote_terminal_poses.duplicate(true)
 	var saved_path := DiagnosticsExport.save_report(report, DiagnosticsExport.make_filename(report, "match"))
+	_diagnostics_export_in_progress = false
 	_export_notice_generation += 1
 	_export_confirmation.text = tr("Diagnostics saved: %s") % saved_path
 	_export_confirmation.visible = true

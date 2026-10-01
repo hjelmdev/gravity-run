@@ -5,11 +5,12 @@ const MAX_EXPORT_BYTES := 8 * 1024 * 1024
 
 static func save_report(report: Dictionary, filename: String) -> String:
 	var export_report := prepare_report(report)
-	var json_text := JSON.stringify(export_report, "\t")
+	var json_text := JSON.stringify(export_report)
 	if OS.has_feature("web"):
-		var encoded := Marshalls.raw_to_base64(json_text.to_utf8_buffer())
-		var safe_filename := filename.replace("'", "")
-		JavaScriptBridge.eval("(()=>{const bytes=Uint8Array.from(atob('%s'),c=>c.charCodeAt(0));const url=URL.createObjectURL(new Blob([bytes],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='%s';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)})()" % [encoded, safe_filename], true)
+		# Transfer bytes directly; do not create/evaluate a multi-megabyte
+		# base64 JavaScript program and decode it character by character.
+		var safe_filename := filename.validate_filename()
+		JavaScriptBridge.download_buffer(json_text.to_utf8_buffer(), safe_filename, "application/json")
 		var suffix := " (trimmed to fit the 8 MiB limit)" if bool(export_report.get("export_truncated", false)) else ""
 		return "Download requested: %s%s" % [safe_filename, suffix]
 	var path := "user://%s" % filename
@@ -22,27 +23,28 @@ static func save_report(report: Dictionary, filename: String) -> String:
 	return "Diagnostics saved locally: %s%s" % [ProjectSettings.globalize_path(path), suffix]
 
 static func prepare_report(report: Dictionary) -> Dictionary:
-	var export_report := report.duplicate(true)
-	var json_text := JSON.stringify(export_report, "\t")
+	# Only replace top-level arrays; the diagnostic snapshot's nested samples
+	# are immutable here. Avoid another deep copy of thousands of flow rows.
+	var export_report := report.duplicate(false)
+	var json_text := JSON.stringify(export_report)
 	var original_bytes := json_text.to_utf8_buffer().size()
-	var removed_frames := 0
+	if original_bytes <= MAX_EXPORT_BYTES:
+		return export_report
+	# Reserve room for truncation metadata. Binary searches serialize at most
+	# O(log N) candidates, rather than once per discarded frame/event.
+	var budget := MAX_EXPORT_BYTES - 2048
+	var removed_frames := _trim_array_to_budget(export_report, "frames", budget)
 	var removed_events := 0
-	var frames: Array = export_report.get("frames", [])
-	var events: Array = export_report.get("events", [])
-	while json_text.to_utf8_buffer().size() > MAX_EXPORT_BYTES and not frames.is_empty():
-		frames.pop_front()
-		removed_frames += 1
-		json_text = JSON.stringify(export_report, "\t")
-	while json_text.to_utf8_buffer().size() > MAX_EXPORT_BYTES and not events.is_empty():
-		events.pop_front()
-		removed_events += 1
-		json_text = JSON.stringify(export_report, "\t")
+	if _report_bytes(export_report) > budget:
+		removed_events = _trim_detail_events_to_budget(export_report, budget)
+	if _report_bytes(export_report) > budget:
+		removed_events += _trim_array_to_budget(export_report, "events", budget)
 	if removed_frames > 0 or removed_events > 0:
 		export_report["export_truncated"] = true
 		export_report["export_original_bytes"] = original_bytes
 		export_report["export_removed_frames"] = removed_frames
 		export_report["export_removed_events"] = removed_events
-		json_text = JSON.stringify(export_report, "\t")
+		json_text = JSON.stringify(export_report)
 	if json_text.to_utf8_buffer().size() > MAX_EXPORT_BYTES:
 		export_report = {
 			"session": report.get("session", {}).duplicate(true),
@@ -53,6 +55,52 @@ static func prepare_report(report: Dictionary) -> Dictionary:
 			"export_error": "Report metadata exceeded the export size limit."
 		}
 	return export_report
+
+static func _report_bytes(report: Dictionary) -> int:
+	return JSON.stringify(report).to_utf8_buffer().size()
+
+static func _trim_array_to_budget(report: Dictionary, key: String, budget: int) -> int:
+	var samples: Array = report.get(key, [])
+	if samples.is_empty() or _report_bytes(report) <= budget:
+		return 0
+	var low := 0
+	var high := samples.size()
+	while low < high:
+		var mid := (low + high) / 2
+		report[key] = samples.slice(mid)
+		if _report_bytes(report) <= budget:
+			high = mid
+		else:
+			low = mid + 1
+	report[key] = samples.slice(low)
+	return low
+
+static func _trim_detail_events_to_budget(report: Dictionary, budget: int) -> int:
+	var samples: Array = report.get("events", [])
+	var detail_count := 0
+	for event in samples:
+		if str(event.get("name", "")) in ["common_course_flow_trace", "barrel_render_trace"]:
+			detail_count += 1
+	var low := 0
+	var high := detail_count
+	while low < high:
+		var mid := (low + high) / 2
+		report["events"] = _without_oldest_details(samples, mid)
+		if _report_bytes(report) <= budget:
+			high = mid
+		else:
+			low = mid + 1
+	report["events"] = _without_oldest_details(samples, low)
+	return low
+
+static func _without_oldest_details(samples: Array, count: int) -> Array:
+	var retained: Array = []
+	for event in samples:
+		if count > 0 and str(event.get("name", "")) in ["common_course_flow_trace", "barrel_render_trace"]:
+			count -= 1
+		else:
+			retained.append(event)
+	return retained
 
 static func make_filename(report: Dictionary, view: String) -> String:
 	var session: Dictionary = report.get("session", {})
