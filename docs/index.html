@@ -176,8 +176,10 @@
 		// Retire old Godot workers and cached game exports before loading the iframe.
 		const makeGameUrl = () => {
 			const gameUrl = new URL('./game-v2/index.html', location.href);
-			gameUrl.searchParams.set('build', 'v2-common-course-flow-377e2a2');
-			if (new URLSearchParams(location.search).get('v2_profile') === '1') gameUrl.searchParams.set('v2_profile', '1');
+			gameUrl.searchParams.set('build', 'v2-render-anchor-flow-experiment-20261001');
+			const params = new URLSearchParams(location.search);
+			if (params.get('v2_profile') === '1') gameUrl.searchParams.set('v2_profile', '1');
+			if (params.get('v2_render_anchor') === '1') gameUrl.searchParams.set('v2_render_anchor', '1');
 			return gameUrl.href;
 		};
 		const loadGame = () => { document.getElementById('game-frame').src = makeGameUrl(); };
