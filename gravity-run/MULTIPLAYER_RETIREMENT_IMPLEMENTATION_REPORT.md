@@ -31,4 +31,12 @@ Webbygget ska komma från införandets källcommit, så befintliga ocommittade s
 
 Neutral bundle publiceras under docs/game/. Root-wrapper och manifest pekar dit. game-v2/index.html, multiplayer-v2/index.html och multiplayer-v2/game/index.html blir kompatibilitetsomdirigeringar som bevarar queryparametrar och fragment. De äldre bundlarna rensas inom respektive kontrollerad katalog. Rootens befintliga städning av äldre service-worker-scope/cache behålls.
 
-Publiceringsresultat och browserverifiering kompletteras efter färdig build.
+Källkod: 60e13a2 på codex/current-prototype. Pages: 4c3dce2 på main. Build-id: multiplayer-public-60e13a2-20261001. Webexporten är byggd från en Git-archive av källcommiten, utan arbetskatalogens ocommittade singleplayer-fixturändringar. Godots installerade exportmallar krävde körning utanför sandlådan. Den unika packfilen anges explicit som mainPack för att undvika gammal packcache.
+
+GitHub Actions `pages build and deployment` avslutades med success för 4c3dce2. Root-adressen laddade i webbläsaren den neutrala game/index.html och rätt build-id. Den publicerade hubben visade en Multiplayer-knapp som öppnade den aktiva lobbyn med Spara diagnostik och den nya versionsetiketten.
+
+Lokalt verifierades alla tre kompatibilitetsomdirigeringar i webbläsaren: game-v2 till game, multiplayer-v2 till root och multiplayer-v2/game till game. Profilparametrar och fragment följde med. Root-wrapperns profil-/renderankare-parametrar kontrollerades i iframe-adressen. Omdirigeringarna städar tidigare Godot-serviceworkers och cache innan navigation.
+
+Lobbyns exportknapp visade Download requested med ett neutralt multiplayer_lobby-filnamn. Browserverktygets download-event hann inte bekräfta en färdig fil; detta räknas därför som verifierad exportbegäran, inte verifierad filhämtning. Exportörens separata storleks-/innehållstest passerade. Ingen manuell multiplayer-runda med flera separata browseridentiteter kördes under införandet.
+
+Azure-pushens första försök avvisades av automatisk godkännandegranskning, med skälet att överföringen av privat källkod till Azure-destinationen behövde uttryckligt användartillstånd. Användaren godkände därefter uttryckligen push till projektets Azure-repo på befintlig branch codex/current-prototype. Befintliga ocommittade singleplayerändringar är kvar separat och ingår inte i införandets commits eller publicerade bundle.
