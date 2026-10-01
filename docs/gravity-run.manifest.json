@@ -9,12 +9,12 @@
 	"orientation": "landscape",
 	"icons": [
 		{
-			"src": "./game-v2/index.icon.png",
+			"src": "./game/index.icon.png",
 			"sizes": "128x128",
 			"type": "image/png"
 		},
 		{
-			"src": "./game-v2/index.apple-touch-icon.png",
+			"src": "./game/index.apple-touch-icon.png",
 			"sizes": "180x180",
 			"type": "image/png"
 		}

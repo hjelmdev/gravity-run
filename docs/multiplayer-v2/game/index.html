@@ -1,11 +1,22 @@
 <!doctype html>
-<html lang="sv">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gravity Run</title>
-<meta http-equiv="refresh" content="0;url=../../">
-<script>location.replace(new URL('../../', location.href).href + location.search + location.hash);</script>
-</head>
-<body><p>Gravity Run har nu en gemensam sida för singleplayer och båda multiplayerlägena. <a href="../../">Öppna Gravity Run</a>.</p></body>
-</html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Gravity Run</title></head>
+<body><p>Opening Gravity Run…</p><noscript><a href="../../game/index.html">Open Gravity Run</a></noscript>
+<script>
+(async () => {
+  const target = new URL("../../game/index.html", location.href);
+  target.search = location.search;
+  target.searchParams.set('build', "multiplayer-public-60e13a2-20261001");
+  target.hash = location.hash;
+  try {
+    if ('serviceWorker' in navigator) {
+      const base = new URL("../../", location.href);
+      const scopes = ['./', './game/', './game-v2/', './multiplayer-v2/', './multiplayer-v2/game/'].map(path => new URL(path, base).href);
+      const workers = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(workers.filter(worker => scopes.includes(worker.scope)).map(worker => worker.unregister()));
+      const names = await caches.keys();
+      await Promise.all(names.filter(name => name.startsWith('Gravity Run-sw-cache-')).map(name => caches.delete(name)));
+    }
+  } catch (error) { console.warn('Old game cache cleanup failed:', error); }
+  location.replace(target.href);
+})();
+</script></body></html>

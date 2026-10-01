@@ -5,7 +5,7 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 	<meta name="theme-color" content="#101827">
 	<link rel="manifest" href="./gravity-run.manifest.json">
-	<link rel="apple-touch-icon" href="./game-v2/index.apple-touch-icon.png">
+	<link rel="apple-touch-icon" href="./game/index.apple-touch-icon.png">
 	<title>Gravity Run</title>
 	<style>
 		html, body {
@@ -175,8 +175,8 @@
 	(() => {
 		// Retire old Godot workers and cached game exports before loading the iframe.
 		const makeGameUrl = () => {
-			const gameUrl = new URL('./game-v2/index.html', location.href);
-			gameUrl.searchParams.set('build', 'v2-shared-frame-pacing-diagnostics-20261001');
+			const gameUrl = new URL('./game/index.html', location.href);
+			gameUrl.searchParams.set('build', 'multiplayer-public-60e13a2-20261001');
 			const params = new URLSearchParams(location.search);
 			if (params.get('v2_profile') === '1') gameUrl.searchParams.set('v2_profile', '1');
 			if (params.get('v2_render_anchor') === '1') gameUrl.searchParams.set('v2_render_anchor', '1');
