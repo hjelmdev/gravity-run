@@ -74,6 +74,10 @@ var _last_accepted_flip_tick_by_peer: Dictionary = {}
 var _round_id := ""
 var _round_roster_revision := 0
 var current_manifest: Resource
+var _random_course_each_round := true
+var _course_seed_room_id := ""
+var _course_seed_lobby_cycle := -1
+var _pending_course_seed := -1
 var _round_coordinator: MultiplayerV2RoundCoordinator = RoundCoordinatorScript.new()
 var _clock_ping_elapsed := 0.0
 var _heartbeat_elapsed := 0.0
@@ -251,6 +255,8 @@ func local_peer_mapping_valid() -> bool:
 	return local_peer_id == network_api.get_unique_id() and (str(session.get("role", "")) == "host" and local_peer_id == 1 and member_slot == 1 or str(session.get("role", "")) == "guest" and local_peer_id == member_slot and member_slot >= 2 and member_slot <= MAX_PLAYERS)
 
 func create_room(display_name: String, is_public: bool = true, seed_value: int = -1, course_length_px: int = 45000) -> void:
+	if not has_room():
+		_random_course_each_round = seed_value < 1
 	_begin_identity_action("create_room", {"display_name": display_name, "is_public": is_public, "seed": seed_value if seed_value >= 1 else randi_range(1, 2_147_483_647), "course_length_px": course_length_px})
 
 func join_room(room_code: String, display_name: String) -> void:
@@ -350,6 +356,8 @@ func get_start_blockers() -> PackedStringArray:
 		blockers.append("room_not_open")
 	if str(room_state.get("manifest_hash", "")).is_empty() or current_manifest == null:
 		blockers.append("manifest_missing")
+	elif str(current_manifest.manifest_hash) != str(room_state.get("manifest_hash", "")) or _manifest_action_pending == "set_manifest" or (_random_course_each_round and _course_seed_room_id == str(room_state.get("room_id", "")) and int(room_state.get("lobby_cycle", 1)) > _course_seed_lobby_cycle):
+		blockers.append("course_update_pending")
 	var members: Array = room_state.get("members", [])
 	if members.is_empty() or members.size() > MAX_PLAYERS:
 		blockers.append("player_count")
@@ -1318,7 +1326,7 @@ func _on_round_started(round_id: String, descriptor: Dictionary) -> void:
 	_round_roster_revision = int(descriptor.get("roster_revision", 0))
 	_round_coordinator.clock.commit_start(Time.get_ticks_usec())
 	_set_backend_phase("RUNNING")
-	diagnostics.record_event("round_started", {"round_id": round_id, "tick": 0})
+	diagnostics.record_event("round_started", {"round_id": round_id, "tick": 0, "seed": int(descriptor.get("seed", room_state.get("seed", 1))), "manifest_hash": str(descriptor.get("manifest_hash", room_state.get("manifest_hash", "")))})
 	round_started.emit(round_id, descriptor.duplicate(true))
 	begin_round(round_id, _round_roster_revision)
 	if world_simulation != null and current_manifest != null:
@@ -1843,10 +1851,34 @@ func _decide_world_interaction(owner_peer_id: int, request: Dictionary) -> void:
 	if owner_peer_id != 1:
 		send_control(owner_peer_id, "WORLD_INTERACTION_RESULT", response)
 
+func _seed_for_lobby_manifest() -> int:
+	var room_seed := int(room_state.get("seed", 1))
+	if not is_room_owner() or str(room_state.get("phase", "")) != "OPEN":
+		return room_seed
+	diagnostics.session["course_seed_mode"] = "random_each_round" if _random_course_each_round else "fixed"
+	var room_id := str(room_state.get("room_id", ""))
+	var cycle := int(room_state.get("lobby_cycle", 1))
+	if _course_seed_room_id != room_id:
+		_course_seed_room_id = room_id
+		_course_seed_lobby_cycle = cycle
+		_pending_course_seed = -1
+	elif cycle > _course_seed_lobby_cycle:
+		_course_seed_lobby_cycle = cycle
+		if _random_course_each_round:
+			# Choose once per new lobby cycle, excluding the previous seed.
+			# Retain it while publishing/retrying; polling must not reroll it.
+			_pending_course_seed = randi_range(1, 2_147_483_646)
+			if _pending_course_seed >= room_seed:
+				_pending_course_seed += 1
+			diagnostics.record_event("course_seed_rotated", {"lobby_cycle": cycle, "previous_seed": room_seed, "seed": _pending_course_seed})
+	if _pending_course_seed == room_seed:
+		_pending_course_seed = -1
+	return _pending_course_seed if _pending_course_seed >= 1 else room_seed
+
 func _ensure_manifest() -> void:
 	if room_state.is_empty():
 		return
-	var expected_seed := int(room_state.get("seed", 1))
+	var expected_seed := _seed_for_lobby_manifest()
 	var expected_length := int(room_state.get("course_length_px", 45000))
 	var expected_generator := int(room_state.get("generator_version", CourseGeneratorScript.GENERATOR_VERSION))
 	if current_manifest == null or current_manifest.seed_value != expected_seed or current_manifest.course_length_px != expected_length or current_manifest.generator_version != expected_generator:
@@ -1865,13 +1897,17 @@ func _ensure_manifest() -> void:
 		var context := "manifest:%d" % Time.get_ticks_msec()
 		_pending_lobby_context = context
 		_lobby_contexts[context] = "set_manifest"
-		_lobby_provider.set_manifest(str(room_state.room_id), int(room_state.seed), int(room_state.course_length_px), local_hash, _identity_adapter.token(), context)
+		room_changed.emit(room_state.duplicate(true))
+		_lobby_provider.set_manifest(str(room_state.room_id), expected_seed, expected_length, local_hash, _identity_adapter.token(), context)
 	elif expected_hash.is_empty():
 		# A guest can join before the owner has published the room manifest. This
 		# is a normal startup state, not a hash mismatch; a later room refresh
 		# will retry once the owner's hash is available.
 		return
 	elif expected_hash == local_hash:
+		var confirmed_course := {"seed": expected_seed, "generator_version": expected_generator, "course_length_px": expected_length, "manifest_hash": local_hash}
+		session.merge(confirmed_course, true)
+		diagnostics.session.merge(confirmed_course, true)
 		if str(_member_for_user(identity_user_id).get("loaded_manifest_hash", "")) != expected_hash:
 			if _manifest_action_pending == "ack_manifest":
 				return

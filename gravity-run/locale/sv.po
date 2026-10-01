@@ -1202,6 +1202,12 @@ msgstr "Version %s"
 msgid "Round aborted"
 msgstr "Rundan avbröts"
 
+msgid "Course seed (blank for random)"
+msgstr "Ban-seed (tomt för slumpmässig bana)"
+
+msgid "Leave blank for a new course each round. Enter a seed to replay the same course."
+msgstr "Lämna tomt för en ny bana varje runda. Ange ett seed för att återspela samma bana."
+
 msgid "Only the host can start the round."
 msgstr "Bara värden kan starta rundan."
 

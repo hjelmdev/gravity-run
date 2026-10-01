@@ -126,6 +126,7 @@ func _build_ui() -> void:
 	_create_view.add_child(_public_toggle)
 	_seed_edit = LineEdit.new()
 	_seed_edit.placeholder_text = tr("Course seed (blank for random)")
+	_seed_edit.tooltip_text = tr("Leave blank for a new course each round. Enter a seed to replay the same course.")
 	_seed_edit.max_length = 10
 	_create_view.add_child(_seed_edit)
 	_create_button = _button(tr("Create room"))
@@ -452,7 +453,7 @@ func _refresh_controls() -> void:
 	if is_instance_valid(_join_button):
 		_join_button.disabled = _busy or in_room
 	if is_instance_valid(_ready_button):
-		_ready_button.disabled = not in_room or str(_room.get("phase", "")) != "OPEN" or not MultiplayerV2Service.local_peer_mapping_valid() or not _local_member_returned(_room)
+		_ready_button.disabled = not in_room or str(_room.get("phase", "")) != "OPEN" or not MultiplayerV2Service.local_peer_mapping_valid() or not _local_member_returned(_room) or MultiplayerV2Service.current_manifest == null or str(MultiplayerV2Service.current_manifest.manifest_hash) != str(_room.get("manifest_hash", ""))
 	if is_instance_valid(_start_button):
 		_start_button.visible = in_room and MultiplayerV2Service.is_room_owner()
 		_start_button.disabled = not in_room or not MultiplayerV2Service.get_start_blockers().is_empty()
