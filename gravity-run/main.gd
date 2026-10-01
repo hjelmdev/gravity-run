@@ -73,6 +73,7 @@ var _render_diagnostic_tick := 0
 var _render_callback_index := 0
 var _render_callback_begin_usec := -1
 var _render_presentation_sample_usec := -1
+var _render_pose_sampled_usec := -1
 var _render_presentation_ready_usec := -1
 var _render_interpolation_fraction := 0.0
 const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_export.gd")
@@ -210,11 +211,17 @@ func _unhandled_input(event: InputEvent) -> void:
 func _process(delta: float) -> void:
 	if not is_instance_valid(player):
 		return
+	var callback_started_usec := Time.get_ticks_usec()
+	if render_diagnostics_enabled and not _render_diagnostic_frames.is_empty():
+		var previous_frame: Dictionary = _render_diagnostic_frames.back()
+		previous_frame["next_callback_begin_usec"] = callback_started_usec
+		_render_diagnostic_frames[_render_diagnostic_frames.size() - 1] = previous_frame
 	_render_callback_index += 1
-	_render_callback_begin_usec = Time.get_ticks_usec()
+	_render_callback_begin_usec = callback_started_usec
 	_render_interpolation_fraction = Engine.get_physics_interpolation_fraction()
 	_render_presentation_sample_usec = Time.get_ticks_usec()
 	_render_player_position = _presentation.sample(_render_interpolation_fraction)
+	_render_pose_sampled_usec = Time.get_ticks_usec() if render_diagnostics_enabled else -1
 	_render_course_distance = _render_player_position.x - PLAYER_X
 	var sprite := player.get_node("AnimatedSprite2D") as AnimatedSprite2D
 	sprite.position = _render_player_position - player.position + Vector2(0.0, -float(player.call("get_gravity_direction")))
@@ -230,24 +237,79 @@ func set_render_diagnostics_enabled(enabled: bool) -> void:
 		_render_diagnostic_frames.clear()
 
 func _record_render_diagnostic(delta: float) -> void:
+	var capture_started_usec := Time.get_ticks_usec()
 	var reference: Dictionary = {}
 	var left := float(camera.get("left"))
+	var reference_nodes: Array[Dictionary] = []
+	var static_hazard_recorded := false
+	var barrel_recorded := false
 	for obstacle in obstacles:
-		if not is_instance_valid(obstacle) or obstacle.get_script() == null:
+		if not is_instance_valid(obstacle) or obstacle.is_queued_for_deletion() or obstacle.get_script() == null:
 			continue
-		if str(obstacle.get_script().resource_path).ends_with("barrel.gd"):
+		if obstacle.has_method("is_destroying_now") and bool(obstacle.call("is_destroying_now")):
 			continue
-		if obstacle.position.x >= left and obstacle.position.x <= left + screen_width:
-			reference = {"id": obstacle.get_instance_id(), "world_x": obstacle.position.x, "screen_x": (obstacle.position.x - left) * camera.zoom.x}
+		var is_barrel := obstacle.is_in_group("barrels")
+		if (is_barrel and barrel_recorded) or (not is_barrel and static_hazard_recorded):
+			continue
+		if obstacle.position.x < left - 100.0 or obstacle.position.x > left + screen_width + 100.0:
+			continue
+		var canvas_transform: Transform2D = obstacle.get_global_transform_with_canvas()
+		var diagnostic_id := str(obstacle.get_meta("render_diagnostic_id", ""))
+		if diagnostic_id.is_empty():
+			var script_path := str(obstacle.get_script().resource_path)
+			diagnostic_id = "%s@%.1f,%.1f" % [script_path, obstacle.position.x, obstacle.position.y]
+			obstacle.set_meta("render_diagnostic_id", diagnostic_id)
+		var node_record := {"kind": "barrel" if is_barrel else "static_hazard", "id": diagnostic_id, "instance_id": obstacle.get_instance_id(), "world_position": _render_diagnostic_vector(obstacle.global_position), "canvas_transform": _render_diagnostic_transform(canvas_transform), "canvas_origin": _render_diagnostic_vector(canvas_transform.origin)}
+		if is_barrel:
+			var render_fraction := Engine.get_physics_interpolation_fraction()
+			var rendered_position: Vector2 = obstacle.get("_previous_position").lerp(obstacle.position, render_fraction)
+			var previous_rotation := float(obstacle.get("_previous_rotation"))
+			var rotation_delta := lerp_angle(previous_rotation, obstacle.rotation, render_fraction) - obstacle.rotation
+			var draw_offset := (rendered_position - obstacle.position).rotated(-obstacle.rotation)
+			var barrel_size: Vector2 = obstacle.get("size")
+			var barrel_radius := HAZARD_RULES_SCRIPT.barrel_radius(barrel_size.x, barrel_size.y)
+			var barrel_center_y := barrel_radius if bool(obstacle.get("from_ceiling")) else -barrel_radius
+			var rendered_center := canvas_transform * (draw_offset + Vector2(0.0, barrel_center_y).rotated(rotation_delta))
+			node_record["render_fraction"] = render_fraction
+			node_record["rendered_world_position"] = _render_diagnostic_vector(rendered_position)
+			node_record["rendered_canvas_center"] = _render_diagnostic_vector(rendered_center)
+			node_record["rendered_rotation"] = lerp_angle(previous_rotation, obstacle.rotation, render_fraction)
+			barrel_recorded = true
+		else:
+			var camera_top := camera.global_position.y - screen_height * 0.5
+			node_record["expected_canvas_origin"] = _render_diagnostic_vector(Vector2((obstacle.position.x - left) * camera.zoom.x, (obstacle.position.y - camera_top) * camera.zoom.y))
+			static_hazard_recorded = true
+			reference = {"id": diagnostic_id, "instance_id": obstacle.get_instance_id(), "world_x": obstacle.position.x, "world_y": obstacle.position.y, "screen_x": (obstacle.position.x - left) * camera.zoom.x, "canvas_origin": node_record.canvas_origin}
+		reference_nodes.append(node_record)
+	var viewport_canvas_transform: Transform2D = get_viewport().get_canvas_transform()
+	var track_world_x := left + PLAYER_X
+	var track_floor_y := _floor_surface_y(track_world_x)
+	var floor_slope: Dictionary = {}
+	for terrain in slopes:
+		if not is_instance_valid(terrain) or bool(terrain.call("is_ceiling_slope")):
+			continue
+		var slope_start := float(terrain.call("get_start_x"))
+		var slope_end := float(terrain.call("get_end_x"))
+		if track_world_x >= slope_start and track_world_x <= slope_end:
+			floor_slope = {"id": "%s@%.1f" % [str(terrain.get_script().resource_path), slope_start], "start_x": slope_start, "end_x": slope_end, "canvas_transform": _render_diagnostic_transform(terrain.get_global_transform_with_canvas())}
 			break
+	var player_canvas_transform: Transform2D = player.get_node("AnimatedSprite2D").get_global_transform_with_canvas()
 	if _render_diagnostic_frames.size() >= 4096:
 		_render_diagnostic_frames.pop_front()
 	var captured_at_usec := Time.get_ticks_usec()
-	_render_diagnostic_frames.append({"at_usec": captured_at_usec, "render_callback_index": _render_callback_index, "render_callback_begin_usec": _render_callback_begin_usec, "presentation_sample_usec": _render_presentation_sample_usec, "presentation_ready_usec": _render_presentation_ready_usec, "sample_to_ready_usec": _render_presentation_ready_usec - _render_presentation_sample_usec, "ready_to_capture_usec": captured_at_usec - _render_presentation_ready_usec, "phase": "terminal" if game_over else "running", "render_delta_ms": delta * 1000.0, "tick": _render_diagnostic_tick, "fraction": _render_interpolation_fraction, "previous_x": _presentation.previous.x, "current_x": _presentation.current.x, "render_x": _render_player_position.x, "camera_left": left, "render_course_distance": _render_course_distance, "speed": _run_speed(), "blocked": run_blocked, "reference": reference, "fps": Engine.get_frames_per_second()})
+	var frame_record := {"at_usec": captured_at_usec, "render_callback_index": _render_callback_index, "render_callback_begin_usec": _render_callback_begin_usec, "presentation_sample_usec": _render_presentation_sample_usec, "pose_sampled_usec": _render_pose_sampled_usec, "presentation_ready_usec": _render_presentation_ready_usec, "sample_to_ready_usec": _render_presentation_ready_usec - _render_presentation_sample_usec, "ready_to_capture_usec": captured_at_usec - _render_presentation_ready_usec, "diagnostic_capture_usec": 0, "phase": "terminal" if game_over else "running", "render_delta_ms": delta * 1000.0, "tick": _render_diagnostic_tick, "fraction": _render_interpolation_fraction, "previous_x": _presentation.previous.x, "current_x": _presentation.current.x, "previous_y": _presentation.previous.y, "current_y": _presentation.current.y, "render_x": _render_player_position.x, "render_y": _render_player_position.y, "player_world_position": _render_diagnostic_vector(player.global_position), "gravity_direction": int(player.call("get_gravity_direction")), "grounded": bool(player.get("grounded")), "vertical_speed": float(player.get("vertical_speed")), "camera_left": left, "camera_global_position": _render_diagnostic_vector(camera.global_position), "camera_canvas_transform": _render_diagnostic_transform(viewport_canvas_transform), "render_course_distance": _render_course_distance, "speed": _run_speed(), "player_speed_multiplier": float(player.call("get_speed_multiplier")), "equipment_speed_multiplier": _equipment_speed_multiplier(), "blocked": run_blocked, "reference": reference, "reference_nodes": reference_nodes, "player_canvas_position": _render_diagnostic_vector(player_canvas_transform.origin), "track_surface": {"world_position": _render_diagnostic_vector(Vector2(track_world_x, track_floor_y)), "canvas_position": _render_diagnostic_vector(viewport_canvas_transform * Vector2(track_world_x, track_floor_y)), "floor_y": track_floor_y, "ceiling_y": _ceiling_surface_y(track_world_x), "slope": floor_slope}, "fps": Engine.get_frames_per_second()}
+	_render_diagnostic_frames.append(frame_record)
+	_render_diagnostic_frames[_render_diagnostic_frames.size() - 1]["diagnostic_capture_usec"] = Time.get_ticks_usec() - capture_started_usec
 
 func save_render_diagnostics() -> String:
 	var report := {"session": {"network_mode": "singleplayer", "build_id": str(ProjectSettings.get_setting("application/config/version", "")), "godot_version": Engine.get_version_info(), "seed": _active_seed, "viewport": [screen_width, screen_height], "zoom": camera.zoom.x}, "frames": _render_diagnostic_frames.duplicate(true), "exported_at_unix": Time.get_unix_time_from_system()}
 	return DiagnosticsExport.save_report(report, "singleplayer_smoothness_%d.json" % Time.get_unix_time_from_system())
+
+func _render_diagnostic_vector(value: Vector2) -> Array[float]:
+	return [value.x, value.y]
+
+func _render_diagnostic_transform(value: Transform2D) -> Dictionary:
+	return {"x": _render_diagnostic_vector(value.x), "y": _render_diagnostic_vector(value.y), "origin": _render_diagnostic_vector(value.origin)}
 
 func _physics_process(delta: float) -> void:
 	if game_over:
@@ -788,9 +850,21 @@ func _player_hits_obstacle(obstacle: Node2D) -> bool:
 	return player_rect.intersects(obstacle_rect)
 
 func _draw() -> void:
+	var draw_started_usec := Time.get_ticks_usec() if render_diagnostics_enabled else -1
 	_draw_background()
+	var background_draw_done_usec := Time.get_ticks_usec() if render_diagnostics_enabled else -1
+	var track_draw_started_usec := background_draw_done_usec
 	_draw_track()
+	var track_draw_done_usec := Time.get_ticks_usec() if render_diagnostics_enabled else -1
 	_draw_seed_finish_markers()
+	if render_diagnostics_enabled and not _render_diagnostic_frames.is_empty():
+		var frame_record: Dictionary = _render_diagnostic_frames.back()
+		if int(frame_record.get("render_callback_index", -1)) == _render_callback_index:
+			frame_record["background_draw_usec"] = background_draw_done_usec - draw_started_usec
+			frame_record["track_draw_usec"] = track_draw_done_usec - track_draw_started_usec
+			frame_record["canvas_submission_usec"] = Time.get_ticks_usec() - draw_started_usec
+			frame_record["canvas_submission_end_usec"] = Time.get_ticks_usec()
+			_render_diagnostic_frames[_render_diagnostic_frames.size() - 1] = frame_record
 
 func _on_seed_leaderboard_received(version: int, seed: int, rows: Array, _error_message: String) -> void:
 	if version != _active_seed_version or seed != _active_seed:
