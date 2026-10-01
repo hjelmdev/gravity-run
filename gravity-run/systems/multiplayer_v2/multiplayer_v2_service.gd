@@ -310,11 +310,11 @@ func request_start() -> void:
 	diagnostics.session["attempt_id"] = _start_attempt_id
 	diagnostics.record_event("start_attempt_requested", {"attempt_id": _start_attempt_id, "phase": str(room_state.get("phase", "")), "generation": int(room_state.get("lobby_generation", -1)), "room_id": str(room_state.get("room_id", ""))})
 	if not is_room_owner():
-		_fail_start_attempt("not_host", tr("Only the V2 host can start the round."), false)
+		_fail_start_attempt("not_host", tr("Only the host can start the round."), false)
 		return
 	var blockers := get_start_blockers()
 	if not blockers.is_empty():
-		_fail_start_attempt("blocked:" + ",".join(blockers), tr("V2 cannot start yet: %s") % ", ".join(blockers), false)
+		_fail_start_attempt("blocked:" + ",".join(blockers), tr("Multiplayer cannot start yet: %s") % ", ".join(blockers), false)
 		return
 	var local_hash := local_loadout_hash()
 	if local_hash.is_empty() or str(_member_for_user(identity_user_id).get("loadout_hash", "")) != local_hash:
@@ -386,7 +386,7 @@ func begin_peer_connection() -> void:
 	if not _active:
 		var error := open_host(room_state, 4) if is_room_owner() else configure_client_peer(int(_member_for_user(identity_user_id).get("player_slot", 1)))
 		if error != OK:
-			lobby_request_finished.emit("connect", false, "Could not initialize V2 WebRTC (code %d)." % error)
+			lobby_request_finished.emit("connect", false, tr("Could not initialize WebRTC (code %d).") % error)
 			return
 		if not is_room_owner():
 			activate_client_session(room_state)
@@ -402,7 +402,7 @@ func begin_peer_connection() -> void:
 
 func _begin_identity_action(action: String, arguments: Dictionary) -> void:
 	if action in ["create_room", "join_room"] and has_room():
-		lobby_request_finished.emit(action, false, tr("Leave the current V2 room first."))
+		lobby_request_finished.emit(action, false, tr("Leave the current room first."))
 		return
 	_pending_identity_action = action
 	_pending_identity_arguments = arguments.duplicate(true)
@@ -506,7 +506,7 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 	if action == "prepare_round" and success and data is Dictionary:
 		var next_room: Dictionary = data.get("room", data)
 		if not _accept_room_snapshot(next_room, action, context):
-			_fail_start_attempt("stale_prepare_response", "V2 ignored an outdated prepare response. The room has a newer state.", false)
+			_fail_start_attempt("stale_prepare_response", tr("Multiplayer ignored an outdated prepare response. The room has a newer state."), false)
 			return
 		room_state = next_room.duplicate(true)
 		_record_room_snapshot_applied(action, local_before_response, response_room)
@@ -524,14 +524,14 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 		var descriptor_error := _validate_round_descriptor(descriptor)
 		if not descriptor_error.is_empty():
 			diagnostics.record_event("host_round_descriptor_rejected", {"round_id": _round_id, "reason": descriptor_error, "generation": int(descriptor.lobby_generation), "manifest_hash": str(descriptor.manifest_hash)})
-			_fail_start_attempt("round_descriptor:%s" % descriptor_error, "V2 could not freeze the round roster: %s" % descriptor_error)
+			_fail_start_attempt("round_descriptor:%s" % descriptor_error, tr("Multiplayer could not freeze the round roster: %s") % descriptor_error)
 			call_deferred("return_to_lobby")
 			return
 		_round_roster_revision = int(descriptor.roster_revision)
 		diagnostics.record_event("host_prepare_coordinator_call", {"round_id": _round_id, "state_before": _round_coordinator.state, "peer_array_typed": peers.is_typed(), "peer_ids": peers.duplicate()})
 		if not _round_coordinator.prepare_as_host(descriptor, peers, Time.get_ticks_usec()):
 			diagnostics.record_event("host_prepare_coordinator_rejected", {"round_id": _round_id, "state": _round_coordinator.state, "peer_array_typed": peers.is_typed(), "peer_ids": peers.duplicate()})
-			_fail_start_attempt("coordinator:%s" % str(_round_coordinator.state), "V2 could not start the round preparation.")
+			_fail_start_attempt("coordinator:%s" % str(_round_coordinator.state), tr("Multiplayer could not start the round preparation."))
 			call_deferred("return_to_lobby")
 			return
 		diagnostics.record_event("backend_prepare_accepted", {"attempt_id": _start_attempt_id, "round_id": _round_id, "phase": str(room_state.get("phase", "")), "generation": int(descriptor.lobby_generation), "room_session_id": str(descriptor.room_session_id), "manifest_hash": str(descriptor.manifest_hash), "peer_ids": Array(peers)})
@@ -595,7 +595,7 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 			room_state.clear()
 			_active = false
 			room_changed.emit({})
-			membership_removed.emit(tr("The host removed you from the V2 lobby."))
+			membership_removed.emit(tr("The host removed you from the multiplayer lobby."))
 		var display_message := message
 		if action == "prepare_round" and message.contains("room_not_preparable"):
 			display_message = tr("The room changed before the race could start. Lobby state refreshed.")
@@ -701,7 +701,7 @@ func open_host(session_descriptor: Dictionary, max_clients: int = 4) -> Error:
 	var error: Error = webrtc_peer.create_server([])
 	if error != OK:
 		webrtc_peer = null
-		transport_state_changed.emit("failed", "Godot could not create the V2 WebRTC server (code %d)." % error)
+		transport_state_changed.emit("failed", tr("Godot could not create the WebRTC server (code %d).") % error)
 		return error
 	network_api.multiplayer_peer = webrtc_peer
 	session = session_descriptor.duplicate(true)
@@ -715,12 +715,15 @@ func open_host(session_descriptor: Dictionary, max_clients: int = 4) -> Error:
 	_round_id = ""
 	_active = true
 	_peer_mapping_verified_sample = false
+	_sample_period = 1.0 / POSITION_RATE_HZ
+	_sample_accumulator = 0.0
+	session["position_rate_hz"] = POSITION_RATE_HZ
 	diagnostics.begin_session(session)
 	if not _validate_local_peer_mapping("host_session_activated"):
 		_active = false
 		transport_state_changed.emit("failed", "Host peer ID does not match its room slot; rejoin before starting.")
 		return FAILED
-	transport_state_changed.emit("waiting", "V2 host is waiting for peer links.")
+	transport_state_changed.emit("waiting", tr("Host is waiting for peer links."))
 	session_changed.emit(session.duplicate(true))
 	return OK
 
@@ -761,6 +764,9 @@ func activate_client_session(session_descriptor: Dictionary) -> void:
 	session["godot_version"] = Engine.get_version_info()
 	_active = true
 	_peer_mapping_verified_sample = false
+	_sample_period = 1.0 / POSITION_RATE_HZ
+	_sample_accumulator = 0.0
+	session["position_rate_hz"] = POSITION_RATE_HZ
 	diagnostics.begin_session(session)
 	if not _validate_local_peer_mapping("session_activated"):
 		_active = false
@@ -768,12 +774,6 @@ func activate_client_session(session_descriptor: Dictionary) -> void:
 		return
 	_round_id = str(session.get("round_id", ""))
 	session_changed.emit(session.duplicate(true))
-
-func set_snapshot_rate(hz: int) -> void:
-	if hz not in [30, 60]:
-		return
-	_sample_period = 1.0 / float(hz)
-	diagnostics.session["position_rate_hz"] = hz
 
 func get_snapshot_rate() -> int:
 	return roundi(1.0 / _sample_period)
@@ -1223,7 +1223,7 @@ func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 				_pending_round_failure.clear()
 				_pending_round_failure_since_usec = -1
 		"KICKED":
-			var reason := tr("The host removed you from the V2 lobby.")
+			var reason := tr("The host removed you from the multiplayer lobby.")
 			_signaling_transport.disconnect_room()
 			_webrtc_transport.close_all()
 			room_state.clear()
@@ -1584,7 +1584,7 @@ func _store_world_hash(peer_id: int, report: Dictionary) -> void:
 			diagnostics.record_event("world_hash_mismatch", {"peer_id": int(other_peer), "tick": tick_value, "revision": int(host_report.world_revision), "host_hash": str(host_report.state_hash), "guest_hash": str(other.state_hash)})
 			for target in connected_peer_ids():
 				send_control(int(target), "HOST_ABORT", {"reason": "world_state_diverged", "world_tick": tick_value})
-			round_failed.emit("V2 world simulation diverged at tick %d." % tick_value)
+			round_failed.emit(tr("Multiplayer world simulation diverged at tick %d.") % tick_value)
 			_round_coordinator.cancel("world_state_diverged")
 			return
 
@@ -1881,7 +1881,7 @@ func _ensure_manifest() -> void:
 			_lobby_contexts[context] = "ack_manifest"
 			_lobby_provider.ack_manifest(str(room_state.room_id), local_hash, _identity_adapter.token(), context)
 	else:
-		lobby_request_finished.emit("manifest", false, tr("This client generated a different V2 course hash (local %s, room %s; seed %d, generator %d, length %d px).") % [local_hash.left(12), expected_hash.left(12), expected_seed, expected_generator, expected_length])
+		lobby_request_finished.emit("manifest", false, tr("This client generated a different course hash (local %s, room %s; seed %d, generator %d, length %d px).") % [local_hash.left(12), expected_hash.left(12), expected_seed, expected_generator, expected_length])
 
 func _is_roster_peer(peer_id: int) -> bool:
 	if peer_id == 1 and is_room_owner():
@@ -2062,7 +2062,7 @@ func _check_disconnect_grace() -> void:
 			else:
 				_restart_peer_link(1)
 		if _round_coordinator.state == RoundCoordinatorScript.State.RUNNING and now - int(_disconnect_since_usec[1]) >= DISCONNECT_GRACE_USEC:
-			_round_coordinator.cancel("The V2 host was disconnected beyond the reconnect grace period.", "disconnect_grace_expired", false)
+			_round_coordinator.cancel(tr("The host was disconnected beyond the reconnect grace period."), "disconnect_grace_expired", false)
 
 func connected_peer_ids() -> PackedInt32Array:
 	var connected := PackedInt32Array()

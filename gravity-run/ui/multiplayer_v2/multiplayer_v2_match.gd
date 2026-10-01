@@ -125,13 +125,13 @@ func _ready() -> void:
 	_manifest = MultiplayerV2Service.current_manifest
 	_round_id = str(MultiplayerV2Service.session.get("round_id", ""))
 	if _manifest == null:
-		_show_failure(tr("The V2 course manifest is missing."))
+		_show_failure(tr("The course manifest is missing."))
 		return
 	_runner = LocalRunnerScript.new()
 	_world = WorldSimulationScript.new()
 	var world_error := str(_world.configure(_manifest))
 	if not world_error.is_empty():
-		_show_failure(tr("The V2 course could not be initialized: %s") % world_error)
+		_show_failure(tr("The course could not be initialized: %s") % world_error)
 		return
 	_render_camera = CameraScript.new()
 	add_child(_render_camera)
@@ -165,7 +165,7 @@ func _ready() -> void:
 	_round_id = str(MultiplayerV2Service.session.get("round_id", _round_id))
 	_runner.round_id = _round_id
 	MultiplayerV2Service.mark_local_prepared()
-	_status_label.text = tr("Preparing all V2 players…")
+	_status_label.text = tr("Preparing all players…")
 	queue_redraw()
 
 func _configure_profiling() -> void:
@@ -225,20 +225,8 @@ func _build_overlay() -> void:
 	_hud_root.add_child(_debug_panel)
 	var tools := VBoxContainer.new()
 	_debug_panel.add_child(tools)
-	var rate_row := HBoxContainer.new()
-	tools.add_child(rate_row)
-	var rate_label := Label.new()
-	rate_label.text = tr("Position sample send rate")
-	rate_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	rate_row.add_child(rate_label)
-	var rate := OptionButton.new()
-	rate.add_item("30 Hz", 30)
-	rate.add_item("60 Hz", 60)
-	rate.select(0 if MultiplayerV2Service.get_snapshot_rate() == 30 else 1)
-	rate.item_selected.connect(func(index: int) -> void: MultiplayerV2Service.set_snapshot_rate(rate.get_item_id(index)))
-	rate_row.add_child(rate)
 	var export_button := Button.new()
-	export_button.text = tr("Save V2 diagnostics")
+	export_button.text = tr("Save diagnostics")
 	export_button.pressed.connect(_save_diagnostics)
 	tools.add_child(export_button)
 	_export_confirmation = Label.new()
@@ -701,7 +689,7 @@ func _on_round_failed(reason: String) -> void:
 	MultiplayerV2Service.diagnostics.freeze_round_trace("round_aborted")
 	_result_panel.visible = true
 	_result_text.clear()
-	_result_text.append_text("[center][b]V2 round aborted[/b][/center]\n\n%s" % reason)
+	_result_text.append_text("[center][b]%s[/b][/center]\n\n%s" % [tr("Round aborted"), reason])
 	_on_room_changed_for_abort(MultiplayerV2Service.room_state)
 
 func _on_room_changed_for_abort(room: Dictionary) -> void:
@@ -1422,7 +1410,7 @@ func _navigate_lobby() -> void:
 	if _lobby_navigation_pending:
 		return
 	_lobby_navigation_pending = true
-	AppNavigation.request_multiplayer_v2_lobby()
+	AppNavigation.request_multiplayer_lobby()
 	get_tree().change_scene_to_file("res://ui/main_menu.tscn")
 
 func _on_lobby_request_finished(action: String, success: bool, message: String) -> void:

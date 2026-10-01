@@ -109,4 +109,4 @@ static func make_filename(report: Dictionary, view: String) -> String:
 	var round_id := str(session.get("round_id", "no-round"))
 	if round_id.is_empty():
 		round_id = "no-round"
-	return "multiplayer_v2_%s_peer%d_%s_%s_%d.json" % [view.validate_filename(), peer, role, round_id.substr(0, 12).validate_filename(), Time.get_unix_time_from_system()]
+	return "multiplayer_%s_peer%d_%s_%s_%d.json" % [view.validate_filename(), peer, role, round_id.substr(0, 12).validate_filename(), Time.get_unix_time_from_system()]

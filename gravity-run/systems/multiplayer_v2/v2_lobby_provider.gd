@@ -71,7 +71,7 @@ func _call(action: String, rpc_name: String, payload: Dictionary, token: String,
 		if _queue.size() < 64:
 			_queue.append(call)
 		else:
-			request_finished.emit(action, false, null, tr("The V2 lobby request queue is full."), context)
+			request_finished.emit(action, false, null, tr("The multiplayer lobby request queue is full."), context)
 		return
 	_start(call)
 
@@ -83,7 +83,7 @@ func _start(call: Dictionary) -> void:
 	var error := _request.request(url, headers, HTTPClient.METHOD_POST, JSON.stringify(call.payload))
 	if error != OK:
 		request_timing.emit(str(call.action), str(call.context), int(call.started_at_usec) - int(call.queued_at_usec), 0)
-		request_finished.emit(str(call.action), false, null, tr("Could not start a V2 lobby request (code %d).") % error, str(call.context))
+		request_finished.emit(str(call.action), false, null, tr("Could not start a multiplayer lobby request (code %d).") % error, str(call.context))
 		_active.clear()
 		_dispatch_next.call_deferred()
 
@@ -95,9 +95,9 @@ func _on_completed(result: int, response_code: int, _headers: PackedStringArray,
 	var parsed: Variant = JSON.parse_string(body.get_string_from_utf8()) if not body.is_empty() else null
 	if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300:
 		var detail := str(parsed.get("message", parsed.get("details", ""))) if parsed is Dictionary else ""
-		var message := tr("V2 lobby request failed (HTTP %d).") % response_code
+		var message := tr("multiplayer lobby request failed (HTTP %d).") % response_code
 		if result != HTTPRequest.RESULT_SUCCESS:
-			message = tr("Network error contacting the V2 lobby service (code %d).") % result
+			message = tr("Network error contacting the multiplayer lobby service (code %d).") % result
 		elif not detail.is_empty():
 			message = detail
 		request_finished.emit(str(call.get("action", "")), false, parsed, message, str(call.get("context", "")))

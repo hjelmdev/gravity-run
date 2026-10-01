@@ -1139,9 +1139,6 @@ msgstr "Meny"
 msgid "Position sample send rate"
 msgstr "Sändfrekvens för spelarposition"
 
-msgid "Save V2 diagnostics"
-msgstr "Spara V2-diagnostik"
-
 msgid "Diagnostics saved: %s"
 msgstr "Diagnostik sparad: %s"
 
@@ -1189,3 +1186,60 @@ msgstr "SPRING"
 
 msgid "Host session confirmed."
 msgstr "Anslutningen till värden är bekräftad."
+
+msgid "The course manifest is missing."
+msgstr "Banans manifest saknas."
+
+msgid "The course could not be initialized: %s"
+msgstr "Banan kunde inte förberedas: %s"
+
+msgid "Preparing all players…"
+msgstr "Förbereder alla spelare…"
+
+msgid "Build %s"
+msgstr "Version %s"
+
+msgid "Round aborted"
+msgstr "Rundan avbröts"
+
+msgid "Only the host can start the round."
+msgstr "Bara värden kan starta rundan."
+
+msgid "Multiplayer cannot start yet: %s"
+msgstr "Loppet kan inte starta än: %s"
+
+msgid "Leave the current room first."
+msgstr "Lämna det nuvarande rummet först."
+
+msgid "The host removed you from the multiplayer lobby."
+msgstr "Värden tog bort dig från lobbyn."
+
+msgid "This client generated a different course hash (local %s, room %s; seed %d, generator %d, length %d px)."
+msgstr "Den här klienten skapade en annan bankontrollsumma (lokalt %s, rum %s; seed %d, generator %d, längd %d px)."
+
+msgid "Could not initialize WebRTC (code %d)."
+msgstr "Kunde inte starta WebRTC (kod %d)."
+
+msgid "Multiplayer ignored an outdated prepare response. The room has a newer state."
+msgstr "Ett gammalt förberedelsesvar ignorerades. Rummet har ett nyare tillstånd."
+
+msgid "Multiplayer could not freeze the round roster: %s"
+msgstr "Kunde inte låsa rundans spelarlista: %s"
+
+msgid "Multiplayer could not start the round preparation."
+msgstr "Kunde inte börja förbereda rundan."
+
+msgid "Godot could not create the WebRTC server (code %d)."
+msgstr "Godot kunde inte skapa WebRTC-servern (kod %d)."
+
+msgid "Host is waiting for peer links."
+msgstr "Värden väntar på anslutningar till spelarna."
+
+msgid "Multiplayer world simulation diverged at tick %d."
+msgstr "Multiplayersimuleringen avvek vid tick %d."
+
+msgid "The host was disconnected beyond the reconnect grace period."
+msgstr "Värden var frånkopplad längre än återanslutningstiden tillåter."
+
+msgid "Supabase returned an incomplete identity."
+msgstr "Supabase returnerade en ofullständig identitet."

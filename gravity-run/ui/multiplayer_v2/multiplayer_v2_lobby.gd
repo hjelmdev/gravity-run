@@ -86,7 +86,7 @@ func _build_ui() -> void:
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_layout.add_child(_status)
-	_diagnostics_button = _button(tr("Download V2 diagnostics"))
+	_diagnostics_button = _button(tr("Save diagnostics"))
 	_diagnostics_button.pressed.connect(_download_diagnostics)
 	_layout.add_child(_diagnostics_button)
 	_display_name = LineEdit.new()
@@ -201,7 +201,7 @@ func _build_ui() -> void:
 	_reconnect_button.pressed.connect(MultiplayerV2Service.begin_peer_connection)
 	_room_view.add_child(_reconnect_button)
 	var build_label := Label.new()
-	build_label.text = tr("V2 build %s") % str(ProjectSettings.get_setting("application/config/version", "unknown"))
+	build_label.text = tr("Build %s") % str(ProjectSettings.get_setting("application/config/version", "unknown"))
 	build_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	build_label.add_theme_font_size_override("font_size", 10)
 	build_label.add_theme_color_override("font_color", Color("8798af"))

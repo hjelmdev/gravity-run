@@ -51,14 +51,14 @@ func update_room(room: Dictionary) -> void:
 		if _member_for_user(str(user_id)).is_empty():
 			var peer_id := int(_connections.get(user_id, {}).get("peer_id", -1))
 			_remove_connection(str(user_id))
-			peer_state_changed.emit(peer_id, "removed", "The V2 host removed this player from the lobby.")
+			peer_state_changed.emit(peer_id, "removed", "The host removed this player from the lobby.")
 	_replay_confirmed_signals()
 
 func begin_connection() -> void:
 	if peer == null or room_id.is_empty() or local_user_id.is_empty():
 		return
 	if is_host:
-		peer_state_changed.emit(0, "waiting", "Waiting for V2 guests.")
+		peer_state_changed.emit(0, "waiting", "Waiting for guests.")
 		return
 	_start_guest_offer(owner_user_id)
 
@@ -150,11 +150,11 @@ func handle_signal(envelope: Dictionary) -> void:
 				return
 			if sdp.is_empty() or sdp.length() > 32768:
 				signal_diagnostic.emit("signal_rejected", {"direction": "incoming", "kind": kind, "attempt_id": attempt_id, "generation": generation, "roster_revision": roster_revision, "queued": false, "reason": "invalid_sdp_size"})
-				_fail(sender, "Invalid V2 WebRTC session description.")
+				_fail(sender, "Invalid WebRTC session description.")
 				return
 			if connection.set_remote_description(sdp_type, sdp) != OK:
 				signal_diagnostic.emit("signal_rejected", {"direction": "incoming", "kind": kind, "attempt_id": attempt_id, "generation": generation, "roster_revision": roster_revision, "queued": false, "reason": "sdp_apply_failed"})
-				_fail(sender, "Invalid V2 WebRTC session description.")
+				_fail(sender, "Invalid WebRTC session description.")
 				return
 			entry.remote_description_set = true
 			entry.remote_description_fingerprint = fingerprint
@@ -182,7 +182,7 @@ func restart_peer(user_id: String, initiate_offer: bool) -> void:
 		return
 	_remove_connection(user_id)
 	if is_host or not initiate_offer or user_id != owner_user_id:
-		peer_state_changed.emit(int(_member_for_user(user_id).get("player_slot", 0)), "waiting", "Waiting to retry the V2 peer link.")
+		peer_state_changed.emit(int(_member_for_user(user_id).get("player_slot", 0)), "waiting", "Waiting to retry the peer link.")
 		return
 	_start_guest_offer(user_id)
 
@@ -269,14 +269,14 @@ func _new_connection(user_id: String, attempt: String, peer_id: int, generation:
 		return null
 	if peer == null or peer.add_peer(connection, peer_id) != OK:
 		connection.close()
-		_fail(user_id, "Could not register the V2 WebRTC peer.")
+		_fail(user_id, "Could not register the WebRTC peer.")
 		return null
 	connection.session_description_created.connect(_on_description_created.bind(user_id, attempt))
 	connection.ice_candidate_created.connect(_on_ice_candidate_created.bind(user_id, attempt))
 	_connections[user_id] = {"connection": connection, "attempt": attempt, "peer_id": peer_id, "generation": generation, "remote_description_set": false, "pending_ice": []}
 	transport_mutation.emit("peer_connection_created", {"user_id": user_id, "peer_id": peer_id, "connection_generation": generation, "api_peer_id": peer.get_unique_id() if peer != null else -1})
 	_attempts[user_id] = attempt
-	peer_state_changed.emit(peer_id, "connecting", "Negotiating V2 WebRTC link.")
+	peer_state_changed.emit(peer_id, "connecting", "Negotiating WebRTC link.")
 	return connection
 
 func _on_description_created(sdp_type: String, sdp: String, user_id: String, attempt: String) -> void:
@@ -284,7 +284,7 @@ func _on_description_created(sdp_type: String, sdp: String, user_id: String, att
 		return
 	var connection: WebRTCPeerConnection = _connections[user_id].connection
 	if connection.set_local_description(sdp_type, sdp) != OK:
-		_fail(user_id, "Could not install the V2 local WebRTC description.")
+		_fail(user_id, "Could not install the local WebRTC description.")
 		return
 	signal_diagnostic.emit("signal_accepted", {"direction": "outgoing", "kind": sdp_type, "attempt_id": attempt, "generation": int(_connections[user_id].get("generation", -1)), "roster_revision": roster_revision, "queued": true})
 	signal_outgoing.emit(create_signal_envelope(user_id, sdp_type, {"sdp_type": sdp_type, "sdp": sdp}, attempt))
@@ -303,7 +303,7 @@ func _start_guest_offer(user_id: String) -> void:
 	if connection != null:
 		var error := connection.create_offer()
 		if error != OK:
-			_fail(user_id, "Could not create the V2 WebRTC offer (code %d)." % error)
+			_fail(user_id, "Could not create the WebRTC offer (code %d)." % error)
 
 func _remove_connection(user_id: String) -> void:
 	if not _connections.has(user_id):
