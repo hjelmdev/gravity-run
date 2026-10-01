@@ -62,3 +62,7 @@ Den ordinarie spelvägen utför ingen extra frame-mätning när inspelningen är
 - Exportens lockning testades inte med en stor browserrapport i denna utredning; det är en separat verifierad exportfix och inte bevis för bättre frame pacing.
 
 Nästa kunskapslucka är faktisk visnings-/compositor-timing i browsermiljön där fart–broms–fart märks, särskilt vid en uppmätt annan renderfrekvens. Underlaget motiverar ännu inte en spelkodfix eller en FPS-/kamerainställning.
+
+## Publicering
+
+Diagnostikkompletteringen publicerades separat till V2 på GitHub Pages i commit `465bd41` (`v2-shared-frame-pacing-diagnostics-20261001`). Root-wrappern pekar på det nya build-id:t och den publicerade V2-exporten pekar på `index.shared-frame-pacing-diagnostics-cfeb6e2.pck` (1 238 792 byte). Livekontroll av båda URL:erna bekräftade build-id och packstorlek. V1-exporten under `docs/game/` ändrades inte. Detta är mätstöd, inte en frame-pacing-fix.
