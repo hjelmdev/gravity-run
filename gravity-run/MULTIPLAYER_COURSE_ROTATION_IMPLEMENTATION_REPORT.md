@@ -15,4 +15,6 @@ Verifierat:
 - Riktigt lokalt WebRTC-test passerade initial synk, 20 sekunders lobby och tre resultat-/ACK-/lobbycykler. Det använder en transportfixtur och verifierar inte live-backendens seedbyte i ett manuellt browserlopp.
 - Godot-import utan parse-/scriptfel; sandlådans begränsningar för editorinställningar/certifikatlagring kvarstår.
 
-Webversionen byggs från källcommiten. Befintliga ocommittade singleplayer-fixturändringar hålls utanför ändringen och exporten. Publik adress och gamla kompatibilitetsadresser behålls. Efter publicering: skapa ett nytt rum med seedfältet tomt, spela två rundor via samma lobby och kontrollera att banan byts. Ingen profilering eller diagnostikinsamling krävs för den kontrollen.
+Webversionen byggdes från källcommit 3fa07da och publicerades i Pages-commit be29160. Build-id: multiplayer-course-rotation-3fa07da-20261001. Azure-push och GitHub Pages-deploy lyckades. Den publicerade root-adressen laddade spelets neutrala game/index.html med rätt build-id i webbläsaren. Regressionstestet och kontraktstestet passerade även från den arkiverade källversion som användes för exporten.
+
+Befintliga ocommittade singleplayer-fixturändringar hölls utanför ändringen och exporten. Publik adress och gamla kompatibilitetsadresser behålls. Ingen faktisk browsermatch kördes under denna kontroll. Testa genom att skapa ett nytt rum med seedfältet tomt, spela två rundor via samma lobby och kontrollera att banan byts. Ingen profilering eller diagnostikinsamling krävs för den kontrollen.
