@@ -1,6 +1,21 @@
 # V2: gemensamt banflöde och åskådartext — implementation
 
-Datum: 2026-09-30.
+Datum: 2026-10-01 (uppföljning av analysen `MULTIPLAYER_V2_7AA71D_38A3E2_COMMON_FLOW_ANALYSIS.md`).
+
+## Uppföljande presentationsexperiment
+
+- V2 kan nu köras med ett opt-in render-ankare via `v2_render_anchor=1`. När det är aktivt används render-callbackens monotona starttid både för lokal catch-up och delad presentationstid. Därmed får spelare, kamera och rörliga kursentiteter samma presentationstid. Utan parametern behålls den tidigare tidsvägen för A/B-jämförelse.
+- Profilspåret loggar callbackstart, presentationens tidsankare, tid när spelare/kamera/värld/HUD är uppdaterade och senare tidpunkt då spåret samlas in. Fältet `presentation_anchor_age_at_capture_usec` gör mätpunktens ålder explicit.
+- Singleplayerns befintliga renderdiagnostik använder nu samma sparade interpolationsfraktion för position och loggrad, och exporterar callbackstart, positionsprov, färdig kamera/figurpresentation och insamlingstid. Detta är jämförelsedata, inte en ändrad rörelsemodell.
+- Banflödets budget tillåter 64 korta försök, högst 8 användbara fönster (minst 48 prover vardera) och högst 4 096 prover per runda. Korta fönster har egen markering och kan inte förbruka kvoten för längre mätningar. Ett sent användbart fönster reserveras för rörligt hinder när det ännu inte har provtagits.
+- Det här är en mätbar experimentvariant. Analysen identifierar inte fysisk bildpresentation, och den här ändringen bevisar inte att upplevt hack är åtgärdat.
+
+Jämför samma bana och 30 Hz med samtliga klienter i respektive läge:
+
+- Baslinje: `?v2_profile=1`
+- Render-ankare: `?v2_profile=1&v2_render_anchor=1`
+
+Granska `presentation_timing_config.render_anchor_experiment_enabled`, callback-/ankarfälten i `common_course_flow_trace.frames`, cadencefönster och singleplayerns renderdiagnostik. Behåll tidsankaret som standard först när jämförelsen stödjer det.
 
 ## Genomfört
 

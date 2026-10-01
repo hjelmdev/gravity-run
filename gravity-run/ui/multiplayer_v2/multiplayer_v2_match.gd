@@ -20,7 +20,10 @@ const PRESENTATION_DELAY_TICKS := 1.0
 const LOCAL_POSE_HISTORY := 256
 const COUNTDOWN_START_FLASH_USEC := 350_000
 const FLOW_TRACE_MAX_FRAMES := 512
-const FLOW_TRACE_MAX_WINDOWS := 5
+const FLOW_TRACE_MAX_WINDOWS := 64
+const FLOW_TRACE_MAX_USEFUL_WINDOWS := 8
+const FLOW_TRACE_MIN_USEFUL_FRAMES := 48
+const FLOW_TRACE_MAX_TOTAL_FRAMES := 4096
 
 const CameraScript := preload("res://systems/runner_camera.gd")
 
@@ -85,11 +88,18 @@ var _last_render_world_state: Dictionary = {}
 var _last_world_render_fraction := 0.0
 var _last_presentation_tick := 0.0
 var _profiling_enabled := false
+var _render_anchor_experiment_enabled := false
 var _hud_root: Control
 var _viewport_size := Vector2.ZERO
 var _flow_trace_windows := 0
+var _flow_trace_useful_windows := 0
+var _flow_trace_total_frames := 0
 var _flow_trace_moving_target_sampled := false
 var _flow_trace_frame_index := 0
+var _render_callback_index := 0
+var _render_callback_begin_usec := -1
+var _presentation_anchor_usec := -1
+var _presentation_ready_usec := -1
 var _flow_trace_active := false
 var _flow_trace_started_usec := -1
 var _flow_trace_frames: Array[Dictionary] = []
@@ -160,8 +170,10 @@ func _ready() -> void:
 func _configure_profiling() -> void:
 	if OS.has_feature("web"):
 		_profiling_enabled = bool(JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('v2_profile') === '1'"))
+		_render_anchor_experiment_enabled = bool(JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('v2_render_anchor') === '1'"))
 	else:
 		_profiling_enabled = OS.get_cmdline_user_args().has("--v2-profile")
+		_render_anchor_experiment_enabled = OS.get_cmdline_user_args().has("--v2-render-anchor")
 
 func _exit_tree() -> void:
 	_close_barrel_frame_trace("match_scene_exit")
@@ -403,11 +415,12 @@ func _physics_process(delta: float) -> void:
 		return
 	_advance_local_to_shared_clock(delta)
 
-func _advance_local_to_shared_clock(delta: float) -> void:
+func _advance_local_to_shared_clock(delta: float, target_usec: int = -1) -> void:
 	if not _round_started or _manifest == null or _runner == null:
 		return
 	var clock = MultiplayerV2Service._round_coordinator.clock
-	var target_tick := int(floor(clock.tick_at_monotonic_usec(Time.get_ticks_usec())))
+	var sample_usec := Time.get_ticks_usec() if target_usec < 0 else target_usec
+	var target_tick := int(floor(clock.tick_at_monotonic_usec(sample_usec)))
 	var owed_steps := maxi(target_tick - _world_tick, 0)
 	var steps := 0
 	while steps < mini(owed_steps, MAX_CATCHUP_STEPS):
@@ -427,21 +440,25 @@ func _advance_local_to_shared_clock(delta: float) -> void:
 func _process(delta: float) -> void:
 	if _manifest == null or _runner == null or _course_presentation == null:
 		return
+	var callback_begin_usec := Time.get_ticks_usec()
+	_render_callback_index += 1
+	_render_callback_begin_usec = callback_begin_usec
 	_remote_presentation_cache.clear()
 	# Godot's render callback can run between 60 Hz physics callbacks. Advance
 	# fixed-tick simulation to the shared clock before sampling any player pose,
 	# so the local runner and camera do not hit a short projection ceiling.
 	if _round_started:
 		var catchup_started_usec := Time.get_ticks_usec() if _profiling_enabled else 0
-		_advance_local_to_shared_clock(0.0)
+		_advance_local_to_shared_clock(0.0, callback_begin_usec if _render_anchor_experiment_enabled else -1)
 		if _profiling_enabled:
 			_profile_phase("fixed_step_catchup", catchup_started_usec)
+	_presentation_anchor_usec = callback_begin_usec if _round_started and _render_anchor_experiment_enabled else Time.get_ticks_usec()
 	_render_fraction = Engine.get_physics_interpolation_fraction()
 	var shared_tick := 0.0
 	var presentation_tick := 0.0
 	var player_presentation_started_usec := Time.get_ticks_usec() if _profiling_enabled else 0
 	if _round_started:
-		shared_tick = MultiplayerV2Service._round_coordinator.clock.tick_at_monotonic_usec(Time.get_ticks_usec())
+		shared_tick = MultiplayerV2Service._round_coordinator.clock.tick_at_monotonic_usec(_presentation_anchor_usec)
 		# One fixed simulation tick of shared history gives 30/60 Hz remote
 		# samples time to bracket the display tick. Local pose and camera use the
 		# same delayed tick, while simulation and terminal decisions stay current.
@@ -484,10 +501,11 @@ func _process(delta: float) -> void:
 			var remote_pose := _remote_track_sample(int(peer_id))
 			remote_presented[str(peer_id)] = {"requested_presentation_tick": presentation_tick, "actual_sample_tick": float(remote_pose.get("simulation_tick", -1.0)), "sample_age_ticks": float(remote_pose.get("sample_age_ticks", -1.0)), "world_x": float(remote_pose.get("world_x", 0.0)), "screen_x": float(remote_pose.get("world_x", 0.0)) - _camera_left, "y": float(remote_pose.get("y", 0.0)), "stale": bool(remote_pose.get("stale", true)), "render_mode": str(remote_pose.get("render_mode", "unknown")), "correction_magnitude": float(remote_pose.get("correction_magnitude", 0.0)), "correction_elapsed_seconds": float(remote_pose.get("correction_elapsed_seconds", 0.0))}
 		var local_pose: Dictionary = _local_presentation_pose if not _local_presentation_pose.is_empty() else _runner.render_state(_render_fraction)
-		_append_timeline_metric("presented_frames", {"presentation_tick": presentation_tick, "shared_clock_tick": shared_tick, "presentation_delay_ticks": PRESENTATION_DELAY_TICKS, "local_simulation_tick": _runner.simulation_tick, "local_actual_sample_tick": float(_local_presentation_pose.get("tick", _runner.simulation_tick)), "local_previous_pose": _runner.previous_render_state.duplicate(true), "local_current_pose": _runner.current_render_state.duplicate(true), "local_render_x": float(local_pose.get("world_x", 0.0)), "local_render_y": float(local_pose.get("y", 0.0)), "local_screen_x": float(local_pose.get("world_x", 0.0)) - _camera_left, "remote": remote_presented, "camera_left": _camera_left, "camera_delta_x": _camera_left - _previous_camera_left, "frame_delta_seconds": delta, "local_usec": Time.get_ticks_usec()})
+		_append_timeline_metric("presented_frames", {"presentation_tick": presentation_tick, "shared_clock_tick": shared_tick, "presentation_delay_ticks": PRESENTATION_DELAY_TICKS, "local_simulation_tick": _runner.simulation_tick, "local_actual_sample_tick": float(_local_presentation_pose.get("tick", _runner.simulation_tick)), "local_previous_pose": _runner.previous_render_state.duplicate(true), "local_current_pose": _runner.current_render_state.duplicate(true), "local_render_x": float(local_pose.get("world_x", 0.0)), "local_render_y": float(local_pose.get("y", 0.0)), "local_screen_x": float(local_pose.get("world_x", 0.0)) - _camera_left, "remote": remote_presented, "camera_left": _camera_left, "camera_delta_x": _camera_left - _previous_camera_left, "frame_delta_seconds": delta, "local_usec": _presentation_anchor_usec, "render_callback_index": _render_callback_index, "render_callback_begin_usec": _render_callback_begin_usec, "presentation_anchor_usec": _presentation_anchor_usec, "presentation_ready_usec": _presentation_ready_usec})
 	if _round_started:
 		_update_hud()
 	_sync_player_views()
+	_presentation_ready_usec = Time.get_ticks_usec()
 	if _profiling_enabled and _round_started:
 		var flow_trace_started_usec := Time.get_ticks_usec()
 		_capture_common_course_flow_frame(delta)
@@ -719,6 +737,8 @@ func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 	_close_barrel_frame_trace("round_restarted")
 	_close_flow_trace("round_restarted")
 	_flow_trace_windows = 0
+	_flow_trace_useful_windows = 0
+	_flow_trace_total_frames = 0
 	_flow_trace_moving_target_sampled = false
 	_flow_trace_frame_index = 0
 	_flow_trace_active = false
@@ -729,7 +749,7 @@ func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 	_status_label.text = tr("RUN")
 	MultiplayerV2Service.diagnostics.record_event("round_timeline_started", {"round_id": round_id, "deadline_local_usec": _local_start_deadline_usec, "clock_uncertainty_usec": float(MultiplayerV2Service._round_coordinator.clock.offset_uncertainty_usec), "initial_tick": _world_tick})
 	MultiplayerV2Service.diagnostics.begin_round_trace(round_id, int(MultiplayerV2Service.session.get("local_peer_id", -1)), str(MultiplayerV2Service.session.get("role", "")), _local_start_deadline_usec, float(MultiplayerV2Service._round_coordinator.clock.offset_uncertainty_usec))
-	MultiplayerV2Service.diagnostics.record_event("presentation_timing_config", {"shared_presentation_delay_ticks": PRESENTATION_DELAY_TICKS, "moving_barrels_use_shared_presentation_time": true, "browser_raf_available": OS.has_feature("web"), "profiling_enabled": _profiling_enabled})
+	MultiplayerV2Service.diagnostics.record_event("presentation_timing_config", {"shared_presentation_delay_ticks": PRESENTATION_DELAY_TICKS, "moving_barrels_use_shared_presentation_time": true, "browser_raf_available": OS.has_feature("web"), "profiling_enabled": _profiling_enabled, "render_anchor_experiment_enabled": _render_anchor_experiment_enabled})
 	_update_start_countdown()
 	if _profiling_enabled:
 		_record_start_stage("round_started_callback", callback_started_usec, {"callback_duration_usec": Time.get_ticks_usec() - callback_started_usec, "callback_lateness_usec": maxi(callback_started_usec - _local_start_deadline_usec, 0)})
@@ -931,7 +951,7 @@ func _take_browser_frame_window() -> Dictionary:
 func _capture_common_course_flow_frame(delta: float) -> void:
 	var now_usec := Time.get_ticks_usec()
 	if not _flow_trace_active:
-		if _flow_trace_windows >= FLOW_TRACE_MAX_WINDOWS:
+		if _flow_trace_windows >= FLOW_TRACE_MAX_WINDOWS or _flow_trace_useful_windows >= FLOW_TRACE_MAX_USEFUL_WINDOWS or _flow_trace_total_frames >= FLOW_TRACE_MAX_TOTAL_FRAMES:
 			return
 		var visible_static := _find_visible_course_target(false)
 		var visible_moving := _find_visible_course_target(true)
@@ -939,7 +959,7 @@ func _capture_common_course_flow_frame(delta: float) -> void:
 		# actual visible course entities so the budget reaches obstacle flow.
 		if _flow_trace_windows > 0 and visible_static.is_empty() and visible_moving.is_empty():
 			return
-		if _flow_trace_windows >= FLOW_TRACE_MAX_WINDOWS - 1 and not _flow_trace_moving_target_sampled and visible_moving.is_empty():
+		if _flow_trace_useful_windows >= FLOW_TRACE_MAX_USEFUL_WINDOWS - 1 and not _flow_trace_moving_target_sampled and visible_moving.is_empty():
 			return
 		_begin_flow_trace_window(now_usec, visible_static, visible_moving)
 	var static_valid := is_instance_valid(_flow_trace_static_target)
@@ -976,9 +996,10 @@ func _capture_common_course_flow_frame(delta: float) -> void:
 	var canvas_transform := viewport.get_canvas_transform()
 	var local_state: Dictionary = _runner.player_state
 	var local_pose: Dictionary = _local_presentation_pose if not _local_presentation_pose.is_empty() else _runner.render_state(_render_fraction)
-	var row := {"at_usec": now_frame_usec, "frame_index": _flow_trace_frame_index, "render_delta_seconds": delta, "simulation_tick": _world_tick, "presentation_tick": _last_presentation_tick, "local_pose_tick": float(_local_presentation_pose.get("tick", _runner.simulation_tick)), "world_render_fraction": _last_world_render_fraction, "physics_interpolation_fraction": _render_fraction, "phase": "spectator" if _spectator_peer_id > 0 else ("finished" if not _result.is_empty() else "running"), "local_player": {"state": str(local_state.get("state", "running")), "blocked": bool(local_state.get("blocked", false)), "simulated_speed_px_s": float(local_pose.get("velocity_x", 0.0)), "world_position": _vector_dict(Vector2(float(local_pose.get("world_x", 0.0)), float(local_pose.get("y", 0.0))))}, "camera": _camera_trace_state(canvas_transform), "static_target": _flow_target_trace(_flow_trace_static_target, _flow_trace_static_id, false), "moving_target": _flow_target_trace(_flow_trace_moving_target, _flow_trace_moving_id, true)}
+	var row := {"at_usec": now_frame_usec, "frame_index": _flow_trace_frame_index, "render_delta_seconds": delta, "render_callback_index": _render_callback_index, "render_callback_begin_usec": _render_callback_begin_usec, "presentation_anchor_usec": _presentation_anchor_usec, "presentation_ready_usec": _presentation_ready_usec, "presentation_anchor_age_at_capture_usec": now_frame_usec - _presentation_anchor_usec, "simulation_tick": _world_tick, "presentation_tick": _last_presentation_tick, "local_pose_tick": float(_local_presentation_pose.get("tick", _runner.simulation_tick)), "world_render_fraction": _last_world_render_fraction, "physics_interpolation_fraction": _render_fraction, "phase": "spectator" if _spectator_peer_id > 0 else ("finished" if not _result.is_empty() else "running"), "local_player": {"state": str(local_state.get("state", "running")), "blocked": bool(local_state.get("blocked", false)), "simulated_speed_px_s": float(local_pose.get("velocity_x", 0.0)), "world_position": _vector_dict(Vector2(float(local_pose.get("world_x", 0.0)), float(local_pose.get("y", 0.0))))}, "camera": _camera_trace_state(canvas_transform), "static_target": _flow_target_trace(_flow_trace_static_target, _flow_trace_static_id, false), "moving_target": _flow_target_trace(_flow_trace_moving_target, _flow_trace_moving_id, true)}
 	_flow_trace_frames.append(row)
 	_flow_trace_frame_index += 1
+	_flow_trace_total_frames += 1
 	if _flow_trace_frames.size() >= FLOW_TRACE_MAX_FRAMES:
 		_close_flow_trace("sample_window_complete")
 
@@ -1086,7 +1107,10 @@ func _close_flow_trace(reason: String) -> void:
 			var ending_value: float = float(browser_trace.get(metric_name, _flow_trace_view_metrics.get(trace_name, 0.0)))
 			if not is_equal_approx(ending_value, float(_flow_trace_view_metrics.get(trace_name, ending_value))):
 				trace_close_reason = "canvas_scale_changed"
-	MultiplayerV2Service.diagnostics.record_event("common_course_flow_trace", {"window_index": _flow_trace_windows, "started_at_usec": _flow_trace_started_usec, "ended_at_usec": ended_usec, "duration_usec": maxi(ended_usec - _flow_trace_started_usec, 0), "close_reason": trace_close_reason, "static_target_id": _flow_trace_static_id, "moving_target_id": _flow_trace_moving_id, "sample_count": _flow_trace_frames.size(), "dropped_samples": 0, "frame_index_start": _flow_trace_frame_index - _flow_trace_frames.size(), "frame_index_end": _flow_trace_frame_index - 1, "view_metrics": _flow_trace_view_metrics, "browser_raf": {"start_frame_index": _flow_trace_browser_start_index, "sample_count": browser_samples.size(), "dropped_samples": int(browser_trace.get("dropped_samples", 0)) if browser_trace is Dictionary else 0, "clock_mapping_offset_usec": clock_offset_usec, "bridge_uncertainty_usec": maxi(bridge_after - bridge_before, 0), "samples": browser_samples}, "frames": _flow_trace_frames})
+	var qualifies_as_useful_window := _flow_trace_frames.size() >= FLOW_TRACE_MIN_USEFUL_FRAMES
+	if qualifies_as_useful_window:
+		_flow_trace_useful_windows += 1
+	MultiplayerV2Service.diagnostics.record_event("common_course_flow_trace", {"window_index": _flow_trace_windows, "useful_window_index": _flow_trace_useful_windows if qualifies_as_useful_window else -1, "useful_window": qualifies_as_useful_window, "useful_window_min_frames": FLOW_TRACE_MIN_USEFUL_FRAMES, "total_trace_frames": _flow_trace_total_frames, "started_at_usec": _flow_trace_started_usec, "ended_at_usec": ended_usec, "duration_usec": maxi(ended_usec - _flow_trace_started_usec, 0), "close_reason": trace_close_reason, "static_target_id": _flow_trace_static_id, "moving_target_id": _flow_trace_moving_id, "sample_count": _flow_trace_frames.size(), "dropped_samples": 0, "frame_index_start": _flow_trace_frame_index - _flow_trace_frames.size(), "frame_index_end": _flow_trace_frame_index - 1, "view_metrics": _flow_trace_view_metrics, "browser_raf": {"start_frame_index": _flow_trace_browser_start_index, "sample_count": browser_samples.size(), "dropped_samples": int(browser_trace.get("dropped_samples", 0)) if browser_trace is Dictionary else 0, "clock_mapping_offset_usec": clock_offset_usec, "bridge_uncertainty_usec": maxi(bridge_after - bridge_before, 0), "samples": browser_samples}, "frames": _flow_trace_frames})
 	_flow_trace_active = false
 	_flow_trace_started_usec = -1
 	_flow_trace_frames.clear()

@@ -70,6 +70,11 @@ var _render_course_distance := 0.0
 var render_diagnostics_enabled := false
 var _render_diagnostic_frames: Array[Dictionary] = []
 var _render_diagnostic_tick := 0
+var _render_callback_index := 0
+var _render_callback_begin_usec := -1
+var _render_presentation_sample_usec := -1
+var _render_presentation_ready_usec := -1
+var _render_interpolation_fraction := 0.0
 const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_export.gd")
 
 func _ready() -> void:
@@ -205,11 +210,16 @@ func _unhandled_input(event: InputEvent) -> void:
 func _process(delta: float) -> void:
 	if not is_instance_valid(player):
 		return
-	_render_player_position = _presentation.sample(Engine.get_physics_interpolation_fraction())
+	_render_callback_index += 1
+	_render_callback_begin_usec = Time.get_ticks_usec()
+	_render_interpolation_fraction = Engine.get_physics_interpolation_fraction()
+	_render_presentation_sample_usec = Time.get_ticks_usec()
+	_render_player_position = _presentation.sample(_render_interpolation_fraction)
 	_render_course_distance = _render_player_position.x - PLAYER_X
 	var sprite := player.get_node("AnimatedSprite2D") as AnimatedSprite2D
 	sprite.position = _render_player_position - player.position + Vector2(0.0, -float(player.call("get_gravity_direction")))
 	_update_camera()
+	_render_presentation_ready_usec = Time.get_ticks_usec()
 	if render_diagnostics_enabled and not game_over:
 		_record_render_diagnostic(delta)
 	queue_redraw()
@@ -232,7 +242,8 @@ func _record_render_diagnostic(delta: float) -> void:
 			break
 	if _render_diagnostic_frames.size() >= 4096:
 		_render_diagnostic_frames.pop_front()
-	_render_diagnostic_frames.append({"at_usec": Time.get_ticks_usec(), "phase": "terminal" if game_over else "running", "render_delta_ms": delta * 1000.0, "tick": _render_diagnostic_tick, "fraction": Engine.get_physics_interpolation_fraction(), "previous_x": _presentation.previous.x, "current_x": _presentation.current.x, "render_x": _render_player_position.x, "camera_left": left, "render_course_distance": _render_course_distance, "speed": _run_speed(), "blocked": run_blocked, "reference": reference, "fps": Engine.get_frames_per_second()})
+	var captured_at_usec := Time.get_ticks_usec()
+	_render_diagnostic_frames.append({"at_usec": captured_at_usec, "render_callback_index": _render_callback_index, "render_callback_begin_usec": _render_callback_begin_usec, "presentation_sample_usec": _render_presentation_sample_usec, "presentation_ready_usec": _render_presentation_ready_usec, "sample_to_ready_usec": _render_presentation_ready_usec - _render_presentation_sample_usec, "ready_to_capture_usec": captured_at_usec - _render_presentation_ready_usec, "phase": "terminal" if game_over else "running", "render_delta_ms": delta * 1000.0, "tick": _render_diagnostic_tick, "fraction": _render_interpolation_fraction, "previous_x": _presentation.previous.x, "current_x": _presentation.current.x, "render_x": _render_player_position.x, "camera_left": left, "render_course_distance": _render_course_distance, "speed": _run_speed(), "blocked": run_blocked, "reference": reference, "fps": Engine.get_frames_per_second()})
 
 func save_render_diagnostics() -> String:
 	var report := {"session": {"network_mode": "singleplayer", "build_id": str(ProjectSettings.get_setting("application/config/version", "")), "godot_version": Engine.get_version_info(), "seed": _active_seed, "viewport": [screen_width, screen_height], "zoom": camera.zoom.x}, "frames": _render_diagnostic_frames.duplicate(true), "exported_at_unix": Time.get_unix_time_from_system()}
