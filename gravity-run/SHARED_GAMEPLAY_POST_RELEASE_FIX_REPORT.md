@@ -1,32 +1,46 @@
-# Shared gameplay post-release fix report
+# Shared gameplay follow-up release report
 
-Datum: 2026-10-02. Källrelease: `9be5402` (`codex/current-prototype`). Supabase migration: `202610020001_generator6_gameplay_release.sql`. Pages-release: `850d9e6` (`main`).
+Datum: 2026-10-02. Feature implementation: `fa57a86`. Synlig projektversion: `2026.10.02-shared-run-hud-fix` (`b497622`). Ingen generator-, physics- eller backendversion ändrades i denna release.
 
-## Åtgärder
+## Ändringar
 
-- Multiplayer prepare/start gick via kontolänkning, gästernas PREPARED och hostens frysta katalogregistrering innan commit/countdown. Den här koden lade till fältvalidering på backend-ACK, start-RPC-diagnostik med kö-/HTTP-tid, startanropens prioritet framför bakgrundssettlement, begränsad retry för tillfälliga bindningsfel och idempotent återanvändning av runtime-round-ID efter tappat registreringssvar. Inloggade spelare avbryter starten vid bindningsfel; de fortsätter inte obundet. V6-gaten sätts samtidigt för nya multiplayer-rum och coin-round-RPC.
-- Musikens standard och fallback är 25 %. Reglagevärdet använder `0.35 × u²`, 0 är mute och Music-bussen är fortsatt enda användarvolymkontroll. Meny och lopp använder samma målvolym; uppspelningsgain sätts före start och kontextfade börjar från faktisk gain. Autoplay provas när musikresursen är redo. Vid browserblockering görs ett nytt försök först vid riktig mus/touch/tangent-input från användaren; det finns ingen syntetisk gest.
-- Nya kurser använder generator 6, med klart vanligare accepterade stenar. Generator 5 och äldre banbeteende behålls för kompatibilitet. Stenens runtimekedja testas genom normal singleplayer-scene.
+- Multiplayercoins delas nu mellan den faktiska service-/world-ledgerkedjan och presentationen. När servicen redan har applicerat en bekräftad WORLD_COMMIT får matchvyn ändå spela den befintliga coin-insamlingseffekten för `duplicate`-resultatet. Leveransdubletter animeras inte igen. Ingen extra wallet-/ledgerutbetalning görs av presentationen.
+- SP:s streamingplan och MP:s manifest använder samma v8-regler och coinplanner. Mätningen hittade ingen skillnad i genererade eller presenterade coins/hazards; därför ändrades inte täthetsvärden.
+- SP och MP använder samma `SharedRunHud`-scen för namn, mynt och musikreglage. SP behåller distans och sina befintliga menyåtgärder; MP döljer distans och behåller nätverks-/resultatfunktioner. Det tomma seed-/leaderboard-meddelandet är borttaget. Volymreglagets expanderikon ritas som vektor och har inte längre beroende av en teckenglyf.
+- Diagnostikexportens kompakta kurssnapshot rapporterar generator/version, räknare för planerade och presenterade objekt, coinernas synlighet och upp till 12 stenars kursposition samt varnings-/falltick. Snapshot tas endast vid export, inte per frame.
 
-## Verifiering
+## Riktad verifiering
 
-- Godot 4.7.2: `course_generator_test.gd`, `challenge_service_test.gd`, `music_controller_test.gd`, `multiplayer_v2/contract_test.gd`, `shared_rock_v6_calibration_test.gd`, `singleplayer_rock_v6_runtime_test.gd` och `multiplayer_v2/prepare_start_integration_test.gd` passerade. Headless Godot gav en Windows root-certificate-store-varning men testerna avslutades med PASS.
-- Prepare-testet kör tre riktiga lokala WebRTC-serviceklienter och faktisk coordinator-barriär; det fördröjer en gästs kontobindning och går igenom catalog-registrering, countdown och RUNNING utan att manuellt sätta RUNNING. RPC/auth-provider är styrd testdouble, inklusive idempotent lost-response-scenario. Det är inte ett inloggat GoTrue/PostgREST-webbläsarmöte eller ett live wallet-award-test.
-- Gen6-kalibrering: 200 deterministiska seeds `100000000–100000199`, vardera 45 000 px: 546 accepterade stenar (medel 2,73), minst en sten i 181/200 banor, 4 372 spike-grupper (medel 21,86). 159 stenar före 10 000 px och 274 före 20 000 px. Stenarna är därmed vanliga men mycket färre än spike-grupper. Äldsta generationers frysta fixturetest och separat v5-profiltest har tidigare passerat; generation 5 behåller sin gamla lägre stenfrekvens.
-- Riktig SP-scen på challenge `GR6-100000000` väljer seed 100000000 och instansierar första accepterade sten-eventet vid kursposition cirka 1 400 px. Testet följde dormant → warning → falling → buried. Detta är ett automatiserat lokalt scenprov, inte en provspelning med mänsklig input.
-- Den nya migrationen kördes först lokalt mot PostgreSQL och gate för version 6 verifierades. Supabase CLI linked history visade endast `202610020001` pending; dry-run listade endast denna migration. Den applicerades därefter med `db push --linked` och linked history verifierade alla 37 migrationer matchade till och med `202610020001`. Detta verifierar migration/applicering, inte full produktionstransaktion med riktig inloggad användare.
-- Web-exporten byggdes från ett isolerat arkiv av exakt source commit `9be5402`. Export-PCK är 2 667 612 byte, SHA-256 `DB439B03C314FA00F50C894235098F92E205B6284BFA1248817F1997F91E7159`. Den nya Pages-loadern anger en versionsunik `mainPack`; root-wrapper och paketerad Web-kod publiceras som aktiv `docs/game/` bundle. Publicerad root URL: [https://hjelmdev.github.io/gravity-run/](https://hjelmdev.github.io/gravity-run/).
+- `coin_match_commit_integration_test.tscn`: PASS. Testet driver gästens riktiga servicehantering av WORLD_COMMIT vidare genom servicesignal, matchens commit callback och den verkliga coin-scenen. Samma insamlingseffekt spelas efter service-side `duplicate`-applicering, men inte igen för duplicerad commit; winner-/ledgerdata ändras inte av effekten.
+- `shared_coin_mode_parity_test.gd`: PASS över 45 000 px med inkrementella SP-chunks och MP:s riktiga manifest/presentation:
 
-## Kvarvarande verifieringsgränser
+  | Seed | Planerade/presenterande coins SP=MP | Hazards SP=MP | Längsta coin-gap |
+  |---:|---:|---:|---:|
+  | 100000014 | 198 | 48 | 1 250 px |
+  | 100000042 | 174 | 59 | 4 942,9 px |
+  | 100001918 | 180 | 52 | 5 092,1 px |
 
-GitHub Pages workflow avslutades med `success` ([workflow](https://github.com/hjelmdev/gravity-run/actions/runs/36997311213)). Efter deployment gav root och game-loader HTTP 200; wrappern visar `shared-gameplay-fix1-9be5402-20261002` och loadern refererar till `index.shared-gameplay-fix1-9be5402-20261002.pck`. Den publikt nedladdade PCK matchade den lokala exporten byte för byte: 2 667 612 byte, SHA-256 `DB439B03C314FA00F50C894235098F92E205B6284BFA1248817F1997F91E7159`.
+- `singleplayer_rock_v8_runtime_test.gd`: PASS genom riktiga SP-scenen; challenge `GR8-100000000` visade dormant, warning, falling och buried och stenen låg kvar som hinder.
+- `shared_rock_v8_tick_parity_test.gd`: PASS. Host och guest nådde buried vid samma tick (169) med samma permanenta hitbox. V8-eventet har `warning_ticks=104` (1,73 s) och `fall_ticks=42` (0,70 s); renderade inställningar kommer från gemensamt event, inte lokal MP-fysik.
+- `shared_run_hud_scene_test.tscn`: PASS i SP- och MP-konfiguration vid 960×540 och 540×960; testet jämför faktiska kontrollrektanglar och åtkomst till musikreglaget.
+- `music_quick_control_layout_test.gd`: PASS för hover, tangentbord, touch, mute och volymreglage. Profilens filskrivning blockerades av testmiljöns sandbox, så beständighet till disk verifierades inte av detta prov.
+- Godot 4.7.2 Web-export lyckades från en ren snapshot efter versionsetikettcommitten. PCK är 2 773 856 byte.
 
-Inget separat browserfönster eller ljudutrustning var tillgängligt i denna körning. Autoplay tillåtet/blockerat, ljudets faktiska hörbarhet vid 5 %, och subjektiv nivåjämförelse måste därför provas av användaren. Browserns policy kan blockera autoplay tills en riktig gest.
+## Begränsningar
 
-Ingen riktig två-/trekontomatch via live GoTrue/PostgREST, live myntupphämtning/settlement eller live återspel genomfördes. Testet av prepare omfattar riktiga lokala WebRTC-kanaler och den faktiska service-/coordinator-koden, men kontot och RPC-svaren är testdouble. Tätare typisk hinderplacering är verifierad; det tidigare kända långa svansgapet från densitymätningen har inte optimerats i denna uppgift.
+Seedmätningen bekräftar att åtta coins inte orsakas av SP/MP-planeringsskillnad: de tre seedsen gav 174–198 planerade och presenterade coins vardera före insamling. Den bevisar inte vad som hände i användarens enskilda lopp; kamera-/kurssträcka, faktiskt insamlade coins och eventuell synlighet måste jämföras i diagnostiken för just den rundan. Seed 100000042 och 100001918 har långa coin-gap, cirka 4 943 respektive 5 092 px; ingen ytterligare täthetsjustering gjordes eftersom systemen redan matchar och en höjning skulle ändra kursinnehållet.
+
+Tester kördes lokalt. Denna release har inte verifierats i ett inloggat GoTrue/PostgREST-myntlopp eller med en mänsklig hörsel-/autoplay-session i den publicerade webbläsaren. Tidigare browser WebRTC-kompaktbaseline-provet gällde loopbackklienter och är inte bevis på ett live wallet-lopp. Musikpersistens till settingsfil behöver separat manuellt/browserprov.
+
+## Publicering
+
+- Azure source branch: `codex/current-prototype`, commit `b497622` (`Label shared run HUD release`); implementationscommit `fa57a86` (`Fix shared coin presentation and unify run HUD`). Rapportens slutliga source commit och Pages-build-id fylls i efter den sista rapportuppdateringen.
+- GitHub Pages: aktiv root `https://hjelmdev.github.io/gravity-run/`, aktiv bundle `docs/game/`. Root-loader och game-loader svarade HTTP 200 för build `shared-run-hud-b497622-20261002`; den nedladdade PCK matchade den lokala filen byte för byte (2 773 856 byte, SHA-256 `4ADC3189BD7EB77253292195C1748E455C8DF2B9D500FCAB7B9D9D494D13EAA4`). Pages-run för commit `0347442` var `queued` vid denna rapports första uppdatering; slutlig workflowstatus och hash återkontrolleras efter rapportcommit.
 
 ## Användarprov
 
-1. Öppna root-länken, sätt musiken till 5 %, växla mellan meny/Options/inventory och starta/avsluta en runda. Kontrollera att menyskiften inte höjer nivån. Ladda om utan interaktion och kontrollera autoplay; om policyn blockerar ska en första mus-/touch-/tangentgest på startsidan starta musiken.
-2. Med två eller tre konton, skapa ett nytt v6-rum och starta via normala menyval. Bekräfta kontobindning, allas förberedelse, hostregistrering, synkroniserad 3–2–1, plocka samma mynt med två spelare och kör rematch. Verifiera att endast vinnaren får det och att det sparas en gång.
-3. I challenge-väljaren ange `GR6-100000000` (seed `100000000`). Den första accepterade v6-stenen ligger cirka `1 400 px` in i kursen. Följ varning, fall och nedgrävning i ett vanligt SP-lopp; stenen ska ligga kvar efter att den har landat.
+1. Öppna [Gravity Run](https://hjelmdev.github.io/gravity-run/) och kontrollera att titel-/versionstext visar `2026.10.02-shared-run-hud-fix`.
+2. Starta ett SP-lopp och ett MP-lopp. Bekräfta att coin-HUD och ljudkontroll har samma utseende, att MP saknar SP-distans och att en coin som vinns i MP spelar samma korta insamlingseffekt som i SP.
+3. Prova musikreglaget med hover/klick på dator och expanderareglaget på touch. Bekräfta att mute verkligen stänger av musiken.
+4. För jämförelse av sten, seed `GR8-100000000` kan användas i vanlig challenge-inmatning (seed `100000000`). Observera varning, fall och att stenen stannar som hinder efter nedslag.
+5. Om ett lopp fortfarande visar få coins, spara diagnostik för den rundan så planerade, presenterade, synliga och insamlade objekt kan skiljas åt.
