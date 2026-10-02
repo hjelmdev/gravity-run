@@ -84,11 +84,13 @@ func show_rows(placements: Array) -> void:
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		line.add_child(label)
 		var details := Label.new()
-		details.text = "%d m" % int(float(row.get("distance", 0.0)) / 10.0)
+		details.text = "%d m  ·  %s %d" % [int(float(row.get("distance", 0.0)) / 10.0), tr("Shared coins"), int(row.get("shared_coins", 0))]
 		details.tooltip_text = readable_reason(str(row.get("reason", "")), str(row.get("state", "")))
 		line.add_child(details)
 
 func readable_reason(reason: String, state: String) -> String:
+	if reason == "falling_rock_warning_missed_delivery":
+		return tr("Connection lost")
 	if state == "finished":
 		return tr("Finished")
 	if state == "disconnected":
@@ -97,5 +99,6 @@ func readable_reason(reason: String, state: String) -> String:
 		"spikes", "step_spikes": return tr("Spikes")
 		"block": return tr("Block")
 		"barrel_contact", "barrel": return tr("Barrel")
+		"falling_rock": return tr("Falling rock")
 		"out_of_bounds": return tr("Fell off the course")
 	return tr("Eliminated")

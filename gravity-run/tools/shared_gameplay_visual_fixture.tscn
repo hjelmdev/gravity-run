@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tools/shared_gameplay_visual_fixture.gd" id="1_fixture"]
+
+[node name="SharedGameplayVisualFixture" type="Node2D"]
+script = ExtResource("1_fixture")

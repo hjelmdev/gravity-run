@@ -106,6 +106,37 @@ static func circle_intersects_rect(center: Vector2, radius: float, rect: Rect2) 
 	var closest := Vector2(clampf(center.x, rect.position.x, rect.end.x), clampf(center.y, rect.position.y, rect.end.y))
 	return center.distance_squared_to(closest) <= radius * radius
 
+static func swept_rect_circle_fraction(start_rect: Rect2, displacement: Vector2, center: Vector2, radius: float) -> float:
+	if radius < 0.0 or not is_finite(radius):
+		return -1.0
+	var half := start_rect.size * 0.5
+	var relative_start := start_rect.get_center() - center
+	var nearest_distance_sq := func(t: float) -> float:
+		var point: Vector2 = relative_start + displacement * t
+		var nearest := Vector2(clampf(point.x, -half.x, half.x), clampf(point.y, -half.y, half.y))
+		return point.distance_squared_to(nearest)
+	if nearest_distance_sq.call(0.0) <= radius * radius:
+		return 0.0
+	# Distance from a segment point to a rectangle is convex. Ternary search finds
+	# the minimum, then binary search returns first actual rounded-corner contact.
+	var low := 0.0
+	var high := 1.0
+	for _iteration in range(32):
+		var left := (2.0 * low + high) / 3.0
+		var right := (low + 2.0 * high) / 3.0
+		if nearest_distance_sq.call(left) <= nearest_distance_sq.call(right): high = right
+		else: low = left
+	var closest := (low + high) * 0.5
+	if nearest_distance_sq.call(closest) > radius * radius:
+		return -1.0
+	low = 0.0
+	high = closest
+	for _iteration in range(32):
+		var middle := (low + high) * 0.5
+		if nearest_distance_sq.call(middle) <= radius * radius: high = middle
+		else: low = middle
+	return high
+
 static func barrel_radius(width: float, height: float) -> float:
 	return minf(width, height) * 0.5
 

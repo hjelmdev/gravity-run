@@ -4,6 +4,8 @@ class_name RaceCoursePresentation
 const SpikeScene := preload("res://hazards/spikes.tscn")
 const BlockScene := preload("res://hazards/block.tscn")
 const BarrelScene := preload("res://hazards/barrel.tscn")
+const CoinScene := preload("res://collectibles/coin.tscn")
+const FallingRockScript := preload("res://hazards/falling_rock.gd")
 const LedgeScene := preload("res://terrain/ledge.tscn")
 const SlopeScene := preload("res://terrain/slope.tscn")
 const TrackGapScript := preload("res://terrain/track_gap.gd")
@@ -30,6 +32,7 @@ var _render_profile_enabled := false
 var _start_draw_deadline_usec := -1
 var _first_start_draw_profile: Dictionary = {}
 var _surface_index
+var _rock_warning_states: Array[Dictionary] = []
 
 static func create_hazard(scene: PackedScene, at_position: Vector2, size: Vector2, from_ceiling: bool, surface_rotation: float = 0.0) -> Node2D:
 	var hazard := scene.instantiate() as Node2D
@@ -126,6 +129,21 @@ func load_manifest(course_manifest: Resource) -> String:
 				event_nodes[event_id] = slope
 				if from_ceiling: ceiling_y = end_y
 				else: floor_y = end_y
+			"rock":
+				var rock := FallingRockScript.new() as Node2D
+				rock.call("configure", event)
+				rock.name = "FallingRock_%s" % event_id
+				_tag_presentation_target(rock, event_id, kind, false)
+				add_child(rock)
+				event_nodes[event_id] = rock
+	for collectible in manifest.collectibles:
+		var coin := CoinScene.instantiate() as Node2D
+		var entity_id := str(collectible.get("entity_id", ""))
+		coin.position = Vector2(float(collectible.get("world_x", 0.0)), float(collectible.get("world_y", 0.0)))
+		coin.name = "Coin_%s" % entity_id
+		_tag_presentation_target(coin, entity_id, "coin", false)
+		add_child(coin)
+		event_nodes[entity_id] = coin
 	for event in gap_events:
 		var half_width := float(event.get("width", 0.0)) * 0.5
 		var interval := {"start": float(event.get("x", 0.0)) - half_width, "end": float(event.get("x", 0.0)) + half_width}
@@ -152,7 +170,7 @@ func _tag_presentation_target(node: Node2D, stable_id: String, kind: String, mov
 	node.set_meta("presentation_target_id", stable_id)
 	node.set_meta("presentation_target_kind", kind)
 	node.set_meta("presentation_target_moving", moving)
-	node.set_meta("presentation_target_obstacle", kind in ["block", "spikes", "barrel"])
+	node.set_meta("presentation_target_obstacle", kind in ["block", "spikes", "barrel", "rock"])
 
 func set_camera_left(camera_left: float) -> void:
 	_camera_left = maxf(camera_left, 0.0)
@@ -171,6 +189,17 @@ func take_start_draw_profile() -> Dictionary:
 	return result
 
 func set_world_state(world_state: Dictionary) -> void:
+	var rocks: Variant = world_state.get("rocks", [])
+	_rock_warning_states.clear()
+	if rocks is Array:
+		for rock_state in rocks:
+			if not rock_state is Dictionary:
+				continue
+			var rock_node: Variant = event_nodes.get(str(rock_state.get("event_id", "")))
+			if is_instance_valid(rock_node) and rock_node.has_method("apply_world_state"):
+				rock_node.call("apply_world_state", rock_state)
+			if str(rock_state.get("phase", "")) == "warning":
+				_rock_warning_states.append(rock_state)
 	var barrels: Variant = world_state.get("barrels", [])
 	if barrels is Array:
 		for state_value in barrels:
@@ -191,7 +220,13 @@ func set_world_state(world_state: Dictionary) -> void:
 	var entities: Variant = world_state.get("entities", {})
 	if entities is Dictionary:
 		for entity_id in entities:
-			if str(entities[entity_id].get("state", "active")) != "active":
+			if str(entities[entity_id].get("state", "active")) == "active":
+				continue
+			var entity_kind := str(entities[entity_id].get("kind", ""))
+			var node_value: Variant = event_nodes.get(str(entity_id))
+			if entity_kind == "coin" and is_instance_valid(node_value) and node_value is Node2D:
+				node_value.visible = false
+			else:
 				apply_destroyed_entity(str(entity_id))
 
 func apply_destroyed_entity(entity_id: String) -> void:
@@ -221,12 +256,14 @@ func reset() -> void:
 	_render_step_positions.clear()
 	manifest = null
 	_surface_index = null
+	_rock_warning_states.clear()
 
 func _draw() -> void:
 	if manifest == null:
 		return
 	var draw_started_usec := Time.get_ticks_usec() if _render_profile_enabled else 0
 	CourseSurfaceRenderer.draw_track_cached(self, _camera_left, get_viewport_rect().size, _render_ceiling_gaps, _render_floor_gaps, _render_terrain_boundaries, _render_step_positions, Callable(self, "_surface_y_at"), 0.0)
+	_draw_rock_warning_markers()
 	var finish_screen_x := float(manifest.finish_x) - _camera_left
 	if finish_screen_x >= 0.0 and finish_screen_x <= get_viewport_rect().size.x:
 		draw_line(Vector2(float(manifest.finish_x), 0.0), Vector2(float(manifest.finish_x), _world_height), Color("f5d45e"), 4.0)
@@ -237,6 +274,20 @@ func _draw() -> void:
 		_render_profile_draw_count += 1
 		if _start_draw_deadline_usec >= 0 and _first_start_draw_profile.is_empty():
 			_first_start_draw_profile = {"at_usec": Time.get_ticks_usec(), "duration_usec": draw_elapsed_usec, "relative_to_deadline_usec": Time.get_ticks_usec() - _start_draw_deadline_usec, "kind": "terrain_and_finish_line_draw"}
+
+func _draw_rock_warning_markers() -> void:
+	var view_width := get_viewport_rect().size.x
+	for state in _rock_warning_states:
+		var event: Dictionary = state.get("event", {})
+		var x := float(state.get("x", 0.0))
+		if x - _camera_left <= view_width:
+			continue
+		var marker_x := _camera_left + view_width - 44.0
+		var floor_y := float(event.get("floor_y", _world_height - 80.0))
+		draw_line(Vector2(marker_x, floor_y - 42.0), Vector2(marker_x, floor_y - 6.0), Color("ff814f"), 4.0)
+		draw_line(Vector2(marker_x - 9.0, floor_y - 16.0), Vector2(marker_x, floor_y - 6.0), Color("ff814f"), 4.0)
+		draw_line(Vector2(marker_x + 9.0, floor_y - 16.0), Vector2(marker_x, floor_y - 6.0), Color("ff814f"), 4.0)
+		draw_string(ThemeDB.fallback_font, Vector2(marker_x - 35.0, floor_y - 50.0), tr("ROCK DROP"), HORIZONTAL_ALIGNMENT_CENTER, 80.0, 14, Color("ffe1a3"))
 
 func take_render_profile() -> Dictionary:
 	var result := {"terrain_draw_count": _render_profile_draw_count, "terrain_total_usec": _render_profile_total_usec, "terrain_max_usec": _render_profile_max_usec, "surface_query_count": _render_profile_surface_queries}

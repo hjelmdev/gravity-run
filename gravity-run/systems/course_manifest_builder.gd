@@ -6,6 +6,7 @@ const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const CourseRulesetScript := preload("res://systems/course_generation_ruleset.gd")
 const CourseRunDefinitionScript := preload("res://systems/course_run_definition.gd")
 const ManifestScript := preload("res://systems/multiplayer_course_manifest.gd")
+const CoinPlanner := preload("res://systems/shared_coin_planner.gd")
 
 const PLAYER_START_X := 180.0
 const WORLD_WIDTH := 960.0
@@ -21,7 +22,7 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 		return {"manifest": null, "error": "A positive deterministic seed is required."}
 	if course_length_px < 10000 or course_length_px > 1000000:
 		return {"manifest": null, "error": "The course length is outside supported limits."}
-	var ruleset := _make_multiplayer_ruleset()
+	var ruleset := _make_multiplayer_ruleset(generator_version)
 	var definition := CourseRunDefinitionScript.new() as Resource
 	definition.set("scenario_id", &"multiplayer_race")
 	definition.set("seed_value", seed_value)
@@ -38,6 +39,7 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 	var source_events: Array[Dictionary] = generator.get_planned_events()
 	var manifest := ManifestScript.new() as MultiplayerCourseManifest
 	manifest.generator_version = generator_version
+	manifest.manifest_version = 3 if generator_version >= CourseGenerator.GENERATOR_VERSION else 2
 	manifest.course_identity = str(definition.call("get_course_identity"))
 	manifest.seed_value = seed_value
 	manifest.course_length_px = course_length_px
@@ -45,22 +47,36 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 	manifest.finish_x = PLAYER_START_X + float(course_length_px)
 	manifest.ruleset_fingerprint = str(ruleset.call("get_fingerprint"))
 	manifest.events = _resolve_events(source_events, course_length_px)
+	if manifest.manifest_version >= 3:
+		manifest.collectibles = CoinPlanner.plan(seed_value, manifest.start_x, manifest.finish_x, manifest.events, FLOOR_START_Y, CEILING_START_Y, int(ruleset.get("coin_revision")), float(ruleset.get("coin_density")))
 	manifest.manifest_hash = manifest.calculate_hash()
 	var manifest_error := str(manifest.call("validate"))
 	if not manifest_error.is_empty():
 		return {"manifest": null, "error": manifest_error}
 	return {"manifest": manifest, "error": ""}
 
-func _make_multiplayer_ruleset() -> Resource:
+func _make_multiplayer_ruleset(generator_version: int) -> Resource:
 	var ruleset := CourseRulesetScript.new() as Resource
 	ruleset.set("ruleset_id", &"multiplayer_race")
-	ruleset.set("revision", 1)
+	if generator_version >= CourseGenerator.GENERATOR_VERSION:
+		ruleset.set("revision", 2)
+		ruleset.set("event_density", 1.5)
+	elif generator_version == CourseGenerator.PREVIOUS_GENERATOR_VERSION:
+		ruleset.set("revision", 1)
+		ruleset.set("event_density", 1.25)
+	else:
+		ruleset.set("revision", 1)
+		ruleset.set("event_density", 1.25)
 	# Match the default singleplayer encounter catalog; keep mode-specific rules above it.
 	ruleset.set("include_all_profiles", true)
 	return ruleset
 
 func _resolve_events(source_events: Array[Dictionary], course_length_px: int) -> Array[Dictionary]:
 	var resolved: Array[Dictionary] = []
+	var source_terrain_distances: Array[float] = []
+	for planned_source in source_events:
+		if str(planned_source.get("kind", "")) in ["step", "slope", "gap"]:
+			source_terrain_distances.append(float(planned_source.get("course_distance", 0.0)))
 	var floor_y := FLOOR_START_Y
 	var ceiling_y := CEILING_START_Y
 	var event_index := 0
@@ -191,6 +207,35 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int) ->
 					ceiling_y = end_y
 				else:
 					floor_y = end_y
+			"rock":
+				var near_terrain := false
+				for terrain_distance in source_terrain_distances:
+					if absf(terrain_distance - course_distance) < 420.0:
+						near_terrain = true
+						break
+				for prior in resolved:
+					var prior_kind := str(prior.get("kind", ""))
+					var prior_x := float(prior.get("x", 0.0))
+					if prior_kind in ["step", "slope", "gap"] and absf(prior_x - event_x) < 420.0:
+						near_terrain = true
+						break
+				if near_terrain or floor_surface_y - ceiling_surface_y < 260.0:
+					event_index += 1
+					continue
+				resolved.append({
+					"event_id": event_prefix,
+					"kind": "rock",
+					"x": event_x,
+					"width": float(source.get("width", 90.0)),
+					"height": float(source.get("height", 100.0)),
+					"floor_y": floor_surface_y,
+					"ceiling_y": ceiling_surface_y,
+					"trigger_lead": float(source.get("trigger_lead", 1100.0)),
+					"warning_ticks": int(source.get("warning_ticks", 36)),
+					"fall_ticks": int(source.get("fall_ticks", 20)),
+					"burial_depth": float(source.get("burial_depth", 24.0)),
+					"from_ceiling": true,
+				})
 			_:
 				push_error("Unsupported multiplayer course event kind '%s'." % kind)
 		event_index += 1

@@ -7,6 +7,7 @@ const WorldSimulationScript := preload("res://systems/multiplayer_v2/v2_world_si
 const RemoteTrackScript := preload("res://systems/multiplayer_v2/v2_remote_track.gd")
 const PlayerScene := preload("res://player/player.tscn")
 const Motion := preload("res://systems/runner_motion.gd")
+const FallingRockModel := preload("res://systems/falling_rock_model.gd")
 const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_export.gd")
 const CoursePresentationScript := preload("res://systems/race_course_presentation.gd")
 const RoundCoordinatorScript := preload("res://systems/multiplayer_v2/v2_round_coordinator.gd")
@@ -40,6 +41,7 @@ var _world_tick := 0
 var _accumulator := 0.0
 var _pending_flip_direction := 0
 var _pending_interaction_id := ""
+var _pending_coin_claims: Dictionary = {}
 var _remote_tracks: Dictionary = {}
 var _remote_presentation_cache: Dictionary = {}
 var _presentation_work_counts: Dictionary = {"track_sample_calls": 0, "projection_steps": 0, "surface_queries": 0, "contact_queries": 0, "track_pose_computations": 0}
@@ -57,6 +59,7 @@ var _status_label: Label
 var _result_panel: PanelContainer
 var _result_text: RichTextLabel
 var _results_view: ScrollContainer
+var _result_coin_status_label: Label
 var _return_lobby_button: Button
 var _debug_panel: PanelContainer
 var _debug_toggle: Button
@@ -260,6 +263,12 @@ func _build_overlay() -> void:
 	_result_text.scroll_active = false
 	_result_text.custom_minimum_size.y = 30
 	result_layout.add_child(_result_text)
+	_result_coin_status_label = Label.new()
+	_result_coin_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_result_coin_status_label.add_theme_font_size_override("font_size", 14)
+	_result_coin_status_label.add_theme_color_override("font_color", Color("ffd166"))
+	_result_coin_status_label.visible = false
+	result_layout.add_child(_result_coin_status_label)
 	_results_view = ResultsView.new()
 	result_layout.add_child(_results_view)
 	_results_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -406,6 +415,14 @@ func _physics_process(delta: float) -> void:
 
 func _advance_local_to_shared_clock(delta: float, target_usec: int = -1) -> void:
 	if not _round_started or _manifest == null or _runner == null:
+		return
+	if str(MultiplayerV2Service.session.get("role", "")) == "guest" and bool(MultiplayerV2Service._reconnect_sync_pending.get(1, false)):
+		return
+	if str(MultiplayerV2Service.session.get("role", "")) == "guest" and MultiplayerV2Service.consume_rock_warning_missed_recovery():
+		var missed_pose: Dictionary = _runner.player_state
+		MultiplayerV2Service.submit_local_terminal("dead", "falling_rock_warning_missed_delivery", _world_tick, float(missed_pose.get("world_x", 0.0)), float(missed_pose.get("y", 0.0)), int(missed_pose.get("gravity_direction", 1)), 0.0)
+		_runner.stop("dead")
+		MultiplayerV2Service.diagnostics.record_event("falling_rock_warning_recovery_terminal", {"round_id": _round_id, "tick": _world_tick, "policy": "connection_fairness_elimination_after_resync"})
 		return
 	var clock = MultiplayerV2Service._round_coordinator.clock
 	var sample_usec := Time.get_ticks_usec() if target_usec < 0 else target_usec
@@ -562,13 +579,21 @@ func _step_local_round_impl() -> void:
 		_runner.player_state.world_x = float(swept.world_x)
 		_runner.player_state.y = float(swept.y)
 	if str(contact.get("kind", "")) == "shared_interaction":
+		MultiplayerV2Service.send_sample(sample)
+		_submit_coin_claims(previous_state, proposed_state, float(swept.get("fraction", 2.0)))
 		_request_shared_barrel(contact)
 		return
 	if str(contact.get("kind", "")) == "terminal":
+		# Only the accepted contact pose may enter host history. The proposal can
+		# continue past the lethal collision and must never validate later pickups.
+		sample["world_x"] = float(swept.get("world_x", _runner.player_state.world_x))
+		sample["y"] = float(swept.get("y", _runner.player_state.y))
+		MultiplayerV2Service.send_sample(sample)
+		_submit_coin_claims(previous_state, proposed_state, float(swept.get("fraction", 2.0)))
 		MultiplayerV2Service.diagnostics.record_event("local_terminal_contact", {"tick": _runner.simulation_tick, "previous_pose": previous_state, "proposed_pose": proposed_state, "terminal_pose": _runner.player_state.duplicate(true), "contact": contact, "speed": Motion.speed_for_multiplier(_runner.run_speed_multiplier)})
 		MultiplayerV2Service.diagnostics.preserve_terminal_frames()
 		_runner.stop("dead")
-		MultiplayerV2Service.submit_local_terminal("dead", str(contact.get("reason", "hazard")), _runner.simulation_tick, float(_runner.player_state.world_x), float(_runner.player_state.y), int(_runner.player_state.gravity_direction))
+		MultiplayerV2Service.submit_local_terminal("dead", str(contact.get("reason", "hazard")), _runner.simulation_tick, float(_runner.player_state.world_x), float(_runner.player_state.y), int(_runner.player_state.gravity_direction), float(swept.get("fraction", 1.0)))
 		return
 	if float(_runner.player_state.get("y", 0.0)) < -64.0 or float(_runner.player_state.get("y", 0.0)) > float(_manifest.world_height) + 64.0:
 		_runner.stop("dead")
@@ -579,6 +604,19 @@ func _step_local_round_impl() -> void:
 		MultiplayerV2Service.submit_local_terminal("finished", "finish_line", _runner.simulation_tick, float(_runner.player_state.world_x), float(_runner.player_state.y), int(_runner.player_state.gravity_direction))
 		return
 	MultiplayerV2Service.send_sample(sample)
+	_submit_coin_claims(previous_state, proposed_state, 2.0)
+	MultiplayerV2Service.observe_local_world_progress(previous_state, proposed_state)
+
+func _submit_coin_claims(previous_state: Dictionary, proposed_state: Dictionary, terminal_fraction: float) -> void:
+	for contact in _world.coin_contacts_swept(previous_state, proposed_state):
+		if float(contact.get("fraction", 2.0)) >= terminal_fraction:
+			continue
+		var entity_id := str(contact.get("entity_id", ""))
+		if entity_id.is_empty() or _pending_coin_claims.has(entity_id):
+			continue
+		var request_id := Crypto.new().generate_random_bytes(16).hex_encode()
+		_pending_coin_claims[entity_id] = request_id
+		MultiplayerV2Service.submit_local_world_interaction({"round_id": _round_id, "owner_peer_id": int(MultiplayerV2Service.session.get("local_peer_id", 1)), "request_id": request_id, "entity_id": entity_id, "incarnation": int(contact.get("incarnation", 1)), "action": "collect", "simulation_tick": _runner.simulation_tick, "input_seq": _runner.input_sequence, "known_world_revision": _world.entity_ledger.revision})
 
 func _request_shared_barrel(contact: Dictionary) -> void:
 	if not _pending_interaction_id.is_empty():
@@ -632,7 +670,18 @@ func _on_terminal_report(peer_id: int, report: Dictionary) -> void:
 func _on_world_commit(commit: Dictionary) -> void:
 	if str(commit.get("round_id", _round_id)) != _round_id and commit.has("round_id"):
 		return
+	if str(commit.get("action", "")) == "activate_rock":
+		var activation_tick := int(commit.get("rock_activation_tick", commit.get("effective_tick", -1)))
+		if activation_tick >= 0 and _world != null and _world.tick > activation_tick:
+			var rock_event := _rock_event_for_entity(str(commit.get("entity_id", "")))
+			var route_safe := not rock_event.is_empty() and _late_rock_route_remains_safe(rock_event, activation_tick)
+			MultiplayerV2Service.diagnostics.record_event("falling_rock_warning_delivery_late", {"round_id": _round_id, "event_id": str(commit.get("entity_id", "")), "activation_tick": activation_tick, "local_world_tick": _world.tick, "phase": FallingRockModel.phase_at(rock_event, activation_tick, _world.tick) if not rock_event.is_empty() else "unknown", "reaction_margin_ms": 200, "route_remains_safe": route_safe})
+			if not route_safe:
+				MultiplayerV2Service.request_rock_warning_recovery(str(commit.get("entity_id", "")), activation_tick)
+				return
 	var applied: bool = _world.apply_world_commit(commit)
+	if str(commit.get("action", "")) == "collect":
+		_pending_coin_claims.erase(str(commit.get("entity_id", "")))
 	MultiplayerV2Service.diagnostics.record_event("world_commit_presented", {"commit_id": str(commit.get("commit_id", "")), "result": applied, "revision": int(commit.get("world_revision", 0))})
 	var transition: Dictionary = commit.get("linked_player_transition", {})
 	if not transition.is_empty() and int(transition.get("owner_peer_id", -1)) == int(MultiplayerV2Service.session.get("local_peer_id", 1)):
@@ -642,7 +691,47 @@ func _on_world_commit(commit: Dictionary) -> void:
 			_runner.stop("dead")
 	queue_redraw()
 
+func _rock_event_for_entity(entity_id: String) -> Dictionary:
+	if _manifest == null:
+		return {}
+	for event in _manifest.events:
+		if str(event.get("event_id", "")) == entity_id and str(event.get("kind", "")) == "rock":
+			return event
+	return {}
+
+func _late_rock_route_remains_safe(event: Dictionary, activation_tick: int) -> bool:
+	if _runner == null or _world == null:
+		return false
+	var state: Dictionary = _runner.player_state.duplicate(true)
+	var previous := Vector2(float(state.get("world_x", 0.0)), float(state.get("y", 0.0)))
+	var tick := int(_world.tick)
+	var reaction_ready_tick := tick + ceili(0.20 / FIXED_DELTA)
+	for _step in range(240):
+		var next_x := float(state.get("world_x", previous.x)) + 750.0 * FIXED_DELTA
+		var floor_surface: Dictionary = _world.surface_at(next_x, false)
+		var ceiling_surface: Dictionary = _world.surface_at(next_x, true)
+		if tick >= reaction_ready_tick and int(state.get("gravity_direction", 1)) > 0 and bool(state.get("grounded", false)) and float(state.get("cooldown", 0.0)) <= 0.0:
+			Motion.try_flip(state, -1, 2.0)
+		Motion.advance_vertical(state, FIXED_DELTA, float(floor_surface.get("y", _manifest.initial_floor_y)), float(ceiling_surface.get("y", _manifest.initial_ceiling_y)), bool(floor_surface.get("supported", false)), bool(ceiling_surface.get("supported", false)))
+		state["world_x"] = next_x
+		var current := Vector2(next_x, float(state.get("y", previous.y)))
+		if FallingRockModel.swept_contact_fraction(event, activation_tick, tick, tick + 1, previous, current, Motion.SIZE) >= 0.0:
+			return false
+		previous = current
+		tick += 1
+		if next_x > float(event.get("x", 0.0)) + float(event.get("width", FallingRockModel.WIDTH)) * 0.5 + Motion.SIZE.x:
+			return true
+	return false
+
 func _on_interaction_resolved(request_id: String, accepted: bool, reason: String, commit: Dictionary) -> void:
+	for entity_id in _pending_coin_claims:
+		if str(_pending_coin_claims[entity_id]) == request_id:
+			_pending_coin_claims.erase(entity_id)
+			if not commit.is_empty():
+				_world.apply_world_commit(commit)
+			if not accepted and reason not in ["coin_claim_lost", "already_collected"]:
+				MultiplayerV2Service.diagnostics.record_event("coin_claim_retryable", {"entity_id": str(entity_id), "reason": reason})
+			return
 	if request_id != _pending_interaction_id:
 		return
 	_pending_interaction_id = ""
@@ -666,7 +755,7 @@ func _on_results_received(result: Dictionary) -> void:
 	_result_text.clear()
 	_result_text.append_text("[center][b]%s[/b][/center]" % tr("Round complete"))
 	_results_view.show_rows(result.get("placements", []))
-	_status_label.text = tr("The host confirmed the result.")
+	_update_result_coin_status()
 
 func _frozen_member(peer_id: int) -> Dictionary:
 	for member in _frozen_roster:
@@ -716,6 +805,7 @@ func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 		return
 	var callback_started_usec := Time.get_ticks_usec()
 	_round_started = true
+	_pending_coin_claims.clear()
 	MusicController.start_round(round_id)
 	_world_tick = 0
 	_local_start_deadline_usec = int(MultiplayerV2Service._round_coordinator.clock.started_at_usec)
@@ -1276,7 +1366,7 @@ func _take_phase_profile() -> Dictionary:
 
 func _update_hud() -> void:
 	if not _result.is_empty():
-		_status_label.text = tr("The host confirmed the result.")
+		_update_result_coin_status()
 		return
 	var state_name := str(_runner.player_state.get("state", "running"))
 	if state_name == "pending_barrel":
@@ -1288,7 +1378,31 @@ func _update_hud() -> void:
 		else:
 			_status_label.text = tr("Waiting for host result…")
 	else:
-		_status_label.text = ""
+		_status_label.text = tr("Shared coins: %d") % _local_shared_coin_count()
+		_append_coin_save_status()
+
+func _append_coin_save_status() -> void:
+	var save_state := MultiplayerV2Service.coin_wallet_status_for_local_awards(_local_shared_coin_count())
+	if not save_state.is_empty():
+		_status_label.text += "\n" + tr(save_state)
+
+func _update_result_coin_status() -> void:
+	if not is_instance_valid(_result_coin_status_label):
+		return
+	var save_state := MultiplayerV2Service.coin_wallet_status_for_local_awards(_local_shared_coin_count())
+	_result_coin_status_label.text = tr(save_state) if not save_state.is_empty() else ""
+	_result_coin_status_label.visible = not save_state.is_empty()
+
+func _local_shared_coin_count() -> int:
+	if _world == null:
+		return 0
+	var local_peer := int(MultiplayerV2Service.session.get("local_peer_id", 1))
+	var total := 0
+	for entity_id in _world.entity_ledger.entities:
+		var entity: Dictionary = _world.entity_ledger.entities[entity_id]
+		if str(entity.get("kind", "")) == "coin" and str(entity.get("state", "")) == "collected" and int(entity.get("winner_peer_id", 0)) == local_peer:
+			total += int(entity.get("award_value", 0))
+	return total
 
 func _draw() -> void:
 	if _manifest == null:

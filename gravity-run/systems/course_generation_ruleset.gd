@@ -15,6 +15,8 @@ const CourseDifficultyProfileScript = preload("res://systems/course_difficulty_p
 @export_range(0.75, 1.5, 0.05) var hazard_size := 1.0
 @export_range(0.0, 1.0, 0.05) var lane_alternation := 0.0
 @export_range(0.0, 2.0, 0.05) var reaction_margin := 1.0
+@export_range(0.5, 2.0, 0.05) var coin_density := 1.0
+@export_range(1, 100, 1) var coin_revision := 1
 ## Per-profile multipliers allow a ruleset to favor or suppress individual
 ## encounter families without coupling the generator to specific hazard types.
 @export var profile_weight_multipliers: Dictionary = {}
@@ -28,7 +30,7 @@ func validate(available_profiles: Array) -> String:
 		return "A restricted ruleset must include at least one hazard profile."
 	if not is_finite(event_density) or not is_finite(hazard_size) or event_density < 0.5 or event_density > 2.5 or hazard_size < 0.75 or hazard_size > 1.5:
 		return "A ruleset difficulty factor is outside the supported range."
-	if not is_finite(lane_alternation) or not is_finite(reaction_margin) or lane_alternation < 0.0 or lane_alternation > 1.0 or reaction_margin < 0.0 or reaction_margin > 2.0:
+	if not is_finite(lane_alternation) or not is_finite(reaction_margin) or not is_finite(coin_density) or lane_alternation < 0.0 or lane_alternation > 1.0 or reaction_margin < 0.0 or reaction_margin > 2.0 or coin_density < 0.5 or coin_density > 2.0 or coin_revision < 1 or coin_revision > 100:
 		return "A ruleset movement factor is outside the supported range."
 
 	var available_ids: Array[StringName] = []
@@ -95,6 +97,8 @@ func get_fingerprint() -> String:
 		snappedf(event_density, 0.0001), snappedf(hazard_size, 0.0001),
 		snappedf(lane_alternation, 0.0001), snappedf(reaction_margin, 0.0001), weights
 	]
+	if not is_equal_approx(coin_density, 1.0) or coin_revision != 1:
+		payload.append([snappedf(coin_density, 0.0001), coin_revision])
 	var context := HashingContext.new()
 	context.start(HashingContext.HASH_SHA256)
 	context.update(JSON.stringify(payload).to_utf8_buffer())
@@ -119,6 +123,8 @@ func to_payload() -> Dictionary:
 		"hazard_size": snappedf(hazard_size, 0.0001),
 		"lane_alternation": snappedf(lane_alternation, 0.0001),
 		"reaction_margin": snappedf(reaction_margin, 0.0001),
+		"coin_density": snappedf(coin_density, 0.0001),
+		"coin_revision": coin_revision,
 		"profile_weight_multipliers": weights,
 	}
 
@@ -158,6 +164,14 @@ static func from_payload(payload: Variant) -> Resource:
 		if not factor is float and not factor is int:
 			return null
 		ruleset.set(factor_key, float(factor))
+	var coin_density: Variant = payload.get("coin_density", 1.0)
+	var coin_revision: Variant = payload.get("coin_revision", 1)
+	if (not coin_density is float and not coin_density is int) or (not coin_revision is float and not coin_revision is int):
+		return null
+	ruleset.set("coin_density", float(coin_density))
+	if not is_equal_approx(float(coin_revision), roundf(float(coin_revision))):
+		return null
+	ruleset.set("coin_revision", int(coin_revision))
 	var weight_payload: Variant = payload.get("profile_weight_multipliers", {})
 	if not weight_payload is Dictionary:
 		return null

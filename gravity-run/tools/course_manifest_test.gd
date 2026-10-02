@@ -60,6 +60,17 @@ func _run() -> void:
 		_check(not str(first.call("validate")).is_empty(), "tampering with canonical event geometry should fail hash validation")
 	var invalid_result: Dictionary = builder.build(0, 45000, 4)
 	_check(invalid_result.get("manifest") == null, "zero seed should be rejected")
+	var current_result: Dictionary = builder.build(918273645, 45000)
+	var current_repeat: Dictionary = builder.build(918273645, 45000)
+	_check(current_result.get("error", "") == "", "current generator should build the versioned collectible manifest")
+	if current_result.get("manifest") is Resource and current_repeat.get("manifest") is Resource:
+		var current: Resource = current_result.manifest
+		var repeated: Resource = current_repeat.manifest
+		var coins: Array = current.get("collectibles")
+		_check(int(current.get("manifest_version")) == 3, "current generator should use manifest version 3")
+		_check(not coins.is_empty(), "current manifest should contain shared coins")
+		_check(coins == repeated.get("collectibles"), "coin placement should repeat exactly for a seed")
+		_check(str(current.call("validate")).is_empty(), "current collectible manifest should validate")
 	if failures == 0:
 		print("Course manifest tests passed.")
 	quit(1 if failures > 0 else 0)

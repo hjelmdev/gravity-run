@@ -6,6 +6,7 @@ const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const CourseGeneratorScript := preload("res://systems/course_generator.gd")
 const LedgerScript := preload("res://systems/multiplayer_v2/v2_world_event_ledger.gd")
 const SurfaceIndexScript := preload("res://systems/course_surface_index.gd")
+const FallingRockModel := preload("res://systems/falling_rock_model.gd")
 
 const TICK_RATE := 60.0
 const FIXED_DELTA := 1.0 / TICK_RATE
@@ -15,6 +16,8 @@ var _previous_render_barrels: Dictionary = {}
 var tick := 0
 var elapsed := 0.0
 var barrels: Array[Dictionary] = []
+var coins: Array[Dictionary] = []
+var rocks: Array[Dictionary] = []
 var entity_ledger: MultiplayerV2WorldEventLedger = LedgerScript.new()
 var _entity_by_event: Dictionary = {}
 var _barrel_history: Dictionary = {}
@@ -32,6 +35,8 @@ func configure(course_manifest: Resource) -> String:
 	tick = 0
 	elapsed = 0.0
 	barrels.clear()
+	coins.clear()
+	rocks.clear()
 	_previous_render_barrels.clear()
 	_barrel_history.clear()
 	_entity_by_event.clear()
@@ -54,9 +59,16 @@ func configure(course_manifest: Resource) -> String:
 				barrels.append(barrel)
 				entities.append({"entity_id": entity_id, "incarnation": 1, "kind": "barrel", "health": 1})
 				_entity_by_event[entity_id] = {"kind": "barrel", "event_id": event_id}
-		elif kind in ["block", "step"]:
+		elif kind in ["block", "step", "rock"]:
 			entities.append({"entity_id": event_id, "incarnation": 1, "kind": kind, "health": 1})
 			_entity_by_event[event_id] = {"kind": kind, "event_id": event_id}
+			if kind == "rock":
+				rocks.append(event.duplicate(true))
+	for collectible in manifest.collectibles:
+		var coin: Dictionary = collectible.duplicate(true)
+		coin["incarnation"] = 1
+		coins.append(coin)
+		entities.append({"entity_id": str(coin.entity_id), "incarnation": 1, "kind": "coin", "health": 0})
 	entity_ledger.reset(entities)
 	_barrel_history[0] = barrels.duplicate(true)
 	return ""
@@ -94,7 +106,15 @@ func render_state(fraction: float) -> Dictionary:
 		if bool(previous.get("spawned", false)) and not bool(barrel.get("destroyed", false)):
 			for key in ["x", "y", "roll_angle", "rotation"]:
 				barrel[key] = lerpf(float(previous.get(key, barrel.get(key, 0.0))), float(barrel.get(key, 0.0)), clampf(fraction, 0.0, 1.0))
-	return {"barrels": rendered, "entities": entity_ledger.entities}
+	var rendered_rocks: Array[Dictionary] = []
+	for event in rocks:
+		var entity_id := str(event.get("event_id", ""))
+		var state: Dictionary = entity_ledger.entities.get(entity_id, {})
+		var activation_tick := int(state.get("rock_activation_tick", -1))
+		var render_tick := float(tick - 1) + clampf(fraction, 0.0, 1.0)
+		var center := FallingRockModel.center_at(event, activation_tick, render_tick)
+		rendered_rocks.append({"event_id": entity_id, "activation_tick": activation_tick, "tick": render_tick, "phase": FallingRockModel.phase_at(event, activation_tick, floori(render_tick)), "x": center.x, "y": center.y, "rect": FallingRockModel.hitbox_at(event, activation_tick, render_tick), "event": event})
+	return {"barrels": rendered, "coins": coins, "rocks": rendered_rocks, "entities": entity_ledger.entities}
 
 func barrel_presentation_probe(entity_id: String, presentation_tick: float, fraction: float) -> Dictionary:
 	var current: Dictionary = {}
@@ -145,14 +165,52 @@ func surface_at(x: float, ceiling: bool) -> Dictionary:
 	return {"y": y, "supported": supported}
 
 func player_contact(player_state: Dictionary) -> Dictionary:
-	return _player_contact_against(player_state, barrels)
+	return _player_contact_against(player_state, barrels, tick)
 
 func player_contact_at(player_state: Dictionary, simulation_tick: int) -> Dictionary:
 	if not _barrel_history.has(simulation_tick):
 		return {"kind": "history_missing"}
-	return _player_contact_against(player_state, _barrel_history[simulation_tick])
+	return _player_contact_against(player_state, _barrel_history[simulation_tick], simulation_tick)
 
-func _player_contact_against(player_state: Dictionary, barrel_state: Array) -> Dictionary:
+func coin_contacts_swept(previous_state: Dictionary, proposed_state: Dictionary) -> Array[Dictionary]:
+	var contacts: Array[Dictionary] = []
+	var start := Vector2(float(previous_state.get("world_x", 0.0)), float(previous_state.get("y", 0.0)))
+	var finish := Vector2(float(proposed_state.get("world_x", 0.0)), float(proposed_state.get("y", 0.0)))
+	var rect := Rect2(start - Motion.SIZE * 0.5, Motion.SIZE)
+	var range_min := minf(start.x, finish.x) - Motion.SIZE.x * 0.5 - 14.0
+	var range_max := maxf(start.x, finish.x) + Motion.SIZE.x * 0.5 + 14.0
+	var low := 0
+	var high := coins.size()
+	while low < high:
+		var middle := (low + high) >> 1
+		if float(coins[middle].get("world_x", 0.0)) < range_min: low = middle + 1
+		else: high = middle
+	for index in range(low, coins.size()):
+		var coin: Dictionary = coins[index]
+		if float(coin.get("world_x", 0.0)) > range_max:
+			break
+		var entity_id := str(coin.get("entity_id", ""))
+		if not entity_ledger.is_active(entity_id, int(coin.get("incarnation", 1))):
+			continue
+		var center := Vector2(float(coin.get("world_x", 0.0)), float(coin.get("world_y", 0.0)))
+		var fraction := HazardRules.swept_rect_circle_fraction(rect, finish - start, center, float(coin.get("radius", 13.0)))
+		if fraction >= 0.0:
+			var pose := start.lerp(finish, fraction)
+			contacts.append({"entity_id": entity_id, "incarnation": int(coin.get("incarnation", 1)), "fraction": fraction, "world_x": pose.x, "y": pose.y})
+	contacts.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if not is_equal_approx(float(a.fraction), float(b.fraction)):
+			return float(a.fraction) < float(b.fraction)
+		return str(a.entity_id) < str(b.entity_id)
+	)
+	return contacts
+
+func coin_contact_swept(entity_id: String, previous_state: Dictionary, proposed_state: Dictionary) -> Dictionary:
+	for contact in coin_contacts_swept(previous_state, proposed_state):
+		if str(contact.entity_id) == entity_id:
+			return contact
+	return {}
+
+func _player_contact_against(player_state: Dictionary, barrel_state: Array, simulation_tick: int = -1) -> Dictionary:
 	if manifest == null:
 		return {}
 	var width := Motion.SIZE.x
@@ -162,6 +220,14 @@ func _player_contact_against(player_state: Dictionary, barrel_state: Array) -> D
 		var kind := str(event.get("kind", ""))
 		var event_id := str(event.get("event_id", ""))
 		if kind in ["block", "step"] and not entity_ledger.is_active(event_id):
+			continue
+		if kind == "rock":
+			var rock_entity: Dictionary = entity_ledger.entities.get(event_id, {})
+			var activation_tick := int(rock_entity.get("rock_activation_tick", -1))
+			var rock_tick := simulation_tick if simulation_tick >= 0 else tick
+			var rock_rect := FallingRockModel.hitbox_at(event, activation_tick, rock_tick)
+			if rock_rect.size != Vector2.ZERO and HazardRules.player_impact(rect, "block", rock_rect) == HazardRules.PlayerImpact.LETHAL:
+				return {"kind": "terminal", "reason": "falling_rock", "entity_id": event_id, "event_id": event_id}
 			continue
 		if kind == "spikes":
 			var triangles := HazardRules.spike_group_triangles(float(event.get("start_x", event.get("x", 0.0))), float(event.get("y", 0.0)), int(event.get("count", 1)), float(event.get("spacing", CourseGeneratorScript.SPIKE_GROUP_SPACING)), CourseGeneratorScript.SPIKE_WIDTH, CourseGeneratorScript.SPIKE_HEIGHT, bool(event.get("from_ceiling", false)))
@@ -203,6 +269,15 @@ func first_static_terminal_contact(previous: Dictionary, proposed: Dictionary) -
 	for event in manifest.events:
 		var kind := str(event.get("kind", ""))
 		var entity_id := str(event.get("event_id", ""))
+		if kind == "rock":
+			var rock_entity: Dictionary = entity_ledger.entities.get(entity_id, {})
+			var activation_tick := int(rock_entity.get("rock_activation_tick", -1))
+			var rock_fraction := FallingRockModel.swept_contact_fraction(event, activation_tick, maxi(tick - 1, 0), tick, start, end, Motion.SIZE)
+			if rock_fraction >= 0.0 and rock_fraction < first_fraction:
+				first_fraction = rock_fraction
+				var rock_pose := start.lerp(end, rock_fraction)
+				best = {"kind": "terminal", "reason": "falling_rock", "entity_id": entity_id, "event_id": entity_id, "fraction": rock_fraction, "world_x": rock_pose.x, "y": rock_pose.y}
+			continue
 		if kind in ["block", "step"] and not entity_ledger.is_active(entity_id):
 			continue
 		# Cull distant events before constructing their polygon groups.
@@ -277,7 +352,7 @@ func state_hash() -> String:
 	var normalized := []
 	for entity_id in entities:
 		var state: Dictionary = entity_ledger.entities[entity_id]
-		normalized.append({"id": str(entity_id), "incarnation": int(state.incarnation), "kind": str(state.kind), "state": str(state.state), "hp": int(state.shared_health)})
+		normalized.append({"id": str(entity_id), "incarnation": int(state.incarnation), "kind": str(state.kind), "state": str(state.state), "hp": int(state.shared_health), "winner_peer_id": int(state.get("winner_peer_id", 0)), "award_value": int(state.get("award_value", 0)), "rock_activation_tick": int(state.get("rock_activation_tick", -1))})
 	var barrel_state := []
 	for barrel in barrels:
 		barrel_state.append({"id": str(barrel.entity_id), "x": int(round(float(barrel.x) * 16.0)), "y": int(round(float(barrel.y) * 16.0)), "spawned": bool(barrel.spawned), "falling": bool(barrel.falling), "destroyed": bool(barrel.destroyed)})

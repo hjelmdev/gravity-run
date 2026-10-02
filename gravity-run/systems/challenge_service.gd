@@ -14,6 +14,7 @@ const RulesetScript := preload("res://systems/course_generation_ruleset.gd")
 const Config := preload("res://systems/leaderboard_config.gd")
 const GENERATOR_VERSION := CourseGeneratorScript.GENERATOR_VERSION
 const LEGACY_GENERATOR_VERSION := CourseGeneratorScript.LEGACY_GENERATOR_VERSION
+const PREVIOUS_GENERATOR_VERSION := CourseGeneratorScript.PREVIOUS_GENERATOR_VERSION
 const MIN_CHALLENGE_SEED := 100000000
 const MAX_CHALLENGE_SEED := 2147483647
 
@@ -288,12 +289,18 @@ func _get_available_profiles(generator_version: int = GENERATOR_VERSION) -> Arra
 	return generator.get_profile_catalog(generator_version)
 
 func _supports_generator_version(generator_version: int) -> bool:
-	return generator_version == GENERATOR_VERSION or generator_version == LEGACY_GENERATOR_VERSION
+	return generator_version in [GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]
 
 func _new_default_ruleset(generator_version: int) -> Resource:
 	var default_ruleset := RulesetScript.new() as Resource
 	if generator_version == LEGACY_GENERATOR_VERSION:
 		default_ruleset.set("event_density", 1.0)
+	elif generator_version == GENERATOR_VERSION:
+		default_ruleset.set("revision", 2)
+		default_ruleset.set("event_density", 1.5)
+	else:
+		default_ruleset.set("revision", 1)
+		default_ruleset.set("event_density", 1.25)
 	return default_ruleset
 
 func _is_authenticated() -> bool:

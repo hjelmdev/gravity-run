@@ -27,8 +27,9 @@ const PLAYER_FLIP_COOLDOWN := 0.42
 const SWITCH_SAFETY_MARGIN := 0.12
 const PLAN_RETRY_SPACING := 48.0
 const BARREL_SPEED_MULTIPLIER := 1.4
-const GENERATOR_VERSION := 4
+const GENERATOR_VERSION := 5
 const LEGACY_GENERATOR_VERSION := 3
+const PREVIOUS_GENERATOR_VERSION := 4
 const CourseHazardProfileScript = preload("res://systems/course_hazard_profile.gd")
 const CourseDifficultyProfileScript = preload("res://systems/course_difficulty_profile.gd")
 
@@ -39,6 +40,7 @@ var _events: Array[Dictionary] = []
 var _next_event_distance := 1050.0
 var _next_spawn_index := 0
 var _seed := 0
+var _generator_version := GENERATOR_VERSION
 var _difficulty: Resource
 var _spawn_lead_distance := 0.0
 var _configuration_failed := false
@@ -108,7 +110,8 @@ func set_difficulty_profile(profile: Resource) -> void:
 
 func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> bool:
 	_configuration_failed = false
-	if generator_version != GENERATOR_VERSION and generator_version != LEGACY_GENERATOR_VERSION:
+	_generator_version = generator_version
+	if generator_version != GENERATOR_VERSION and generator_version != PREVIOUS_GENERATOR_VERSION and generator_version != LEGACY_GENERATOR_VERSION:
 		push_error("Unsupported course generator version: %d" % generator_version)
 		return false
 	_profiles.clear()
@@ -126,6 +129,8 @@ func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> b
 	# Terrain changes are part of the course rhythm, not rare decoration.
 	_profiles.append(_make_profile(&"terrain_step", &"step", 1.8, BOTH_LANES, Vector2(36.0, 240.0), Vector2i(1, 1), PackedFloat32Array([72.0, 108.0, 148.0, 184.0])))
 	_profiles.append(_make_profile(&"terrain_slope", &"slope", 1.5, BOTH_LANES, Vector2(440.0, 440.0), Vector2i(1, 1), PackedFloat32Array([64.0, 100.0, 140.0, 176.0])))
+	if generator_version >= GENERATOR_VERSION:
+		_profiles.append(_make_profile(&"falling_rock", &"rock", 0.22, FLOOR_LANE, Vector2(90.0, 90.0), Vector2i(1, 1), PackedFloat32Array([100.0])))
 	return true
 
 func get_profile_catalog(generator_version: int = GENERATOR_VERSION) -> Array[CourseHazardProfile]:
@@ -144,7 +149,7 @@ func reset(seed: int = 0) -> void:
 	else:
 		_rng.seed = seed
 	_events.clear()
-	_next_event_distance = 1050.0
+	_next_event_distance = 1400.0 if _generator_version >= GENERATOR_VERSION else 1050.0
 	_next_spawn_index = 0
 
 func ensure_horizon(horizon_distance: float, _current_speed: float, _track_height: float = REFERENCE_TRACK_HEIGHT, _spawn_lead_distance: float = EVENT_SPAWN_LEAD_DISTANCE) -> void:
@@ -177,6 +182,12 @@ func get_switch_clearance_distance(speed: float, track_height: float = 540.0) ->
 	var switch_time := maxf(PLAYER_FLIP_COOLDOWN, travel_time) + SWITCH_SAFETY_MARGIN * margin_scale
 	return maxf(speed, MAX_RUN_SPEED) * switch_time
 
+func _get_rock_switch_clearance_distance(track_height: float) -> float:
+	var travel_distance := maxf(track_height - 112.0 - 44.0, 0.0)
+	var travel_time := (-PLAYER_FLIP_SPEED + sqrt(PLAYER_FLIP_SPEED * PLAYER_FLIP_SPEED + 2.0 * PLAYER_GRAVITY * travel_distance)) / PLAYER_GRAVITY
+	var margin_scale := float(_difficulty.get("reaction_margin")) if _difficulty != null else 1.0
+	return MAX_RUN_SPEED * (PLAYER_FLIP_COOLDOWN * 2.0 + travel_time + SWITCH_SAFETY_MARGIN * margin_scale)
+
 func get_density_adjusted_spacing(conservative_spacing: float) -> float:
 	var density := float(_difficulty.get("event_density")) if _difficulty != null else 1.0
 	return maxf(180.0, conservative_spacing / maxf(density, 0.1))
@@ -195,8 +206,9 @@ func is_plan_solvable(events: Array[Dictionary], switch_clearance: float = -1.0)
 			var mask := int(threat.get("blocked_lanes", 0)) & BOTH_LANES
 			if mask == 0:
 				continue
-			edges.append({"x": start, "floor_delta": 1 if mask & FLOOR_LANE else 0, "ceiling_delta": 1 if mask & CEILING_LANE else 0})
-			edges.append({"x": end, "floor_delta": -1 if mask & FLOOR_LANE else 0, "ceiling_delta": -1 if mask & CEILING_LANE else 0})
+			var edge_clearance := float(threat.get("switch_clearance", 0.0))
+			edges.append({"x": start, "floor_delta": 1 if mask & FLOOR_LANE else 0, "ceiling_delta": 1 if mask & CEILING_LANE else 0, "switch_clearance": edge_clearance})
+			edges.append({"x": end, "floor_delta": -1 if mask & FLOOR_LANE else 0, "ceiling_delta": -1 if mask & CEILING_LANE else 0, "switch_clearance": 0.0})
 	if edges.is_empty():
 		return true
 	edges.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a["x"]) < float(b["x"]))
@@ -208,9 +220,11 @@ func is_plan_solvable(events: Array[Dictionary], switch_clearance: float = -1.0)
 	var edge_index := 0
 	while edge_index < edges.size() - 1:
 		var start := float(edges[edge_index]["x"])
+		var transition_clearance := clearance
 		while edge_index < edges.size() and is_equal_approx(float(edges[edge_index]["x"]), start):
 			floor_count += int(edges[edge_index]["floor_delta"])
 			ceiling_count += int(edges[edge_index]["ceiling_delta"])
+			transition_clearance = maxf(transition_clearance, float(edges[edge_index].get("switch_clearance", 0.0)))
 			edge_index += 1
 		if edge_index >= edges.size():
 			break
@@ -223,7 +237,7 @@ func is_plan_solvable(events: Array[Dictionary], switch_clearance: float = -1.0)
 
 		var required_lane := CEILING_LANE if blocked_mask & FLOOR_LANE else FLOOR_LANE
 		if required_lane != current_lane:
-			if start - last_threat_end < clearance:
+			if start - last_threat_end < transition_clearance:
 				return false
 			current_lane = required_lane
 		last_threat_end = end
@@ -237,9 +251,12 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 		if profile == null:
 			break
 		var candidate := profile.create_event(_rng, _next_event_distance, _difficulty, _preferred_lane())
+		var candidate_is_rock := str(candidate.get("kind", "")) == "rock"
+		var candidate_clearance := maxf(clearance, _get_rock_switch_clearance_distance(track_height)) if candidate_is_rock else clearance
 		var intrinsic_probe: Dictionary = candidate.duplicate()
 		intrinsic_probe["course_distance"] = 1000000.0
 		intrinsic_probe["threats"] = profile.build_threat_intervals(intrinsic_probe)
+		_apply_rock_switch_clearance(intrinsic_probe, candidate_clearance if candidate_is_rock else 0.0)
 		if not is_plan_solvable([intrinsic_probe], clearance):
 			# A profile whose own phases leave no route cannot be repaired by
 			# shifting it; skip it instead of creating an arbitrary empty stretch.
@@ -248,6 +265,7 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 		for _shift in range(128):
 			candidate["course_distance"] = _next_event_distance
 			candidate["threats"] = profile.build_threat_intervals(candidate)
+			_apply_rock_switch_clearance(candidate, candidate_clearance if candidate_is_rock else 0.0)
 			var trial := _events.duplicate()
 			trial.append(candidate)
 			if is_plan_solvable(trial, clearance):
@@ -255,7 +273,7 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 				var widest := 0.0
 				for threat in candidate["threats"]:
 					widest = maxf(widest, float(threat["end"]) - float(threat["start"]))
-				var conservative_spacing := maxf(spacing, widest + clearance)
+				var conservative_spacing := maxf(spacing, widest + candidate_clearance)
 				_next_event_distance += get_density_adjusted_spacing(conservative_spacing)
 				if _barrel_profile != null:
 					_try_append_independent_barrel(candidate, clearance)
@@ -266,6 +284,14 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 	# Use only profiles permitted by the active ruleset for the safe fallback.
 	# A hidden fallback hazard would make custom challenges/campaign stages unfair.
 	_append_safe_fallback(speed, track_height)
+
+func _apply_rock_switch_clearance(event: Dictionary, required_distance: float) -> void:
+	if str(event.get("kind", "")) != "rock" or required_distance <= 0.0:
+		return
+	var threats: Array = event.get("threats", [])
+	for threat_value in threats:
+		if threat_value is Dictionary:
+			threat_value["switch_clearance"] = required_distance
 
 func _try_append_independent_barrel(base_event: Dictionary, clearance: float) -> void:
 	var barrel_weight := _barrel_profile.weight * _get_profile_weight_multiplier(_barrel_profile.profile_id)

@@ -58,6 +58,10 @@ func create_event(rng: RandomNumberGenerator, course_distance: float, difficulty
 		&"slope":
 			width = width_range.x
 			slope_direction = -1.0 if rng.randi_range(0, 1) == 0 else 1.0
+		&"rock":
+			lane_mask = FLOOR_LANE
+			width = 90.0
+			height = 100.0
 	if difficulty != null:
 		var size_scale := float(difficulty.get("hazard_size"))
 		match event_kind:
@@ -92,6 +96,8 @@ func create_event(rng: RandomNumberGenerator, course_distance: float, difficulty
 		"motion_speed_multiplier": event_motion_speed_multiplier,
 		"profile": self,
 	}
+	if event_kind == &"rock":
+		event.merge({"trigger_lead": 1100.0, "warning_ticks": 36, "fall_ticks": 20, "burial_depth": 24.0}, true)
 	event["threats"] = build_threat_intervals(event)
 	return event
 
@@ -103,6 +109,10 @@ func build_threat_intervals(event: Dictionary) -> Array[Dictionary]:
 	# Events are instantiated at a fixed lead ahead of the viewport, so account
 	# for that offset as well as compressing each physical threat width by speed.
 	var forecast_center := center - spawn_lead_distance * (1.0 - 1.0 / speed_multiplier)
+	if StringName(event.get("kind", "")) == &"rock":
+		var half_width := float(event.get("width", 90.0)) * 0.5 + 60.0
+		intervals.append({"start": forecast_center - half_width, "end": forecast_center + half_width, "blocked_lanes": FLOOR_LANE})
+		return intervals
 	if not threat_windows.is_empty():
 		for window in threat_windows:
 			var mask := int(round(window.z))

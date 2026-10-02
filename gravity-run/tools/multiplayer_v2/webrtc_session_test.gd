@@ -1,6 +1,7 @@
 extends SceneTree
 const Service := preload("res://systems/multiplayer_v2/multiplayer_v2_service.gd")
 const Builder := preload("res://systems/course_manifest_builder.gd")
+const World := preload("res://systems/multiplayer_v2/v2_world_simulation.gd")
 
 class LocalService extends Service:
 	func _ready() -> void:
@@ -33,19 +34,31 @@ var finished_rounds := 0
 var last_status_at := -5.0
 var manifest: Resource
 var roster: Array = []
+var coin_baseline_pending := false
+var coin_baseline_started := -1.0
 
 func _initialize() -> void:
 	call_deferred("_setup")
 
 func _setup() -> void:
-	manifest = Builder.new().build(1260459445, 45000, 4).manifest
+	manifest = Builder.new().build(43, 45000, 5).manifest
+	var default_world := World.new()
+	default_world.configure(manifest)
+	var default_baseline_bytes := var_to_bytes(default_world.entity_ledger.baseline()).size()
+	var baseline_probe := Service.new()
+	baseline_probe.world_simulation = default_world
+	baseline_probe.room_state = {"room_id": "local-room", "room_session_id": "local-session", "lobby_generation": 1}
+	baseline_probe._round_id = "review-round"
+	var actual_control_bytes := baseline_probe.world_baseline_payload_size_bytes()
+	print("v5 world baseline serialized bytes: default 45000px=%d bytes; WORLD_BASELINE control=%d bytes (%d coins)" % [default_baseline_bytes, actual_control_bytes, manifest.collectibles.size()])
+	_require(actual_control_bytes <= Service.WORLD_BASELINE_APPLICATION_BUDGET_BYTES, "v5 default WORLD_BASELINE fits the selected application payload budget")
 	for id in [1, 2, 3]:
 		roster.append({"user_id": "user-%d" % id, "display_name": "Player %d" % id, "player_slot": id, "is_ready": true, "is_connected": true, "skin_id": id - 1, "loaded_manifest_hash": str(manifest.manifest_hash)})
 	for id in [1, 2, 3]:
 		var service := LocalService.new()
 		service.name = "Client%d" % id
 		root.add_child(service)
-		service.room_state = {"room_id": "local-room", "room_session_id": "local-session", "owner_user_id": "user-1", "phase": "OPEN", "lobby_generation": 1, "manifest_hash": str(manifest.manifest_hash), "members": roster.duplicate(true)}
+		service.room_state = {"room_id": "local-room", "room_session_id": "local-session", "owner_user_id": "user-1", "phase": "OPEN", "lobby_generation": 1, "generator_version": 5, "game_version": Service.V2_GAME_VERSION, "manifest_hash": str(manifest.manifest_hash), "members": roster.duplicate(true)}
 		service.identity_user_id = "user-%d" % id
 		service.current_manifest = manifest
 		var peer := WebRTCMultiplayerPeer.new()
@@ -93,6 +106,19 @@ func _process(delta: float) -> bool:
 	var all_confirmed: bool = host._session_confirmed_peers.has(2) and host._session_confirmed_peers.has(3) and clients[2]._session_confirmed_peers.has(1) and clients[3]._session_confirmed_peers.has(1)
 	if not all_confirmed:
 		return false
+	if coin_baseline_pending:
+		var coin_id := str(manifest.collectibles[0].get("entity_id", ""))
+		var synced := true
+		for peer_id in [2, 3]:
+			synced = synced and str(clients[peer_id].world_simulation.entity_ledger.entities.get(coin_id, {}).get("state", "")) == "collected"
+		if synced:
+			print("Real WebRTC v5 world baseline restored the claimed coin on both clients.")
+			coin_baseline_pending = false
+		elif elapsed - coin_baseline_started > 3.0:
+			_require(false, "real WebRTC baseline resync carries claimed coin state")
+			return false
+		else:
+			return false
 	if confirmed_at < 0:
 		confirmed_at = elapsed
 		print("Three real WebRTC sessions confirmed automatically.")
@@ -141,9 +167,19 @@ func _process(delta: float) -> bool:
 	round_number += 1
 	for service in clients.values():
 		service.begin_round("local-round-%d" % round_number, int(service.room_state.lobby_generation))
+		service.world_simulation = World.new()
+		service.world_simulation.configure(manifest)
 		service._round_coordinator.round_descriptor = {"players": roster.duplicate(true)}
 		service._round_coordinator.state = service.RoundCoordinatorScript.State.RUNNING
 		service.room_state.phase = "RUNNING"
+	if round_number == 1:
+		var host_instance: LocalService = clients[1]
+		var coin_id := str(manifest.collectibles[0].get("entity_id", ""))
+		var coin_commit := {"world_revision": 1, "commit_id": "v5coin-resync", "entity_id": coin_id, "incarnation": 1, "action": "collect", "effective_tick": 1, "reason": "verified_coin_contact", "state_before": "active", "state_after": "collected", "winner_peer_id": 2, "award_value": 1}
+		_require(host_instance.world_simulation.apply_world_commit(coin_commit) == "applied", "v5 host applies a shared coin claim")
+		host_instance._broadcast_world_baseline()
+		coin_baseline_pending = true
+		coin_baseline_started = elapsed
 	clients[1].submit_local_terminal("dead", "spikes", 198, 1846.5, 438.0)
 	clients[3].submit_local_terminal("dead", "step_spikes", 312, 2780.0, 126.25, -1)
 	clients[2].submit_local_terminal("dead", "spikes", 1591, 13438.333, 478.0)

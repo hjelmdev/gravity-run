@@ -24,6 +24,10 @@ const BARREL_SCENE := preload("res://hazards/barrel.tscn")
 const COIN_SCENE := preload("res://collectibles/coin.tscn")
 const LOOT_PICKUP_SCENE := preload("res://collectibles/loot_pickup.tscn")
 const LOOT_PLANNER_SCRIPT := preload("res://systems/loot_spawn_planner.gd")
+const SHARED_COIN_PLANNER_SCRIPT := preload("res://systems/shared_coin_planner.gd")
+const FALLING_ROCK_SCRIPT := preload("res://hazards/falling_rock.gd")
+const FALLING_ROCK_MODEL := preload("res://systems/falling_rock_model.gd")
+const MANIFEST_BUILDER_SCRIPT := preload("res://systems/course_manifest_builder.gd")
 const RUN_LOOT_ENABLED := false
 const SLOPE_SCENE := preload("res://terrain/slope.tscn")
 const LEDGE_SCENE := preload("res://terrain/ledge.tscn")
@@ -53,6 +57,14 @@ var course_generator: CourseGenerator
 var loot_spawn_planner: LootSpawnPlanner
 var course_distance := 0.0
 var coin_distance := 0.0
+var _spawned_shared_coin_ids: Dictionary = {}
+var _pending_shared_coins: Array[Dictionary] = []
+var _shared_coin_planner: RefCounted
+var _shared_coin_planned_until := -INF
+var _singleplayer_simulation_tick := 0
+var _spawned_early_rock_ids: Dictionary = {}
+var _step_start_barrel_centers: Dictionary = {}
+var _manifest_builder: RefCounted
 var floor_level_y := screen_height - 80.0
 var ceiling_level_y := 80.0
 var planned_floor_level_y := screen_height - 80.0
@@ -81,6 +93,7 @@ const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_
 func _ready() -> void:
 	course_generator = COURSE_GENERATOR_SCRIPT.new()
 	loot_spawn_planner = LOOT_PLANNER_SCRIPT.new()
+	_manifest_builder = MANIFEST_BUILDER_SCRIPT.new()
 	_default_ruleset = COURSE_RULESET_SCRIPT.new()
 	camera.set_script(CameraScript)
 	camera.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
@@ -132,6 +145,13 @@ func _start_run() -> void:
 		hud.call("set_seed", ChallengeService.generation_version, run_seed)
 		ChallengeService.fetch_current_scores()
 	coin_distance = 0.0
+	_spawned_shared_coin_ids.clear()
+	_spawned_early_rock_ids.clear()
+	_pending_shared_coins.clear()
+	_shared_coin_planned_until = PLAYER_X + SHARED_COIN_PLANNER_SCRIPT.COURSE_START_OFFSET
+	_shared_coin_planner = SHARED_COIN_PLANNER_SCRIPT.new()
+	var coin_ruleset: Resource = ChallengeService.ruleset if ChallengeService.ruleset != null else _default_ruleset
+	_shared_coin_planner.reset(_active_seed, PLAYER_X, int(coin_ruleset.get("coin_revision")), float(coin_ruleset.get("coin_density")))
 	floor_level_y = WORLD_HEIGHT - 80.0
 	ceiling_level_y = 80.0
 	planned_floor_level_y = floor_level_y
@@ -142,6 +162,7 @@ func _start_run() -> void:
 	_clear_nodes(slopes)
 	_clear_nodes(gaps)
 	game_over = false
+	_singleplayer_simulation_tick = 0
 	run_blocked = false
 	_presentation.reset(player.position)
 	_render_player_position = player.position
@@ -220,6 +241,9 @@ func _process(delta: float) -> void:
 	_render_callback_index += 1
 	_render_callback_begin_usec = callback_started_usec
 	_render_interpolation_fraction = Engine.get_physics_interpolation_fraction()
+	for obstacle in obstacles:
+		if is_instance_valid(obstacle) and obstacle.is_in_group("falling_rocks") and obstacle.has_method("set_render_fraction"):
+			obstacle.call("set_render_fraction", _render_interpolation_fraction)
 	_render_presentation_sample_usec = Time.get_ticks_usec()
 	_render_player_position = _presentation.sample(_render_interpolation_fraction)
 	_render_pose_sampled_usec = Time.get_ticks_usec() if render_diagnostics_enabled else -1
@@ -319,6 +343,14 @@ func _physics_process(delta: float) -> void:
 			if demo_restart_timer >= 0.8:
 				_start_run()
 		return
+	var previous_player_rect: Rect2 = player.call("get_player_rect")
+	var previous_world_x := float(player.get("world_x"))
+	_step_start_barrel_centers.clear()
+	for obstacle in obstacles:
+		if is_instance_valid(obstacle) and obstacle.is_in_group("barrels"):
+			var barrel_size: Vector2 = obstacle.get("size")
+			_step_start_barrel_centers[obstacle.get_instance_id()] = HAZARD_RULES_SCRIPT.barrel_center(obstacle.global_position, barrel_size.x, barrel_size.y, bool(obstacle.get("from_ceiling")))
+	_singleplayer_simulation_tick += 1
 
 	_render_diagnostic_tick += 1
 	var speed := _run_speed()
@@ -338,15 +370,32 @@ func _physics_process(delta: float) -> void:
 		if RUN_LOOT_ENABLED and AuthService.is_authenticated and not demo_mode:
 			loot_spawn_planner.ensure_horizon(course_distance + screen_width + 1400.0)
 		var spawn_line := course_distance + event_spawn_lead
+		if _active_seed_version >= COURSE_GENERATOR_SCRIPT.GENERATOR_VERSION:
+			var rock_spawn_line := course_distance + FALLING_ROCK_MODEL.TRIGGER_LEAD + 300.0
+			for planned_event in course_generator.get_planned_events():
+				if str(planned_event.get("kind", "")) != "rock" or float(planned_event.get("course_distance", INF)) > rock_spawn_line:
+					continue
+				var rock_id := _singleplayer_rock_key(planned_event)
+				if not _spawned_early_rock_ids.has(rock_id):
+					_spawned_early_rock_ids[rock_id] = true
+					_spawn_course_event(planned_event)
 		for event in course_generator.pop_events_until(spawn_line):
+			if str(event.get("kind", "")) == "rock":
+				var event_id := _singleplayer_rock_key(event)
+				if _spawned_early_rock_ids.has(event_id):
+					continue
+				_spawned_early_rock_ids[event_id] = true
 			_spawn_course_event(event)
 		if RUN_LOOT_ENABLED:
 			for loot_event in loot_spawn_planner.pop_events_until(spawn_line):
 				_spawn_loot_pickup(loot_event)
 		_update_hazard_discoveries()
-		if not demo_mode and coin_distance >= COIN_DISTANCE:
-			coin_distance -= COIN_DISTANCE
-			_spawn_coin_row()
+		if not demo_mode:
+			if _active_seed_version >= COURSE_GENERATOR_SCRIPT.GENERATOR_VERSION:
+				_spawn_shared_coins()
+			elif coin_distance >= COIN_DISTANCE:
+				coin_distance -= COIN_DISTANCE
+				_spawn_coin_row()
 
 	_update_moving_slopes(movement)
 	# Barrel motion has its own fallback while the player is blocked; other
@@ -360,9 +409,9 @@ func _physics_process(delta: float) -> void:
 	if demo_mode:
 		_update_demo_ai(delta)
 	player.call("advance", delta, _floor_surface_y(float(player.get("world_x"))), _ceiling_surface_y(float(player.get("world_x"))), _surface_is_solid_at_x(float(player.get("world_x")), false), _surface_is_solid_at_x(float(player.get("world_x")), true))
+	_update_falling_rocks(previous_world_x, float(player.get("world_x")))
 	_presentation.push(player.position)
-	if player.position.y < -64.0 or player.position.y > WORLD_HEIGHT + 64.0:
-		_end_run()
+	var run_end_requested := player.position.y < -64.0 or player.position.y > WORLD_HEIGHT + 64.0
 
 	var blocked_by_edge := false
 	for obstacle in obstacles:
@@ -382,7 +431,7 @@ func _physics_process(delta: float) -> void:
 		if impact == HAZARD_RULES_SCRIPT.PlayerImpact.BLOCKED:
 			blocked_by_edge = true
 		elif impact == HAZARD_RULES_SCRIPT.PlayerImpact.LETHAL:
-			_end_run()
+			run_end_requested = true
 			break
 	if not game_over:
 		var player_rect: Rect2 = player.call("get_player_rect")
@@ -391,7 +440,7 @@ func _physics_process(delta: float) -> void:
 				continue
 			var spike_triangles: Array = terrain.call("get_world_spike_triangles") if terrain.has_method("get_world_spike_triangles") else []
 			if HAZARD_RULES_SCRIPT.player_impact(player_rect, "spikes", Rect2(), spike_triangles, Vector2.ZERO, 0.0, bool(player.call("is_spike_immune"))) == HAZARD_RULES_SCRIPT.PlayerImpact.LETHAL:
-				_end_run()
+				run_end_requested = true
 				break
 			var from_ceiling := bool(terrain.call("is_ceiling_slope"))
 			var gravity_direction := int(player.call("get_gravity_direction"))
@@ -402,15 +451,25 @@ func _physics_process(delta: float) -> void:
 				# direction of gravity: down over a floor drop or up over a rising
 				# ceiling step.
 				blocked_by_edge = true
+	var final_player_rect: Rect2 = player.call("get_player_rect")
+	var lethal_fraction := _earliest_lethal_contact_fraction(previous_player_rect, final_player_rect)
+	if lethal_fraction >= 0.0 and lethal_fraction <= 1.0:
+		run_end_requested = true
 	run_blocked = blocked_by_edge and not game_over
 	hud.call("set_run_blocked", run_blocked)
 	if not demo_mode:
 		for coin in coins:
-			if _player_hits_obstacle(coin):
+			if not is_instance_valid(coin) or bool(coin.call("is_collected")):
+				continue
+			var center := coin.global_position
+			var fraction := HAZARD_RULES_SCRIPT.swept_rect_circle_fraction(previous_player_rect, final_player_rect.position - previous_player_rect.position, center, 13.0)
+			if fraction >= 0.0 and fraction < lethal_fraction - 0.000001:
 				coin.call("collect")
 		for pickup in loot_pickups:
 			if _player_hits_obstacle(pickup):
 				pickup.call("collect")
+	if run_end_requested:
+		_end_run()
 	var camera_left := course_distance
 	coins = coins.filter(func(coin: Node2D) -> bool: return is_instance_valid(coin) and not bool(coin.call("is_collected")) and coin.position.x > camera_left - 100.0)
 	loot_pickups = loot_pickups.filter(func(pickup: Node2D) -> bool: return is_instance_valid(pickup) and pickup.position.x > camera_left - 100.0)
@@ -513,7 +572,7 @@ func _update_moving_nodes(nodes: Array[Node2D], movement: float, delta: float = 
 	for node in nodes:
 		if not is_instance_valid(node):
 			continue
-		if (node.has_method("is_destroying_now") and bool(node.call("is_destroying_now"))) or node.position.x > camera_left - 220.0:
+		if node.is_in_group("falling_rocks") or (node.has_method("is_destroying_now") and bool(node.call("is_destroying_now"))) or node.position.x > camera_left - 220.0:
 			active_nodes.append(node)
 		else:
 			node.queue_free()
@@ -625,6 +684,19 @@ func _spawn_course_event(event: Dictionary) -> void:
 			_spawn_ledge(event, event_x)
 		&"slope":
 			_spawn_course_slope(event, event_x)
+		&"rock":
+			var near_terrain := false
+			for planned in course_generator.get_planned_events():
+				if str(planned.get("kind", "")) in ["step", "slope", "gap"] and absf(float(planned.get("course_distance", 0.0)) - float(event.get("course_distance", 0.0))) < 420.0:
+					near_terrain = true
+					break
+			if not near_terrain and _floor_surface_y(event_x) - _ceiling_surface_y(event_x) >= 260.0:
+				var rock := FALLING_ROCK_SCRIPT.new() as Node2D
+				var rock_event := {"event_id": str(event.get("id", "rock")), "kind": "rock", "x": event_x, "width": width, "height": height, "floor_y": _floor_surface_y(event_x), "ceiling_y": _ceiling_surface_y(event_x), "trigger_lead": float(event.get("trigger_lead", FALLING_ROCK_MODEL.TRIGGER_LEAD)), "warning_ticks": int(event.get("warning_ticks", FALLING_ROCK_MODEL.WARNING_TICKS)), "fall_ticks": int(event.get("fall_ticks", FALLING_ROCK_MODEL.FALL_TICKS)), "burial_depth": float(event.get("burial_depth", FALLING_ROCK_MODEL.BURIAL_DEPTH))}
+				rock.call("configure", rock_event)
+				rock.name = "FallingRock_%s" % str(event.get("id", "rock"))
+				add_child(rock)
+				obstacles.append(rock)
 		_:
 			_spawn_custom_course_event(event, event_x)
 
@@ -656,6 +728,25 @@ func _spawn_custom_course_event(event: Dictionary, x: float) -> void:
 	hazard.call("configure_course_event", event)
 	add_child(hazard)
 	obstacles.append(hazard)
+
+func _singleplayer_rock_key(event: Dictionary) -> String:
+	# Profile ids identify the rock type, not an individual encounter.
+	# Pair with its deterministic course position so early-spawn and normal
+	# event-pop paths deduplicate the same rock without suppressing later rocks.
+	return "%s:%.3f" % [str(event.get("id", "rock")), float(event.get("course_distance", -1.0))]
+
+func _update_falling_rocks(previous_x: float, current_x: float) -> void:
+	for obstacle in obstacles:
+		if not is_instance_valid(obstacle) or not obstacle.is_in_group("falling_rocks"):
+			continue
+		obstacle.call("set_simulation_tick", _singleplayer_simulation_tick)
+		if int(obstacle.call("get_activation_tick")) >= 0:
+			continue
+		var event: Dictionary = obstacle.get("event")
+		var trigger_x := float(event.get("x", 0.0)) - float(event.get("trigger_lead", FALLING_ROCK_MODEL.TRIGGER_LEAD))
+		if current_x >= trigger_x:
+			obstacle.call("set_activation_tick", _singleplayer_simulation_tick + FALLING_ROCK_MODEL.DELIVERY_TICKS)
+			obstacle.call("set_simulation_tick", _singleplayer_simulation_tick)
 
 func _spawn_spike_group(count: int, from_ceiling: bool, start_x: float) -> void:
 	for i in range(count):
@@ -785,6 +876,34 @@ func _spawn_coin_row() -> void:
 		add_child(coin)
 		coins.append(coin)
 
+func _spawn_shared_coins() -> void:
+	if _active_seed <= 0 or _manifest_builder == null or _shared_coin_planner == null:
+		return
+	var horizon := course_distance + screen_width + 1400.0
+	if PLAYER_X + horizon >= _shared_coin_planned_until + 100.0:
+		var source_events: Array[Dictionary] = course_generator.get_planned_events()
+		var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", source_events, ceili(horizon))
+		var planned: Array[Dictionary] = _shared_coin_planner.extend(PLAYER_X + horizon, resolved_events, WORLD_HEIGHT - 80.0, 80.0, 0)
+		_pending_shared_coins.append_array(planned)
+		_shared_coin_planned_until = PLAYER_X + horizon
+	var spawn_limit := PLAYER_X + course_distance + COURSE_GENERATOR_SCRIPT.get_viewport_spawn_lead_distance(screen_width, PLAYER_X, SLOPE_WIDTH)
+	for index in range(_pending_shared_coins.size() - 1, -1, -1):
+		var item: Dictionary = _pending_shared_coins[index]
+		var entity_id := str(item.get("entity_id", ""))
+		if entity_id.is_empty() or _spawned_shared_coin_ids.has(entity_id) or float(item.get("world_x", INF)) > spawn_limit:
+			continue
+		_pending_shared_coins.remove_at(index)
+		_spawned_shared_coin_ids[entity_id] = true
+		var coin := COIN_SCENE.instantiate() as Node2D
+		coin.connect("collected", Callable(run_state, "add_coins"))
+		coin.connect("collected", Callable(self, "_on_shared_coin_collected").bind(entity_id))
+		coin.position = Vector2(float(item.world_x), float(item.world_y))
+		add_child(coin)
+		coins.append(coin)
+
+func _on_shared_coin_collected(_value: int, entity_id: String) -> void:
+	_spawned_shared_coin_ids.erase(entity_id)
+
 func _spawn_loot_pickup(event: Dictionary) -> void:
 	if not RUN_LOOT_ENABLED or demo_mode or not AuthService.is_authenticated:
 		return
@@ -852,6 +971,47 @@ func _player_hits_obstacle(obstacle: Node2D) -> bool:
 	var obstacle_rect: Rect2 = obstacle.call("get_hitbox_rect")
 	return player_rect.intersects(obstacle_rect)
 
+func _earliest_lethal_contact_fraction(start_rect: Rect2, finish_rect: Rect2) -> float:
+	var displacement := finish_rect.position - start_rect.position
+	var earliest := 1.0 if player.position.y < -64.0 or player.position.y > WORLD_HEIGHT + 64.0 else INF
+	var immune := bool(player.call("is_spike_immune"))
+	for obstacle in obstacles:
+		if not is_instance_valid(obstacle) or bool(obstacle.call("is_destroying_now")):
+			continue
+		var kind := "edge" if obstacle.is_in_group("blocking_edges") else "rect"
+		var fraction := -1.0
+		if obstacle.is_in_group("falling_rocks"):
+			fraction = float(obstacle.call("swept_contact_fraction", start_rect, finish_rect, maxi(_singleplayer_simulation_tick - 1, 0), _singleplayer_simulation_tick, Vector2(34.0, 44.0)))
+		elif obstacle.is_in_group("spikes") and obstacle.has_method("get_world_triangles"):
+			if immune:
+				continue
+			for triangle in obstacle.call("get_world_triangles"):
+				var candidate := HAZARD_RULES_SCRIPT.swept_rect_polygon_fraction(start_rect, displacement, triangle)
+				if candidate >= 0.0 and (fraction < 0.0 or candidate < fraction):
+					fraction = candidate
+		elif obstacle.is_in_group("barrels"):
+			var barrel_size: Vector2 = obstacle.get("size")
+			var center := HAZARD_RULES_SCRIPT.barrel_center(obstacle.global_position, barrel_size.x, barrel_size.y, bool(obstacle.get("from_ceiling")))
+			var start_center: Vector2 = _step_start_barrel_centers.get(obstacle.get_instance_id(), center)
+			var relative_displacement := displacement - (center - start_center)
+			fraction = HAZARD_RULES_SCRIPT.swept_rect_circle_fraction(start_rect, relative_displacement, start_center, HAZARD_RULES_SCRIPT.barrel_radius(barrel_size.x, barrel_size.y))
+		else:
+			var target: Rect2 = obstacle.call("get_hitbox_rect")
+			if kind != "edge":
+				var polygon := PackedVector2Array([target.position, Vector2(target.end.x, target.position.y), target.end, Vector2(target.position.x, target.end.y)])
+				fraction = HAZARD_RULES_SCRIPT.swept_rect_polygon_fraction(start_rect, displacement, polygon)
+		if fraction >= 0.0:
+			earliest = minf(earliest, fraction)
+	for terrain in slopes:
+		if not is_instance_valid(terrain) or not terrain.has_method("is_terrain_step") or not bool(terrain.call("is_terrain_step")) or immune:
+			continue
+		if terrain.has_method("get_world_spike_triangles"):
+			for triangle in terrain.call("get_world_spike_triangles"):
+				var candidate := HAZARD_RULES_SCRIPT.swept_rect_polygon_fraction(start_rect, displacement, triangle)
+				if candidate >= 0.0:
+					earliest = minf(earliest, candidate)
+	return earliest
+
 func _draw() -> void:
 	var draw_started_usec := Time.get_ticks_usec() if render_diagnostics_enabled else -1
 	_draw_background()
@@ -860,6 +1020,7 @@ func _draw() -> void:
 	_draw_track()
 	var track_draw_done_usec := Time.get_ticks_usec() if render_diagnostics_enabled else -1
 	_draw_seed_finish_markers()
+	_draw_falling_rock_warning_markers()
 	if render_diagnostics_enabled and not _render_diagnostic_frames.is_empty():
 		var frame_record: Dictionary = _render_diagnostic_frames.back()
 		if int(frame_record.get("render_callback_index", -1)) == _render_callback_index:
@@ -868,6 +1029,22 @@ func _draw() -> void:
 			frame_record["canvas_submission_usec"] = Time.get_ticks_usec() - draw_started_usec
 			frame_record["canvas_submission_end_usec"] = Time.get_ticks_usec()
 			_render_diagnostic_frames[_render_diagnostic_frames.size() - 1] = frame_record
+
+func _draw_falling_rock_warning_markers() -> void:
+	if not is_instance_valid(camera):
+		return
+	var view_left := camera.get_screen_center_position().x - screen_width * 0.5
+	var view_right := view_left + screen_width
+	for obstacle in obstacles:
+		if not is_instance_valid(obstacle) or not obstacle.is_in_group("falling_rocks") or str(obstacle.call("get_phase")) != "warning" or obstacle.global_position.x <= view_right:
+			continue
+		var marker_x := view_right - 44.0
+		var event: Dictionary = obstacle.get("event")
+		var floor_y := float(event.get("floor_y", WORLD_HEIGHT - 80.0))
+		draw_line(Vector2(marker_x, floor_y - 42.0), Vector2(marker_x, floor_y - 6.0), Color("ff814f"), 4.0)
+		draw_line(Vector2(marker_x - 9.0, floor_y - 16.0), Vector2(marker_x, floor_y - 6.0), Color("ff814f"), 4.0)
+		draw_line(Vector2(marker_x + 9.0, floor_y - 16.0), Vector2(marker_x, floor_y - 6.0), Color("ff814f"), 4.0)
+		draw_string(ThemeDB.fallback_font, Vector2(marker_x - 38.0, floor_y - 50.0), tr("ROCK DROP"), HORIZONTAL_ALIGNMENT_CENTER, 84.0, 14, Color("ffe1a3"))
 
 func _on_seed_leaderboard_received(version: int, seed: int, rows: Array, _error_message: String) -> void:
 	if version != _active_seed_version or seed != _active_seed:

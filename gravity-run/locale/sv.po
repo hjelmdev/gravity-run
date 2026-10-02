@@ -1291,3 +1291,33 @@ msgstr "Värden var frånkopplad längre än återanslutningstiden tillåter."
 
 msgid "Supabase returned an incomplete identity."
 msgstr "Supabase returnerade en ofullständig identitet."
+
+msgid "Shared coins"
+msgstr "Gemensamma mynt"
+
+msgid "Shared coins: %d"
+msgstr "Gemensamma mynt: %d"
+
+msgid "Falling rock"
+msgstr "Fallande sten"
+
+msgid "ROCK DROP"
+msgstr "STEN FALLER"
+
+msgid "Shared account coins saved"
+msgstr "Gemensamma kontomynt sparade"
+
+msgid "Shared account coins pending"
+msgstr "Gemensamma kontomynt väntar på att sparas"
+
+msgid "Shared coins were not linked to an account"
+msgstr "Gemensamma mynt kopplades inte till ett konto"
+
+msgid "Shared coins were not linked to this account"
+msgstr "Gemensamma mynt kopplades inte till det här kontot"
+
+msgid "Account coin linking failed. Check your connection and retry before starting the multiplayer round."
+msgstr "Kontolänkningen för mynt misslyckades. Kontrollera anslutningen och försök igen innan du startar flerspelarrundan."
+
+msgid "The world baseline is too large for multiplayer transfer (%d/%d bytes)."
+msgstr "Världens grunddata är för stor för överföring i flerspelarläge (%d/%d byte)."

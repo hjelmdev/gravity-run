@@ -6,6 +6,7 @@ const RpcEndpointScript := preload("res://systems/multiplayer_v2/v2_rpc_endpoint
 const DiagnosticsScript := preload("res://systems/multiplayer_v2/v2_diagnostics.gd")
 const LobbyProviderScript := preload("res://systems/multiplayer_v2/v2_lobby_provider.gd")
 const IdentityAdapterScript := preload("res://systems/multiplayer_v2/v2_identity_adapter.gd")
+const CoinAwardProviderScript := preload("res://systems/multiplayer_v2/v2_coin_award_provider.gd")
 const SignalingTransportScript := preload("res://systems/supabase_signaling_transport.gd")
 const WebRTCTransportScript := preload("res://systems/multiplayer_v2/v2_webrtc_transport.gd")
 const CourseGeneratorScript := preload("res://systems/course_generator.gd")
@@ -15,6 +16,8 @@ const ManifestBuilderScript := preload("res://systems/course_manifest_builder.gd
 const DestructibleRulesScript := preload("res://systems/multiplayer_v2/v2_destructible_rules.gd")
 const RaceResults := preload("res://systems/race_results.gd")
 const Motion := preload("res://systems/runner_motion.gd")
+const FallingRockModel := preload("res://systems/falling_rock_model.gd")
+const WORLD_BASELINE_APPLICATION_BUDGET_BYTES := 48 * 1024
 
 signal session_changed(session: Dictionary)
 signal transport_state_changed(state: String, message: String)
@@ -38,7 +41,7 @@ signal results_received(result: Dictionary)
 signal lobby_returned
 signal membership_removed(reason: String)
 
-const V2_GAME_VERSION := "2.1.20260930.4"
+const V2_GAME_VERSION := "2.1.20261001.1"
 const MAX_PLAYERS := 5
 const POSITION_RATE_HZ := 30
 
@@ -56,6 +59,32 @@ var identity_is_anonymous := true
 var room_state: Dictionary = {}
 var _identity_adapter: Node
 var _lobby_provider: Node
+var _coin_award_provider: Node
+var _coin_backend_round_id := ""
+var _coin_round_backends: Dictionary = {}
+var _coin_round_contexts: Dictionary = {}
+var _coin_round_request_contexts: Dictionary = {}
+var _coin_award_queue: Array[Dictionary] = []
+var _coin_journal_batches: Dictionary = {}
+var _coin_journal_retry_elapsed := 0.0
+var _coin_settlement_retry_elapsed := 0.0
+var _rock_warning_missed_recovery := false
+var _coin_wallet_status := "idle"
+var _coin_wallet_status_user := ""
+var _coin_confirmed_awards_by_round: Dictionary = {}
+var _coin_bound_account_by_round: Dictionary = {}
+var _coin_room_generation_by_round: Dictionary = {}
+var _coin_link_challenges: Dictionary = {}
+var _coin_link_account_contexts: Dictionary = {}
+var _coin_link_requested_generation := ""
+var _coin_link_done_generation := ""
+var _coin_link_bound_generation := ""
+var _coin_link_waiting_for_prepared := false
+var _coin_register_waiting_round := ""
+var _coin_register_last_attempt_usec := -1
+var _coin_register_inflight := false
+var _coin_register_inflight_round := ""
+var _coin_host_prepare_waiting := false
 var _signaling_transport: Node
 var _webrtc_transport: Node
 var _pending_identity_action := ""
@@ -69,6 +98,7 @@ var _room_refresh_requested_again := false
 var _last_sample_by_peer: Dictionary = {}
 var _last_seen_tick_by_peer: Dictionary = {}
 var _last_sample_state_by_peer: Dictionary = {}
+var _validated_motion_history: Dictionary = {}
 var _last_input_sequence_by_peer: Dictionary = {}
 var _last_accepted_flip_tick_by_peer: Dictionary = {}
 var _round_id := ""
@@ -83,11 +113,12 @@ var _clock_ping_elapsed := 0.0
 var _heartbeat_elapsed := 0.0
 var _local_prepare_pending := false
 var _manifest_action_pending := ""
-var world_simulation: MultiplayerV2WorldSimulation
+var world_simulation: Variant
 var terminal_status: Dictionary = {}
 var _interaction_results: Dictionary = {}
 var _pending_interactions: Array[Dictionary] = []
 const BARREL_CLAIM_BATCH_USEC := 150_000
+const COIN_CLAIM_WINDOW_USEC := 120_000
 var _world_event_acks: Dictionary = {}
 var _disconnect_since_usec: Dictionary = {}
 var _last_heartbeat_usec: Dictionary = {}
@@ -153,6 +184,20 @@ func _process(delta: float) -> void:
 		if _lobby_poll_elapsed >= 3.0:
 			_lobby_poll_elapsed = 0.0
 			refresh_room()
+	# Coin claims have a bounded arbitration window and must survive the terminal
+	# transition long enough to settle contacts that happened before death.
+	_drain_interaction_claims()
+	_maybe_finish_round()
+	_coin_journal_retry_elapsed += delta
+	if _coin_journal_retry_elapsed >= 2.0:
+		_coin_journal_retry_elapsed = 0.0
+		_flush_coin_award_journal()
+		if not _coin_register_waiting_round.is_empty() and Time.get_ticks_usec() - _coin_register_last_attempt_usec >= 2_000_000:
+			_register_coin_backend_round()
+	_coin_settlement_retry_elapsed += delta
+	if _coin_settlement_retry_elapsed >= 10.0:
+		_coin_settlement_retry_elapsed = 0.0
+		_settle_coin_wallet()
 	if _active:
 		diagnostics.session["phase"] = str(room_state.get("phase", ""))
 		diagnostics.session["lobby_generation"] = int(room_state.get("lobby_generation", -1))
@@ -171,7 +216,6 @@ func _process(delta: float) -> void:
 					send_control(int(target), "HEARTBEAT", {"host_sent_usec": Time.get_ticks_usec()})
 		_round_coordinator.process(Time.get_ticks_usec())
 		_process_reconnect_sync(delta)
-		_drain_interaction_claims()
 		_process_result_delivery(delta)
 		_process_terminal_delivery(delta)
 		_process_round_failure_delivery(delta)
@@ -208,6 +252,15 @@ func _create_lobby_services() -> void:
 	_lobby_provider.request_finished.connect(_on_lobby_request_finished)
 	_lobby_provider.request_timing.connect(_on_lobby_request_timing)
 	add_child(_lobby_provider)
+	_coin_award_provider = CoinAwardProviderScript.new()
+	_coin_award_provider.name = "CoinAwardProvider"
+	_coin_award_provider.request_finished.connect(_on_coin_award_request_finished)
+	add_child(_coin_award_provider)
+	var auth := get_node_or_null("/root/AuthService")
+	if auth != null and auth.has_signal("auth_state_changed"):
+		auth.auth_state_changed.connect(_on_account_auth_state_changed)
+	if auth != null and bool(auth.get("is_authenticated")):
+		_settle_coin_wallet()
 	_signaling_transport = SignalingTransportScript.new()
 	_signaling_transport.name = "Signaling"
 	_signaling_transport.connection_state_changed.connect(_on_signaling_state_changed)
@@ -566,6 +619,8 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 						send_control(removed_slot, "KICKED", {"reason": "host_removed_from_lobby"})
 			room_state = next_room.duplicate(true)
 			room_state["network_mode"] = "v2"
+			if action == "set_phase" and str(room_state.get("phase", "")) == "RUNNING" and is_room_owner():
+				_register_coin_backend_round()
 			_record_room_snapshot_applied(action, local_before_response, response_room)
 			if action not in ["create_room", "join_room"]:
 				_webrtc_transport.update_room(room_state)
@@ -841,12 +896,15 @@ func send_control(peer_id: int, kind: String, payload: Dictionary) -> void:
 
 func begin_round(round_id: String, roster_revision: int) -> void:
 	_round_id = round_id
+	if current_manifest != null and int(current_manifest.generator_version) == 5 and not _coin_room_generation_by_round.has(round_id):
+		_coin_room_generation_by_round[round_id] = {"room_id": str(room_state.get("room_id", "")), "generation": int(room_state.get("lobby_generation", -1))}
 	diagnostics.terminal_frames.clear()
 	_round_roster_revision = roster_revision
 	_sample_accumulator = 0.0
 	_last_sample_by_peer.clear()
 	_last_seen_tick_by_peer.clear()
 	_last_sample_state_by_peer.clear()
+	_validated_motion_history.clear()
 	_last_input_sequence_by_peer.clear()
 	_last_accepted_flip_tick_by_peer.clear()
 	_world_event_acks.clear()
@@ -911,6 +969,7 @@ func _on_player_sample_rpc(sender_peer_id: int, sample: Dictionary) -> void:
 			_mark_peer_contact(sender_peer_id, "SAMPLE")
 		_last_sample_by_peer[owner_peer] = int(sample.sample_seq)
 		_last_seen_tick_by_peer[owner_peer] = int(sample.simulation_tick)
+		_record_validated_motion_sample(owner_peer, sample)
 		_audit_sample_physics(owner_peer, sample)
 		_last_sample_state_by_peer[owner_peer] = sample.duplicate(true)
 		diagnostics.increment_metric("samples_validated_host")
@@ -930,6 +989,7 @@ func _on_player_sample_rpc(sender_peer_id: int, sample: Dictionary) -> void:
 	_mark_peer_contact(sender_peer_id, "SAMPLE")
 	_last_sample_by_peer[owner_peer] = int(sample.sample_seq)
 	_last_seen_tick_by_peer[owner_peer] = int(sample.simulation_tick)
+	_record_validated_motion_sample(owner_peer, sample)
 	_last_sample_state_by_peer[owner_peer] = sample.duplicate(true)
 	diagnostics.increment_metric("samples_accepted_owner_%d" % owner_peer)
 	diagnostics.increment_metric("samples_presented_remote")
@@ -940,6 +1000,70 @@ func _record_sample_rejection(sender: int, owner: int, details: Dictionary) -> v
 	diagnostics.increment_metric("samples_rejected_reason_%s" % str(details.get("reason", "unknown")))
 	if int(diagnostics.metrics.get("samples_rejected_owner_%d_sender_%d" % [owner, sender], 0)) == 1:
 		diagnostics.record_event("sample_rejected", details)
+
+func _record_validated_motion_sample(peer_id: int, sample: Dictionary) -> void:
+	var history: Array = _validated_motion_history.get(peer_id, [])
+	var tick_value := int(sample.get("simulation_tick", -1))
+	if tick_value < 0:
+		return
+	if not history.is_empty() and int(history.back().get("simulation_tick", -1)) >= tick_value:
+		return
+	var previous: Dictionary = history.back() if not history.is_empty() else {}
+	history.append(sample.duplicate(true))
+	while history.size() > 96:
+		history.pop_front()
+	_validated_motion_history[peer_id] = history
+	if str(session.get("role", "")) == "host" and not previous.is_empty():
+		_maybe_activate_falling_rocks(peer_id, previous, sample)
+
+func observe_local_world_progress(previous: Dictionary, proposed: Dictionary) -> void:
+	var local_peer := int(session.get("local_peer_id", 1))
+	if str(session.get("role", "")) != "host" or not _active or terminal_status.has(local_peer):
+		return
+	_maybe_activate_falling_rocks(local_peer, previous, proposed)
+
+func request_rock_warning_recovery(event_id: String, activation_tick: int) -> void:
+	if str(session.get("role", "")) != "guest" or not _active or _round_id.is_empty():
+		return
+	if _rock_warning_missed_recovery:
+		return
+	_rock_warning_missed_recovery = true
+	_reconnect_sync_pending[1] = true
+	_reconnect_sync_since_usec[1] = Time.get_ticks_usec()
+	_sync_request_ids[1] = Crypto.new().generate_random_bytes(16).hex_encode()
+	diagnostics.record_event("falling_rock_warning_delivery_late", {"round_id": _round_id, "event_id": event_id, "activation_tick": activation_tick, "local_world_tick": world_simulation.tick if world_simulation != null else -1, "policy": "reconnect_sync_then_round_elimination_without_retroactive_contact"})
+
+func consume_rock_warning_missed_recovery() -> bool:
+	var missed := _rock_warning_missed_recovery
+	_rock_warning_missed_recovery = false
+	return missed
+
+func _maybe_activate_falling_rocks(peer_id: int, previous: Dictionary, proposed: Dictionary) -> void:
+	if world_simulation == null or current_manifest == null or terminal_status.has(peer_id):
+		return
+	var previous_x := float(previous.get("world_x", 0.0))
+	var current_x := float(proposed.get("world_x", 0.0))
+	if current_x <= previous_x:
+		return
+	for event in current_manifest.events:
+		if str(event.get("kind", "")) != "rock":
+			continue
+		var entity_id := str(event.get("event_id", ""))
+		var entity: Dictionary = world_simulation.entity_ledger.entities.get(entity_id, {})
+		if entity.is_empty() or int(entity.get("rock_activation_tick", -1)) >= 0:
+			continue
+		var trigger_x := float(event.get("x", 0.0)) - float(event.get("trigger_lead", FallingRockModel.TRIGGER_LEAD))
+		if current_x < trigger_x:
+			continue
+		var activation_tick: int = int(world_simulation.tick) + FallingRockModel.DELIVERY_TICKS
+		var commit := {"world_revision": world_simulation.entity_ledger.revision + 1, "commit_id": "rock-%s-%d" % [entity_id, activation_tick], "entity_id": entity_id, "incarnation": 1, "action": "activate_rock", "effective_tick": activation_tick, "rock_activation_tick": activation_tick, "trigger_peer_id": peer_id, "trigger_tick": int(proposed.get("simulation_tick", world_simulation.tick)), "state_before": "active", "state_after": "active"}
+		var result := str(world_simulation.apply_world_commit(commit))
+		diagnostics.record_event("falling_rock_trigger", {"event_id": entity_id, "peer_id": peer_id, "trigger_tick": int(commit.trigger_tick), "activation_tick": activation_tick, "result": result})
+		if result != "applied":
+			continue
+		world_event_committed.emit(commit.duplicate(true))
+		for target in connected_peer_ids():
+			send_control(int(target), "WORLD_COMMIT", commit)
 
 func _audit_sample_physics(peer_id: int, sample: Dictionary) -> void:
 	if not _last_sample_state_by_peer.has(peer_id):
@@ -1061,7 +1185,7 @@ func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary
 			if not _reconnect_sync_since_usec.has(sender_peer_id):
 				_reconnect_sync_since_usec[sender_peer_id] = Time.get_ticks_usec()
 			_reconnect_sync_requests[sender_peer_id] = payload.duplicate(true)
-			var host_revision := world_simulation.entity_ledger.revision if world_simulation != null else 0
+			var host_revision: int = world_simulation.entity_ledger.revision if world_simulation != null else 0
 			if int(payload.get("client_world_revision", 0)) > host_revision:
 				diagnostics.record_event("reconnect_sync_rejected", {"peer_id": sender_peer_id, "reason": "client_world_revision_ahead", "client_revision": int(payload.get("client_world_revision", -1)), "host_revision": host_revision, "round_id": _round_id})
 				return
@@ -1070,7 +1194,7 @@ func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary
 		"RECONNECT_SYNC_CONFIRMED":
 			if str(payload.get("sync_request_id", "")) != str(_sync_request_ids.get(sender_peer_id, "")) or not _sync_request_ids.has(sender_peer_id):
 				return
-			var host_revision := world_simulation.entity_ledger.revision if world_simulation != null else 0
+			var host_revision: int = world_simulation.entity_ledger.revision if world_simulation != null else 0
 			var guest_revision := int(payload.get("client_world_revision", -1))
 			if str(payload.get("round_id", "")) != _round_id or not reconnect_world_revision_matches(host_revision, guest_revision):
 				diagnostics.record_event("reconnect_sync_retry", {"peer_id": sender_peer_id, "reason": "world_revision_unconfirmed", "client_revision": guest_revision, "host_revision": host_revision, "client_tick": int(payload.get("client_tick", -1)), "host_tick": world_simulation.tick if world_simulation != null else 0})
@@ -1128,8 +1252,14 @@ func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary
 			diagnostics.record_event("prepare_rpc_ack_received", {"peer_id": sender_peer_id, "round_id": _round_id})
 			_round_coordinator.acknowledge_prepare_received(sender_peer_id, _round_id)
 		"PREPARED":
-			diagnostics.record_event("scene_ready_received", {"peer_id": sender_peer_id, "round_id": _round_id})
+			var bound_state := bool(payload.get("coin_account_bound", false))
+			var binding_states: Dictionary = _round_coordinator.round_descriptor.get("coin_account_bindings", {})
+			binding_states[str(sender_peer_id)] = bound_state
+			_round_coordinator.round_descriptor["coin_account_bindings"] = binding_states
+			diagnostics.record_event("scene_ready_received", {"peer_id": sender_peer_id, "round_id": _round_id, "coin_account_bound": bound_state})
 			_round_coordinator.acknowledge_prepared(sender_peer_id, _round_id, Time.get_ticks_usec())
+			if _coin_host_prepare_waiting and _all_remote_peers_prepared():
+				_register_coin_backend_round()
 		"START_ACK":
 			diagnostics.record_event("start_ack_received", {"peer_id": sender_peer_id, "round_id": _round_id})
 			_round_coordinator.acknowledge_start(sender_peer_id, _round_id, Time.get_ticks_usec())
@@ -1159,7 +1289,7 @@ func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 				return
 			var expected_round := str(payload.get("round_id", ""))
 			var host_revision := int(payload.get("world_revision", -1))
-			var local_revision := world_simulation.entity_ledger.revision if world_simulation != null else 0
+			var local_revision: int = world_simulation.entity_ledger.revision if world_simulation != null else 0
 			var baseline_required := bool(payload.get("baseline_required", false))
 			if expected_round != _round_id or (baseline_required and world_simulation == null) or not reconnect_world_revision_matches(host_revision, local_revision):
 				diagnostics.record_event("reconnect_sync_ack_rejected", {"round_id": _round_id, "host_round_id": expected_round, "host_revision": host_revision, "local_revision": local_revision, "baseline_required": baseline_required})
@@ -1172,7 +1302,7 @@ func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 			if str(payload.get("sync_request_id", "")) != str(_sync_request_ids.get(1, "")) or not _sync_request_ids.has(1):
 				return
 			var host_revision := int(payload.get("world_revision", -1))
-			var local_revision := world_simulation.entity_ledger.revision if world_simulation != null else 0
+			var local_revision: int = world_simulation.entity_ledger.revision if world_simulation != null else 0
 			if str(payload.get("round_id", "")) != _round_id or not reconnect_world_revision_matches(host_revision, local_revision):
 				diagnostics.record_event("reconnect_sync_complete_rejected", {"round_id": _round_id, "host_round_id": str(payload.get("round_id", "")), "host_revision": host_revision, "local_revision": local_revision})
 				_send_reconnect_sync_request()
@@ -1244,12 +1374,16 @@ func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 			_round_coordinator.clock.record_clock_exchange(int(payload.get("client_sent_usec", 0)), int(payload.get("host_received_usec", 0)), int(payload.get("host_sent_usec", 0)), Time.get_ticks_usec())
 		"HEARTBEAT":
 			_last_host_heartbeat_usec = Time.get_ticks_usec()
+		"COIN_AWARDS_JOURNALED":
+			if str(payload.get("round_id", "")) == _round_id:
+				_settle_coin_wallet()
 		"WORLD_COMMIT":
 			var commit: Dictionary = payload
 			if world_simulation != null and not commit.is_empty():
-				var commit_result := world_simulation.apply_world_commit(commit)
+				var commit_result: String = world_simulation.apply_world_commit(commit)
 				diagnostics.record_event("world_event_applied", {"result": commit_result, "revision": int(commit.get("world_revision", -1))})
 				send_control(1, "WORLD_EVENT_ACK", {"world_revision": world_simulation.entity_ledger.revision})
+			_note_local_coin_award(commit)
 			world_event_committed.emit(payload.duplicate(true))
 			var transition: Dictionary = payload.get("linked_player_transition", {})
 			if not transition.is_empty():
@@ -1314,7 +1448,39 @@ func mark_local_prepared() -> void:
 	if not _validate_local_peer_mapping("scene_ready"):
 		_round_coordinator.cancel("peer_mapping_mismatch")
 		return
+	var coin_context := _coin_link_context()
+	if current_manifest != null and int(current_manifest.generator_version) == 5 and _coin_link_done_generation != coin_context:
+		var auth := get_node_or_null("/root/AuthService")
+		if auth != null and bool(auth.get("is_authenticated")) and not str(auth.call("get_access_token")).is_empty():
+			_coin_link_waiting_for_prepared = true
+			_request_coin_account_binding()
+			return
+		_coin_link_done_generation = coin_context
+		_coin_link_bound_generation = ""
+	if is_room_owner() and current_manifest != null and int(current_manifest.generator_version) == 5 and not _coin_round_backends.has(_round_id):
+		_coin_register_waiting_round = _round_id
+		_coin_host_prepare_waiting = true
+		if _all_remote_peers_prepared():
+			_register_coin_backend_round()
+		return
+	_mark_local_prepared_now()
+
+func _all_remote_peers_prepared() -> bool:
+	if not _round_coordinator.is_host or _round_coordinator.state != RoundCoordinatorScript.State.PREPARING:
+		return false
+	for peer_id in _round_coordinator.peer_ids:
+		if not bool(_round_coordinator.prepared_peers.get(peer_id, false)):
+			return false
+	return true
+
+func _mark_local_prepared_after_coin_barriers() -> void:
+	mark_local_prepared()
+
+func _mark_local_prepared_now() -> void:
+	if not _active or _round_id.is_empty():
+		return
 	diagnostics.record_event("local_scene_ready", {"round_id": _round_id, "manifest_hash": str(current_manifest.manifest_hash) if current_manifest != null else "", "player_nodes": get_active_round_roster().size(), "world_entities": world_simulation.entity_ledger.entities.size() if world_simulation != null else 0})
+	_round_coordinator.round_descriptor["coin_account_bound"] = _coin_link_bound_generation == _coin_link_context()
 	_local_prepare_pending = true
 	if _round_coordinator.is_host or _round_coordinator.clock.is_synchronized():
 		_local_prepare_pending = false
@@ -1322,6 +1488,7 @@ func mark_local_prepared() -> void:
 
 func _on_round_started(round_id: String, descriptor: Dictionary) -> void:
 	_start_in_flight = false
+	_rock_warning_missed_recovery = false
 	_round_id = round_id
 	_round_roster_revision = int(descriptor.get("roster_revision", 0))
 	_round_coordinator.clock.commit_start(Time.get_ticks_usec())
@@ -1331,21 +1498,280 @@ func _on_round_started(round_id: String, descriptor: Dictionary) -> void:
 	begin_round(round_id, _round_roster_revision)
 	if world_simulation != null and current_manifest != null:
 		world_simulation.configure(current_manifest)
-		if is_room_owner():
-			for target in connected_peer_ids():
-				send_control(int(target), "WORLD_BASELINE", {"world_baseline": world_simulation.entity_ledger.baseline()})
+	_broadcast_world_baseline()
+	_settle_coin_wallet()
+
+func _request_coin_account_binding() -> void:
+	var auth := get_node_or_null("/root/AuthService")
+	if not has_room() or int(room_state.get("generator_version", 0)) != 5 or auth == null or str(auth.call("get_access_token")).is_empty():
+		return
+	var generation := int(room_state.get("lobby_generation", 0))
+	var context := _coin_link_context()
+	if generation <= 0 or context.is_empty() or _coin_link_requested_generation == context:
+		return
+	_coin_link_requested_generation = context
+	_coin_link_account_contexts[context] = {"token": str(auth.call("get_access_token")), "account_user_id": str(auth.get("user_id")), "room_id": str(room_state.room_id), "round_id": _round_id, "generation": generation}
+	_coin_award_provider.call_rpc("coin_link_request", "request_multiplayer_v2_coin_account_link", {"p_room_id": str(room_state.room_id), "p_lobby_generation": generation}, _identity_adapter.token(), context)
+
+func _coin_link_context() -> String:
+	if room_state.is_empty() or _round_id.is_empty():
+		return ""
+	return "%s|%d|%s" % [str(room_state.get("room_id", "")), int(room_state.get("lobby_generation", -1)), _round_id]
+
+func _register_coin_backend_round() -> void:
+	if not is_room_owner() or current_manifest == null or _round_id.is_empty() or (_coin_register_inflight and _coin_register_inflight_round == _round_id) or _coin_round_backends.has(_round_id) or not _all_remote_peers_prepared():
+		return
+	var baseline_size := world_baseline_payload_size_bytes()
+	if baseline_size > WORLD_BASELINE_APPLICATION_BUDGET_BYTES:
+		_coin_host_prepare_waiting = false
+		_coin_register_waiting_round = ""
+		diagnostics.record_event("world_baseline_budget_exceeded", {"round_id": _round_id, "serialized_bytes": baseline_size, "budget_bytes": WORLD_BASELINE_APPLICATION_BUDGET_BYTES})
+		start_failure_changed.emit(tr("The world baseline is too large for multiplayer transfer (%d/%d bytes).") % [baseline_size, WORLD_BASELINE_APPLICATION_BUDGET_BYTES])
+		_round_coordinator.cancel("world_baseline_budget_exceeded")
+		return
+	_coin_register_last_attempt_usec = Time.get_ticks_usec()
+	_coin_register_inflight = true
+	_coin_register_inflight_round = _round_id
+	var ids: Array[String] = []
+	for collectible in current_manifest.collectibles:
+		ids.append(str(collectible.get("entity_id", "")))
+	var host_token: String = str(_identity_adapter.token())
+	_coin_round_request_contexts[_round_id] = {"room_id": str(room_state.get("room_id", "")), "generation": int(room_state.get("lobby_generation", -1)), "round_id": _round_id, "host_token": host_token, "host_user_id": identity_user_id}
+	_coin_award_provider.call_rpc("coin_round_register", "register_multiplayer_v2_coin_round", {"p_room_id": str(room_state.room_id), "p_lobby_generation": int(room_state.get("lobby_generation", 0)), "p_runtime_round_id": _round_id, "p_manifest_hash": str(current_manifest.manifest_hash), "p_coin_ids": ids}, host_token, _round_id)
+
+func world_baseline_payload_size_bytes() -> int:
+	if world_simulation == null:
+		return 0
+	var packet := _session_envelope()
+	packet["world_baseline"] = world_simulation.entity_ledger.baseline()
+	return var_to_bytes(["WORLD_BASELINE", packet]).size()
+
+func _note_local_coin_award(commit: Dictionary) -> void:
+	if str(commit.get("action", "")) != "collect" or int(commit.get("winner_peer_id", -1)) != int(session.get("local_peer_id", 1)):
+		return
+	var auth := get_node_or_null("/root/AuthService")
+	if auth != null and bool(auth.get("is_authenticated")) and str(auth.get("user_id")) == str(_coin_bound_account_by_round.get(_round_id, "")):
+		_coin_wallet_status_user = str(auth.get("user_id"))
+		_coin_wallet_status = "pending"
+
+func _queue_coin_award_persistence(entity_id: String, winner_peer: int, value: int) -> void:
+	if str(session.get("role", "")) != "host" or entity_id.is_empty() or value != 1:
+		return
+	var slot := winner_peer
+	_coin_award_queue.append({"round_id": _round_id, "entity_id": entity_id, "player_slot": slot})
+
+func _flush_coin_award_journal() -> void:
+	if _coin_award_queue.is_empty():
+		return
+	var context := ""
+	for item in _coin_award_queue:
+		var candidate_round := str(item.get("round_id", ""))
+		if _coin_round_backends.has(candidate_round) and not _coin_journal_batches.has(candidate_round):
+			context = candidate_round
+			break
+	if context.is_empty():
+		return
+	var batch: Array[Dictionary] = []
+	var deferred: Array[Dictionary] = []
+	while not _coin_award_queue.is_empty() and batch.size() < 64:
+		var item: Dictionary = _coin_award_queue.pop_front()
+		if str(item.get("round_id", "")) == context:
+			batch.append({"entity_id": str(item.entity_id), "player_slot": int(item.player_slot)})
+		else:
+			deferred.append(item)
+	_coin_award_queue.append_array(deferred)
+	_coin_journal_batches[context] = batch
+	var actor_context: Dictionary = _coin_round_contexts.get(context, {})
+	var actor_token := str(actor_context.get("host_token", ""))
+	if actor_token.is_empty():
+		_coin_award_queue.append_array(batch.map(func(award: Dictionary) -> Dictionary: return {"round_id": context, "entity_id": str(award.entity_id), "player_slot": int(award.player_slot)}))
+		_coin_journal_batches.erase(context)
+		diagnostics.record_event("coin_journal_actor_unavailable", {"round_id": context, "reason": "No frozen host identity token is available for journal retry."})
+		return
+	_coin_award_provider.call_rpc("coin_awards_journal", "journal_multiplayer_v2_coin_awards", {"p_coin_round_id": str(_coin_round_backends[context]), "p_awards": batch}, actor_token, context)
+
+func _settle_coin_wallet() -> void:
+	var auth := get_node_or_null("/root/AuthService")
+	if auth == null or str(auth.call("get_access_token")).is_empty():
+		return
+	_coin_award_provider.call_rpc("coin_awards_settle", "settle_my_pending_multiplayer_coin_awards", {}, str(auth.call("get_access_token")), str(auth.get("user_id")))
+
+func coin_wallet_status_for_local_awards(award_count: int) -> String:
+	if award_count <= 0:
+		return ""
+	var auth := get_node_or_null("/root/AuthService")
+	if auth == null or not bool(auth.get("is_authenticated")):
+		return "Shared coins were not linked to an account"
+	if str(_coin_bound_account_by_round.get(_round_id, "")) != str(auth.get("user_id")):
+		return "Shared coins were not linked to this account"
+	var confirmation_key := _coin_settlement_key(_round_id, identity_user_id, str(auth.get("user_id")))
+	if int(_coin_confirmed_awards_by_round.get(confirmation_key, 0)) >= award_count:
+		return "Shared account coins saved"
+	return "Shared account coins pending"
+
+func _coin_settlement_key(runtime_round_id: String, network_user_id: String, account_user_id: String) -> String:
+	var frozen: Dictionary = _coin_room_generation_by_round.get(runtime_round_id, {})
+	var room_id := str(frozen.get("room_id", room_state.get("room_id", "")))
+	var generation := int(frozen.get("generation", room_state.get("lobby_generation", -1)))
+	return "%s|%d|%s|%s|%s" % [room_id, generation, runtime_round_id, network_user_id, account_user_id]
+
+func _record_coin_settlements(data: Dictionary, account_user_id: String) -> void:
+	for settlement_variant in data.get("settlements", []):
+		if not settlement_variant is Dictionary:
+			continue
+		var settlement: Dictionary = settlement_variant
+		if str(settlement.get("account_user_id", "")) != account_user_id or str(settlement.get("network_user_id", "")) != identity_user_id:
+			continue
+		var settlement_round := str(settlement.get("runtime_round_id", ""))
+		if settlement_round.is_empty():
+			continue
+		var frozen_round: Dictionary = _coin_room_generation_by_round.get(settlement_round, {})
+		if not frozen_round.is_empty() and (str(settlement.get("room_id", "")) != str(frozen_round.get("room_id", "")) or int(settlement.get("lobby_generation", -1)) != int(frozen_round.get("generation", -2))):
+			continue
+		var key := _coin_settlement_key(settlement_round, identity_user_id, account_user_id)
+		_coin_confirmed_awards_by_round[key] = maxi(int(_coin_confirmed_awards_by_round.get(key, 0)), int(settlement.get("coins_earned", 0)))
+
+func _on_account_auth_state_changed(is_authenticated: bool, _email: String) -> void:
+	if is_authenticated:
+		_settle_coin_wallet()
+
+func _on_coin_award_request_finished(action: String, success: bool, data: Variant, message: String, context: String) -> void:
+	if action == "coin_link_request":
+		if context != _coin_link_context():
+			_coin_link_account_contexts.erase(context)
+			return
+		if not _coin_link_account_matches_current(context):
+			_cancel_coin_link_account_changed(context)
+			return
+		if success and data is Dictionary and not bool(data.get("bound", false)):
+			var challenge_id := str(data.get("challenge_id", ""))
+			var nonce := str(data.get("nonce", ""))
+			var link_context: Dictionary = _coin_link_account_contexts.get(context, {})
+			var account_token := str(link_context.get("token", ""))
+			if not challenge_id.is_empty() and nonce.length() == 64 and not account_token.is_empty():
+				_coin_award_provider.call_rpc("coin_link_resolve", "resolve_multiplayer_v2_coin_account_link", {"p_challenge_id": challenge_id, "p_nonce": nonce}, account_token, context)
+				return
+		if not success:
+			diagnostics.record_event("coin_account_link_unavailable", {"generation": int(room_state.get("lobby_generation", -1)), "room_id": str(room_state.get("room_id", "")), "round_id": _round_id, "message": message, "preparation_rejected_for_signed_in_account": true})
+			_finish_coin_link_barrier(context, false)
+		elif data is Dictionary and bool(data.get("bound", false)):
+			if str(data.get("account_user_id", "")) == str(_coin_link_account_contexts.get(context, {}).get("account_user_id", "")):
+				_finish_coin_link_barrier(context, true)
+			else:
+				_finish_coin_link_barrier(context, false)
+		else:
+			_finish_coin_link_barrier(context, false)
+		return
+	if action == "coin_link_resolve":
+		if context != _coin_link_context():
+			_coin_link_account_contexts.erase(context)
+			return
+		if not _coin_link_account_matches_current(context):
+			_cancel_coin_link_account_changed(context)
+			return
+		if not success:
+			diagnostics.record_event("coin_account_link_rejected", {"generation": int(room_state.get("lobby_generation", -1)), "room_id": str(room_state.get("room_id", "")), "round_id": _round_id, "message": message, "preparation_rejected_for_signed_in_account": true})
+			_finish_coin_link_barrier(context, false)
+		else:
+			_finish_coin_link_barrier(context, true)
+		return
+	if action == "coin_round_register":
+		if context == _coin_register_inflight_round:
+			_coin_register_inflight = false
+			_coin_register_inflight_round = ""
+		var request_context: Dictionary = _coin_round_request_contexts.get(context, {})
+		if str(request_context.get("room_id", "")) != str(room_state.get("room_id", "")) or int(request_context.get("generation", -1)) != int(room_state.get("lobby_generation", -2)):
+			return
+		if success and data is Dictionary:
+			var backend_round_id := str(data.get("coin_round_id", ""))
+			if not backend_round_id.is_empty():
+				_coin_backend_round_id = backend_round_id
+				_coin_round_backends[context] = backend_round_id
+				_coin_round_contexts[context] = request_context.duplicate(true)
+				_flush_coin_award_journal()
+				if context == _round_id and _coin_host_prepare_waiting and _all_remote_peers_prepared():
+					_coin_register_waiting_round = ""
+					_coin_host_prepare_waiting = false
+					_mark_local_prepared_now()
+				return
+		if not success:
+			diagnostics.record_event("coin_round_register_retry", {"round_id": context, "message": message})
+		return
+	if action == "coin_awards_journal" and success:
+		_coin_journal_batches.erase(context)
+		for peer_id in connected_peer_ids():
+			send_control(int(peer_id), "COIN_AWARDS_JOURNALED", {"round_id": context})
+		_settle_coin_wallet()
+	elif action == "coin_awards_journal":
+		var retry: Array = _coin_journal_batches.get(context, [])
+		_coin_journal_batches.erase(context)
+		for award in retry:
+			_coin_award_queue.append({"round_id": context, "entity_id": str(award.entity_id), "player_slot": int(award.player_slot)})
+	elif action == "coin_awards_settle" and success and data is Dictionary:
+		var auth_now := get_node_or_null("/root/AuthService")
+		var account_progress := get_node_or_null("/root/AccountProgress")
+		if account_progress != null and auth_now != null and str(auth_now.get("user_id")) == context:
+			account_progress.call("apply_authoritative_wallet_balance", int(data.get("wallet_coins", 0)))
+			_record_coin_settlements(data, context)
+			if context == _coin_wallet_status_user:
+				_coin_wallet_status = "pending"
+	elif not success:
+		if action == "coin_awards_settle" and context == _coin_wallet_status_user and _coin_wallet_status == "pending":
+			_coin_wallet_status = "pending"
+		diagnostics.record_event("coin_backend_request_failed", {"action": action, "context": context, "message": message})
+
+func _finish_coin_link_barrier(context: String, account_bound: bool) -> void:
+	if context != _coin_link_context() or not _coin_link_waiting_for_prepared:
+		return
+	var auth := get_node_or_null("/root/AuthService")
+	if not account_bound and auth != null and bool(auth.get("is_authenticated")):
+		diagnostics.record_event("coin_account_link_required_failed", {"generation": int(room_state.get("lobby_generation", -1)), "room_id": str(room_state.get("room_id", "")), "round_id": _round_id, "message": "Signed-in players cannot start a coin-enabled round without a verified account binding."})
+		start_failure_changed.emit(tr("Account coin linking failed. Check your connection and retry before starting the multiplayer round."))
+		_round_coordinator.cancel("coin_account_binding_failed")
+		return
+	_coin_link_done_generation = context
+	_coin_link_bound_generation = context if account_bound else ""
+	var frozen_link: Dictionary = _coin_link_account_contexts.get(context, {})
+	if account_bound and not str(frozen_link.get("account_user_id", "")).is_empty():
+		_coin_bound_account_by_round[_round_id] = str(frozen_link.account_user_id)
+	else:
+		_coin_bound_account_by_round.erase(_round_id)
+	_coin_link_account_contexts.erase(context)
+	_coin_link_requested_generation = context
+	_coin_link_waiting_for_prepared = false
+	_mark_local_prepared_after_coin_barriers()
+
+func _coin_link_account_matches_current(context: String) -> bool:
+	var frozen: Dictionary = _coin_link_account_contexts.get(context, {})
+	var auth := get_node_or_null("/root/AuthService")
+	return auth != null and bool(auth.get("is_authenticated")) and not str(frozen.get("account_user_id", "")).is_empty() and str(auth.get("user_id")) == str(frozen.get("account_user_id", ""))
+
+func _cancel_coin_link_account_changed(context: String) -> void:
+	_coin_link_account_contexts.erase(context)
+	if context != _coin_link_context():
+		return
+	_coin_link_waiting_for_prepared = false
+	diagnostics.record_event("coin_account_context_changed", {"round_id": _round_id, "room_id": str(room_state.get("room_id", "")), "generation": int(room_state.get("lobby_generation", -1)), "message": "The signed-in account changed while multiplayer coin binding was pending."})
+	start_failure_changed.emit(tr("Account coin linking failed. Check your connection and retry before starting the multiplayer round."))
+	_round_coordinator.cancel("coin_account_context_changed")
+
+func _broadcast_world_baseline() -> void:
+	if not is_room_owner() or world_simulation == null:
+		return
+	for target in connected_peer_ids():
+		send_control(int(target), "WORLD_BASELINE", {"world_baseline": world_simulation.entity_ledger.baseline()})
 
 func configure_world_simulation(world: MultiplayerV2WorldSimulation) -> void:
 	world_simulation = world
 
-func submit_local_terminal(state_name: String, reason: String, tick_value: int, world_x: float, y: float, gravity_direction: int = 1) -> void:
+func submit_local_terminal(state_name: String, reason: String, tick_value: int, world_x: float, y: float, gravity_direction: int = 1, contact_fraction: float = 1.0) -> void:
 	if state_name not in ["dead", "finished"] or _round_id.is_empty():
 		return
 	if not _validate_local_peer_mapping("terminal"):
 		_round_coordinator.cancel("peer_mapping_mismatch")
 		return
 	var report := _session_envelope()
-	report.merge({"owner_peer_id": int(session.get("local_peer_id", 1)), "simulation_tick": tick_value, "state": state_name, "reason": reason, "world_x": world_x, "y": y, "gravity_direction": gravity_direction, "event_id": "%s:%d:%s" % [_round_id, int(session.get("local_peer_id", 1)), state_name]}, true)
+	report.merge({"owner_peer_id": int(session.get("local_peer_id", 1)), "simulation_tick": tick_value, "terminal_contact_tick": float(tick_value - 1) + clampf(contact_fraction, 0.0, 1.0), "state": state_name, "reason": reason, "world_x": world_x, "y": y, "gravity_direction": gravity_direction, "event_id": "%s:%d:%s" % [_round_id, int(session.get("local_peer_id", 1)), state_name]}, true)
 	if str(session.get("role", "")) == "host":
 		_commit_terminal(1, report)
 	else:
@@ -1363,6 +1789,7 @@ func report_input_audit(audit: Dictionary) -> void:
 	if not _active:
 		return
 	if str(session.get("role", "")) == "host":
+		_last_input_sequence_by_peer[1] = int(audit.get("input_seq", 0))
 		input_audit_received.emit(1, audit.duplicate(true))
 	else:
 		send_audit(audit)
@@ -1380,6 +1807,9 @@ func _commit_terminal(owner_peer_id: int, report: Dictionary) -> void:
 		commit["y"] = float(latest.get("y", 0.0))
 	if not commit.has("gravity_direction"):
 		commit["gravity_direction"] = int(latest.get("gravity_direction", 1))
+	if not commit.has("terminal_contact_tick"):
+		commit["terminal_contact_tick"] = float(commit.get("simulation_tick", 0))
+	_record_terminal_motion_pose(owner_peer_id, commit)
 	terminal_status[owner_peer_id] = commit
 	terminal_report_received.emit(owner_peer_id, commit.duplicate(true))
 	for target in connected_peer_ids():
@@ -1387,6 +1817,29 @@ func _commit_terminal(owner_peer_id: int, report: Dictionary) -> void:
 			send_control(int(target), "TERMINAL_COMMIT", commit)
 			_terminal_delivery_pending["%d:%d" % [owner_peer_id, int(target)]] = {"target": int(target), "report": commit.duplicate(true)}
 	_maybe_finish_round()
+
+func _record_terminal_motion_pose(peer_id: int, terminal: Dictionary) -> void:
+	var terminal_tick := float(terminal.get("terminal_contact_tick", terminal.get("simulation_tick", -1)))
+	var simulation_tick := int(terminal.get("simulation_tick", -1))
+	var world_x := float(terminal.get("world_x", NAN))
+	var y := float(terminal.get("y", NAN))
+	var history: Array = _validated_motion_history.get(peer_id, [])
+	if terminal_tick < 0.0 or simulation_tick < 0 or not is_finite(world_x) or not is_finite(y):
+		return
+	while not history.is_empty() and float(history.back().get("history_tick", history.back().get("simulation_tick", -1))) >= terminal_tick:
+		history.pop_back()
+	if not history.is_empty():
+		var previous: Dictionary = history.back()
+		var prior_tick := float(previous.get("history_tick", previous.get("simulation_tick", -1)))
+		var dt := maxf(terminal_tick - prior_tick, 0.0) / 60.0
+		var max_distance := Motion.BASE_RUN_SPEED * dt + 48.0
+		if world_x < float(previous.get("world_x", world_x)) - 48.0 or world_x - float(previous.get("world_x", world_x)) > max_distance:
+			return
+	var terminal_pose := {"round_id": _round_id, "owner_peer_id": peer_id, "simulation_tick": simulation_tick, "history_tick": terminal_tick, "world_x": world_x, "y": y}
+	history.append(terminal_pose)
+	while history.size() > 96:
+		history.pop_front()
+	_validated_motion_history[peer_id] = history
 
 func _maybe_finish_round() -> void:
 	if str(session.get("role", "")) != "host" or room_state.is_empty() or _result_committed:
@@ -1397,8 +1850,20 @@ func _maybe_finish_round() -> void:
 	for member in roster:
 		if not terminal_status.has(int(member.get("player_slot", 1))):
 			return
+	for claim in _pending_interactions:
+		if str(claim.request.get("round_id", "")) == _round_id and str(claim.request.get("action", "")) == "collect":
+			return
 	var start_x := float(current_manifest.start_x) if current_manifest != null else 0.0
 	var result := RaceResults.build(roster, terminal_status.values(), start_x, "all_terminal", true)
+	var coin_counts: Dictionary = {}
+	if world_simulation != null:
+		for entity_id in world_simulation.entity_ledger.entities:
+			var coin_state: Dictionary = world_simulation.entity_ledger.entities[entity_id]
+			if str(coin_state.get("kind", "")) == "coin" and str(coin_state.get("state", "")) == "collected":
+				var winner_peer := int(coin_state.get("winner_peer_id", 0))
+				coin_counts[winner_peer] = int(coin_counts.get(winner_peer, 0)) + 1
+		for placement in result.get("placements", []):
+			placement["shared_coins"] = int(coin_counts.get(int(placement.get("owner_peer_id", -1)), 0))
 	result.merge({"round_id": _round_id, "lobby_generation": int(room_state.get("lobby_generation", 0)), "result_revision": 1, "result_id": "%s:%d" % [_round_id, _round_roster_revision], "world_revision": world_simulation.entity_ledger.revision if world_simulation != null else 0}, true)
 	_round_coordinator.finish_round()
 	_result_committed = true
@@ -1461,8 +1926,8 @@ func _process_round_failure_delivery(delta: float) -> void:
 
 func _local_reconnect_progress() -> Dictionary:
 	var latest_frame: Dictionary = diagnostics.frames.back() if not diagnostics.frames.is_empty() else {}
-	var world_tick := world_simulation.tick if world_simulation != null else int(latest_frame.get("world_tick", 0))
-	var world_revision := world_simulation.entity_ledger.revision if world_simulation != null else 0
+	var world_tick: int = world_simulation.tick if world_simulation != null else int(latest_frame.get("world_tick", 0))
+	var world_revision: int = world_simulation.entity_ledger.revision if world_simulation != null else 0
 	return {"round_id": _round_id, "client_tick": int(latest_frame.get("tick", 0)), "world_tick": world_tick, "world_revision": world_revision, "client_world_revision": world_revision, "sync_request_id": str(_sync_request_ids.get(1, ""))}
 
 func _send_reconnect_sync_request() -> void:
@@ -1475,8 +1940,8 @@ func _send_reconnect_sync_request() -> void:
 func _send_reconnect_sync_response(peer_id: int, request: Dictionary) -> void:
 	if world_simulation != null and not _round_id.is_empty():
 		send_control(peer_id, "WORLD_BASELINE", {"world_baseline": world_simulation.entity_ledger.baseline()})
-	var host_tick := world_simulation.tick if world_simulation != null else 0
-	var host_revision := world_simulation.entity_ledger.revision if world_simulation != null else 0
+	var host_tick: int = world_simulation.tick if world_simulation != null else 0
+	var host_revision: int = world_simulation.entity_ledger.revision if world_simulation != null else 0
 	diagnostics.record_event("reconnect_sync_response_sent", {"peer_id": peer_id, "round_id": _round_id, "client_tick": int(request.get("client_tick", -1)), "client_world_tick": int(request.get("world_tick", -1)), "client_world_revision": int(request.get("world_revision", -1)), "host_tick": host_tick, "host_world_revision": host_revision})
 	send_control(peer_id, "RECONNECT_SYNC_ACK", {"sync_request_id": str(request.get("sync_request_id", "")), "round_id": _round_id, "world_tick": host_tick, "world_revision": host_revision, "baseline_required": world_simulation != null and not _round_id.is_empty()})
 
@@ -1767,6 +2232,17 @@ func _process_world_interaction(owner_peer_id: int, request: Dictionary) -> void
 	var request_id := str(request.get("request_id", ""))
 	if request_id.is_empty() or int(request.get("owner_peer_id", -1)) != owner_peer_id or str(request.get("round_id", "")) != _round_id:
 		return
+	if str(request.get("action", "")) == "collect":
+		var scoped_key := _coin_claim_key(_round_id, owner_peer_id, request_id)
+		if _interaction_results.has(scoped_key):
+			if owner_peer_id != 1:
+				send_control(owner_peer_id, "WORLD_INTERACTION_RESULT", _interaction_results[scoped_key])
+			return
+		for pending in _pending_interactions:
+			if _coin_claim_key(str(pending.request.get("round_id", "")), int(pending.owner_peer_id), str(pending.request.get("request_id", ""))) == scoped_key:
+				return
+		_pending_interactions.append({"owner_peer_id": owner_peer_id, "request": request.duplicate(true), "received_usec": Time.get_ticks_usec()})
+		return
 	if _interaction_results.has(request_id):
 		if owner_peer_id != 1:
 			send_control(owner_peer_id, "WORLD_INTERACTION_RESULT", _interaction_results[request_id])
@@ -1783,11 +2259,27 @@ func _drain_interaction_claims() -> void:
 	var now := Time.get_ticks_usec()
 	var ready: Array[Dictionary] = []
 	var pending: Array[Dictionary] = []
+	var coin_buckets: Dictionary = {}
 	for claim in _pending_interactions:
-		if now - int(claim.received_usec) >= BARREL_CLAIM_BATCH_USEC:
+		var request: Dictionary = claim.request
+		if str(request.get("action", "")) == "collect":
+			var entity_id := str(request.get("entity_id", ""))
+			var bucket: Array = coin_buckets.get(entity_id, [])
+			bucket.append(claim)
+			coin_buckets[entity_id] = bucket
+		elif now - int(claim.received_usec) >= BARREL_CLAIM_BATCH_USEC:
 			ready.append(claim)
 		else:
 			pending.append(claim)
+	for entity_id in coin_buckets:
+		var bucket: Array = coin_buckets[entity_id]
+		var first_received := now
+		for claim in bucket:
+			first_received = mini(first_received, int(claim.received_usec))
+		if now - first_received >= COIN_CLAIM_WINDOW_USEC:
+			_decide_coin_claim_bucket(str(entity_id), bucket)
+		else:
+			pending.append_array(bucket)
 	_pending_interactions = pending
 	if ready.is_empty():
 		return
@@ -1805,6 +2297,130 @@ func _drain_interaction_claims() -> void:
 	for claim in ready:
 		_decide_world_interaction(int(claim.owner_peer_id), claim.request)
 
+func _decide_coin_claim_bucket(entity_id: String, claims: Array) -> void:
+	var valid: Array[Dictionary] = []
+	var rejection_by_request: Dictionary = {}
+	if world_simulation == null or entity_id.is_empty() or not world_simulation.entity_ledger.is_active(entity_id):
+		for claim in claims:
+			var dead_request: Dictionary = claim.request
+			var dead_id := str(dead_request.get("request_id", ""))
+			if not dead_id.is_empty():
+				_store_coin_claim_result(int(claim.owner_peer_id), dead_request, false, "already_collected", {})
+		return
+	for claim in claims:
+		var owner_peer_id := int(claim.owner_peer_id)
+		var request: Dictionary = claim.request
+		var request_id := str(request.get("request_id", ""))
+		if request_id.is_empty() or int(request.get("owner_peer_id", -1)) != owner_peer_id or str(request.get("round_id", "")) != _round_id or str(request.get("action", "")) != "collect" or str(request.get("entity_id", "")) != entity_id or not _is_roster_peer(owner_peer_id):
+			rejection_by_request[_coin_claim_key(_round_id, owner_peer_id, request_id)] = "invalid_claim"
+			continue
+		var scoped_key := _coin_claim_key(_round_id, owner_peer_id, request_id)
+		if _interaction_results.has(scoped_key):
+			continue
+		var coin_state: Dictionary = world_simulation.entity_ledger.entities.get(entity_id, {})
+		if int(request.get("incarnation", -1)) != int(coin_state.get("incarnation", -2)):
+			rejection_by_request[scoped_key] = "incarnation_mismatch"
+			continue
+		var input_sequence := int(request.get("input_seq", -1))
+		if input_sequence < 0 or input_sequence > int(_last_input_sequence_by_peer.get(owner_peer_id, 0)):
+			rejection_by_request[scoped_key] = "invalid_input_sequence"
+			continue
+		var motion := _validated_coin_motion(owner_peer_id, request)
+		if motion.is_empty():
+			rejection_by_request[scoped_key] = "unverified_contact"
+			continue
+		var terminal: Dictionary = terminal_status.get(owner_peer_id, {})
+		if not terminal.is_empty() and float(motion.contact_tick) >= float(terminal.get("terminal_contact_tick", terminal.get("simulation_tick", INF))):
+			rejection_by_request[scoped_key] = "contact_after_death"
+			continue
+		valid.append({"peer_id": owner_peer_id, "request": request, "contact_tick": float(motion.contact_tick)})
+	valid.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var tick_a := float(a.contact_tick)
+		var tick_b := float(b.contact_tick)
+		if absf(tick_a - tick_b) > 0.001:
+			return tick_a < tick_b
+		return _coin_tie_rank(entity_id, int(a.peer_id)) < _coin_tie_rank(entity_id, int(b.peer_id))
+	)
+	var winner_peer := int(valid[0].peer_id) if not valid.is_empty() else -1
+	var winning_request: Dictionary = valid[0].request if not valid.is_empty() else {}
+	var commit: Dictionary = {}
+	if winner_peer > 0:
+		var latest_tick := int(valid[0].contact_tick)
+		commit = {"world_revision": world_simulation.entity_ledger.revision + 1, "commit_id": "coin-%s-%d" % [entity_id, world_simulation.entity_ledger.revision + 1], "request_id": str(winning_request.request_id), "entity_id": entity_id, "incarnation": int(winning_request.get("incarnation", 1)), "action": "collect", "effective_tick": latest_tick, "reason": "verified_coin_contact", "state_before": "active", "state_after": "collected", "winner_peer_id": winner_peer, "award_value": 1}
+		var applied: String = world_simulation.apply_world_commit(commit)
+		if applied not in ["applied", "duplicate"]:
+			commit.clear()
+			winner_peer = -1
+		else:
+			_note_local_coin_award(commit)
+			world_event_committed.emit(commit.duplicate(true))
+			for target in connected_peer_ids():
+				send_control(int(target), "WORLD_COMMIT", commit)
+			_queue_coin_award_persistence(entity_id, winner_peer, 1)
+	for claim in claims:
+		var peer_id := int(claim.owner_peer_id)
+		var request: Dictionary = claim.request
+		var request_id := str(request.get("request_id", ""))
+		if request_id.is_empty():
+			continue
+		var scoped_key := _coin_claim_key(str(request.get("round_id", "")), peer_id, request_id)
+		if _interaction_results.has(scoped_key):
+			continue
+		var accepted := peer_id == winner_peer and request_id == str(winning_request.get("request_id", "")) and not commit.is_empty()
+		var reason := "accepted" if accepted else str(rejection_by_request.get(scoped_key, "coin_claim_lost"))
+		_store_coin_claim_result(peer_id, request, accepted, reason, commit)
+
+func _store_coin_claim_result(peer_id: int, request: Dictionary, accepted: bool, reason: String, commit: Dictionary) -> void:
+	var request_id := str(request.get("request_id", ""))
+	if request_id.is_empty():
+		return
+	var response := {"request_id": request_id, "accepted": accepted, "reason": reason, "commit": commit.duplicate(true), "world_revision": world_simulation.entity_ledger.revision if world_simulation != null else 0}
+	_interaction_results[_coin_claim_key(str(request.get("round_id", "")), peer_id, request_id)] = response
+	world_interaction_resolved.emit(request_id, accepted, reason, commit.duplicate(true))
+	if peer_id != 1:
+		send_control(peer_id, "WORLD_INTERACTION_RESULT", response)
+	diagnostics.record_event("coin_claim_resolved", {"peer_id": peer_id, "entity_id": str(request.get("entity_id", "")), "accepted": accepted, "reason": reason, "world_revision": int(response.world_revision)})
+
+func _validated_coin_motion(peer_id: int, request: Dictionary) -> Dictionary:
+	var requested_tick := int(request.get("simulation_tick", -1))
+	var current_tick: int = world_simulation.tick if world_simulation != null else -1
+	var history: Array = _validated_motion_history.get(peer_id, [])
+	if requested_tick < current_tick - 30 or requested_tick > current_tick or history.size() < 2:
+		return {}
+	var terminal: Dictionary = terminal_status.get(peer_id, {})
+	var terminal_tick := float(terminal.get("terminal_contact_tick", terminal.get("simulation_tick", INF))) if not terminal.is_empty() else INF
+	for index in range(1, history.size()):
+		var previous: Dictionary = history[index - 1]
+		var next: Dictionary = history[index]
+		var tick_a := float(previous.get("history_tick", previous.get("simulation_tick", -1)))
+		var tick_b := float(next.get("history_tick", next.get("simulation_tick", -1)))
+		if tick_b <= tick_a or tick_b - tick_a > 8 or requested_tick < tick_a - 1 or requested_tick > tick_b + 1:
+			continue
+		var start := {"world_x": float(previous.get("world_x", 0.0)), "y": float(previous.get("y", 0.0))}
+		var finish := {"world_x": float(next.get("world_x", 0.0)), "y": float(next.get("y", 0.0))}
+		var effective_tick_b := tick_b
+		if not terminal.is_empty() and terminal_tick < float(tick_b):
+			var terminal_fraction := clampf((terminal_tick - float(tick_a)) / float(tick_b - tick_a), 0.0, 1.0)
+			finish = {"world_x": lerpf(float(start.world_x), float(finish.world_x), terminal_fraction), "y": lerpf(float(start.y), float(finish.y), terminal_fraction)}
+			effective_tick_b = terminal_tick
+		var contact: Dictionary = world_simulation.coin_contact_swept(str(request.get("entity_id", "")), start, finish)
+		if contact.is_empty():
+			continue
+		var contact_tick := lerpf(float(tick_a), effective_tick_b, float(contact.fraction))
+		if absf(float(requested_tick) - contact_tick) > 3.0 or contact_tick > terminal_tick:
+			continue
+		return {"contact_tick": contact_tick, "fraction": float(contact.fraction), "sample_tick_start": tick_a, "sample_tick_end": tick_b}
+	return {}
+
+func _coin_claim_key(round_id: String, peer_id: int, request_id: String) -> String:
+	return "%s|%d|%s" % [round_id, peer_id, request_id]
+
+func _coin_tie_rank(entity_id: String, peer_id: int) -> String:
+	var context := HashingContext.new()
+	context.start(HashingContext.HASH_SHA256)
+	context.update(("%s|%s|%d" % [_round_id, entity_id, peer_id]).to_utf8_buffer())
+	return context.finish().hex_encode()
+
 func _decide_world_interaction(owner_peer_id: int, request: Dictionary) -> void:
 	var request_id := str(request.get("request_id", ""))
 	if request_id.is_empty() or int(request.get("owner_peer_id", -1)) != owner_peer_id or str(request.get("round_id", "")) != _round_id:
@@ -1812,6 +2428,9 @@ func _decide_world_interaction(owner_peer_id: int, request: Dictionary) -> void:
 	if _interaction_results.has(request_id):
 		if owner_peer_id != 1:
 			send_control(owner_peer_id, "WORLD_INTERACTION_RESULT", _interaction_results[request_id])
+		return
+	if str(request.get("action", "")) == "collect":
+		_decide_coin_claim_bucket(str(request.get("entity_id", "")), [{"owner_peer_id": owner_peer_id, "request": request, "received_usec": Time.get_ticks_usec()}])
 		return
 	var response := {"request_id": request_id, "accepted": false, "reason": "invalid_contact", "commit": {}}
 	if world_simulation == null or str(request.get("action", "")) != "lethal_contact":
@@ -1826,12 +2445,13 @@ func _decide_world_interaction(owner_peer_id: int, request: Dictionary) -> void:
 			return
 		var requested_tick := int(request.get("simulation_tick", -1))
 		var contact_state := {"world_x": float(request.get("world_x", NAN)), "y": float(request.get("y", NAN)), "gravity_direction": int(request.get("gravity_direction", 1))}
-		var in_history := requested_tick >= world_simulation.tick - 120 and requested_tick <= world_simulation.tick
+		var in_history: bool = requested_tick >= world_simulation.tick - 120 and requested_tick <= world_simulation.tick
 		var finite_position := is_finite(float(contact_state.world_x)) and is_finite(float(contact_state.y)) and int(contact_state.gravity_direction) in [-1, 1]
-		var contact := world_simulation.player_contact_at(contact_state, requested_tick) if in_history and finite_position else {}
+		var contact: Dictionary = world_simulation.player_contact_at(contact_state, requested_tick) if in_history and finite_position else {}
 		if str(contact.get("kind", "")) == "shared_interaction" and str(contact.get("entity_id", "")) == str(request.get("entity_id", "")):
 			var transition := {"owner_peer_id": owner_peer_id, "round_id": _round_id, "simulation_tick": int(request.get("simulation_tick", 0)), "state": "dead", "reason": "barrel_contact", "world_x": float(request.get("world_x", 0.0)), "y": float(request.get("y", 0.0)), "event_id": "%s:%d:barrel" % [_round_id, owner_peer_id]}
-			response = DestructibleRulesScript.host_commit(world_simulation.entity_ledger, request, transition)
+			var ledger: MultiplayerV2WorldEventLedger = world_simulation.entity_ledger
+			response = DestructibleRulesScript.host_commit(ledger, request, transition)
 			if bool(response.get("accepted", false)):
 				var commit: Dictionary = response.commit
 				commit["linked_player_transition"] = transition

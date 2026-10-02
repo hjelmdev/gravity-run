@@ -18,8 +18,8 @@ const V2Transport := preload("res://systems/multiplayer_v2/v2_webrtc_transport.g
 const HudLayout := preload("res://ui/multiplayer_v2/v2_hud_layout.gd")
 
 func _initialize() -> void:
-	var lobby_version_migration := FileAccess.get_file_as_string("res://supabase/migrations/202609300002_v2_lobby_cycles.sql")
-	_assert(lobby_version_migration.contains("p_game_version <> '%s'" % V2Service.V2_GAME_VERSION), "V2 client lobby version remains compatible with the deployed room-creation gate")
+	var lobby_version_migration := FileAccess.get_file_as_string("res://supabase/migrations/202610010001_shared_coin_awards.sql")
+	_assert(lobby_version_migration.contains("p_game_version <> '%s'" % V2Service.V2_GAME_VERSION), "V2 client lobby version matches the shared-coin room-creation gate")
 	var numeric_roster := [
 		{"user_id": "host-user", "player_slot": 1.0},
 		{"user_id": "guest-user", "player_slot": 2.0}
