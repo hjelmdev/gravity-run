@@ -2,6 +2,8 @@ extends Node2D
 class_name FallingRock
 
 const Model := preload("res://systems/falling_rock_model.gd")
+const WarningIcon := preload("res://systems/rock_warning_icon.gd")
+const ImpactDebris := preload("res://hazards/rock_impact_debris.gd")
 var event: Dictionary = {}
 var simulation_tick := 0
 var activation_tick := -1
@@ -11,13 +13,17 @@ var _shake := 0.0
 var _render_tick := 0.0
 var _render_phase := "dormant"
 var _render_hitbox := Rect2()
+var _impact_debris_spawned := false
 
 func apply_world_state(value: Dictionary) -> void:
 	if value.has("activation_tick"):
 		set_activation_tick(int(value.activation_tick))
 	_render_tick = maxf(float(value.get("tick", simulation_tick)), 0.0)
 	simulation_tick = int(floor(_render_tick))
-	_phase = str(value.get("phase", Model.phase_at(event, activation_tick, simulation_tick)))
+	var next_phase := str(value.get("phase", Model.phase_at(event, activation_tick, simulation_tick)))
+	if _phase == "falling" and next_phase == "buried":
+		_spawn_impact_debris_once()
+	_phase = next_phase
 	_render_phase = _phase
 	_render_hitbox = value.get("rect", Model.hitbox_at(event, activation_tick, _render_tick))
 	position = Vector2(float(value.get("x", event.get("x", 0.0))), float(value.get("y", position.y)))
@@ -38,7 +44,10 @@ func set_activation_tick(value: int) -> void:
 func set_simulation_tick(value: int) -> void:
 	_previous_tick = simulation_tick
 	simulation_tick = maxi(value, 0)
-	_phase = Model.phase_at(event, activation_tick, simulation_tick)
+	var next_phase := Model.phase_at(event, activation_tick, simulation_tick)
+	if _phase == "falling" and next_phase == "buried":
+		_spawn_impact_debris_once()
+	_phase = next_phase
 	_render_tick = float(simulation_tick)
 	_render_phase = _phase
 	_render_hitbox = Model.hitbox_at(event, activation_tick, _render_tick)
@@ -68,6 +77,15 @@ func swept_contact_fraction(previous_rect: Rect2, current_rect: Rect2, start_tic
 func is_destroying_now() -> bool:
 	return false
 
+func _spawn_impact_debris_once() -> void:
+	if _impact_debris_spawned or not is_inside_tree():
+		return
+	_impact_debris_spawned = true
+	var effect := ImpactDebris.new() as Node2D
+	effect.name = "RockImpactDebris"
+	get_parent().add_child(effect)
+	effect.global_position = Vector2(global_position.x, float(event.get("floor_y", 460.0)) - Model.BURIAL_DEPTH)
+
 func _draw() -> void:
 	if event.is_empty():
 		return
@@ -78,9 +96,8 @@ func _draw() -> void:
 		_draw_stone_silhouette(hanging)
 		if _render_phase == "warning":
 			var floor_y := float(event.get("floor_y", 460.0))
-			var marker_y := floor_y - Model.BURIAL_DEPTH
-			draw_arc(Vector2(0, marker_y - position.y), width * 0.7, PI, TAU, 24, Color("ffb45b"), 3.5)
-			draw_line(Vector2(-width * 0.55, marker_y - position.y), Vector2(width * 0.55, marker_y - position.y), Color("ff814f"), 3.0)
+			var sign_center := Vector2(0.0, floor_y - 68.0 - position.y)
+			WarningIcon.draw(self, sign_center, 52.0)
 	else:
 		var rect := _render_hitbox
 		var local_rect := Rect2(rect.position - position, rect.size)
@@ -89,7 +106,11 @@ func _draw() -> void:
 			draw_circle(Vector2(0, height * 0.55), width * 0.36, Color(0.68, 0.62, 0.5, 0.28))
 		else:
 			var floor_y := float(event.get("floor_y", 460.0))
-			draw_line(Vector2(-width * 0.52, floor_y - position.y), Vector2(width * 0.52, floor_y - position.y), Color("c79466"), 2.0)
+			var surface_y := floor_y - position.y
+			draw_line(Vector2(-width * 0.52, surface_y), Vector2(width * 0.52, surface_y), Color("c79466"), 2.0)
+			var crack_color := Color("b28c69", 0.82)
+			draw_polyline(PackedVector2Array([Vector2(-width * 0.62, surface_y - 2.0), Vector2(-width * 0.39, surface_y - 1.0), Vector2(-width * 0.29, surface_y + 6.0), Vector2(-width * 0.11, surface_y + 8.0)]), crack_color, 2.0, true)
+			draw_polyline(PackedVector2Array([Vector2(width * 0.62, surface_y - 2.0), Vector2(width * 0.39, surface_y - 1.0), Vector2(width * 0.29, surface_y + 6.0), Vector2(width * 0.11, surface_y + 8.0)]), crack_color, 2.0, true)
 
 func _draw_stone_silhouette(rect: Rect2) -> void:
 	if rect.size.x <= 0.0 or rect.size.y <= 0.0:

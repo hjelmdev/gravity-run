@@ -10,6 +10,8 @@ var _last_round_id := ""
 var _menu_start_pending := false
 var _autoplay_probe_position := -1.0
 var _autoplay_last_retry_msec := -10000
+var _pause_position := 0.0
+var _pause_position_valid := false
 
 const AUTOPLAY_STALL_RETRY_MSEC := 1200
 
@@ -84,8 +86,29 @@ func start_round(round_id: String) -> void:
 		_set_context_gain(1.0, 0.10)
 
 func set_stream_paused(paused: bool) -> void:
-	if _player != null and _player.playing:
-		_player.stream_paused = paused
+	if not is_instance_valid(_player):
+		return
+	if paused:
+		if PlayerProfile.music_enabled and _player.playing:
+			_pause_position = maxf(_player.get_playback_position(), 0.0)
+			_pause_position_valid = true
+		else:
+			_pause_position_valid = false
+		_player.stream_paused = true
+		return
+	_player.stream_paused = false
+	if not PlayerProfile.music_enabled:
+		_pause_position_valid = false
+		return
+	if not _player.playing and _pause_position_valid:
+		# Some web audio backends stop the stream when their context is suspended.
+		# Resume from the saved cursor without issuing a new round/start identity.
+		_player.play(_pause_position)
+		_apply_user_volume()
+		if OS.has_feature("web"):
+			_menu_start_pending = _player.playing
+			_autoplay_probe_position = _player.get_playback_position() if _menu_start_pending else -1.0
+	_pause_position_valid = false
 
 func _set_context_gain(gain: float, duration: float) -> void:
 	if not _player.playing:
@@ -168,6 +191,7 @@ func _on_music_enabled_changed(enabled: bool) -> void:
 func _stop_for_disabled_setting() -> void:
 	_cancel_context_fade()
 	_menu_start_pending = false
+	_pause_position_valid = false
 	if is_instance_valid(_player):
 		_player.stream_paused = false
 		_player.stop()

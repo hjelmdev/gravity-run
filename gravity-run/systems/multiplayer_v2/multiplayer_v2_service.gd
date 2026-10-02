@@ -42,7 +42,7 @@ signal results_received(result: Dictionary)
 signal lobby_returned
 signal membership_removed(reason: String)
 
-const V2_GAME_VERSION := "2.1.20261002.3"
+const V2_GAME_VERSION := "2.1.20261002.4"
 const MAX_PLAYERS := 5
 const POSITION_RATE_HZ := 30
 

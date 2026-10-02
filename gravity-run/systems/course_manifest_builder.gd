@@ -59,9 +59,12 @@ func _make_multiplayer_ruleset(generator_version: int) -> Resource:
 	var ruleset := CourseRulesetScript.new() as Resource
 	ruleset.set("ruleset_id", &"multiplayer_race")
 	if generator_version >= CourseGenerator.GENERATOR_VERSION:
+		ruleset.set("revision", 5)
+		ruleset.set("event_density", 1.5)
+	elif generator_version >= CourseGenerator.ROCK_SAFE_GENERATOR_VERSION:
 		ruleset.set("revision", 4)
 		ruleset.set("event_density", 1.5)
-	elif generator_version >= CourseGenerator.PREVIOUS_CURRENT_GENERATOR_VERSION:
+	elif generator_version >= CourseGenerator.GENERATOR_VERSION_6:
 		ruleset.set("revision", 3)
 		ruleset.set("event_density", 1.5)
 	elif generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION:

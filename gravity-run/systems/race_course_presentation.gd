@@ -14,6 +14,7 @@ const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const CourseSurfaceRenderer := preload("res://systems/course_surface_renderer.gd")
 const SurfaceIndexScript := preload("res://systems/course_surface_index.gd")
 const FallingRockModel := preload("res://systems/falling_rock_model.gd")
+const RockWarningIcon := preload("res://systems/rock_warning_icon.gd")
 
 var manifest: Resource
 var event_nodes: Dictionary = {}
@@ -34,6 +35,21 @@ var _start_draw_deadline_usec := -1
 var _first_start_draw_profile: Dictionary = {}
 var _surface_index
 var _rock_warning_states: Array[Dictionary] = []
+var _rock_warning_accessibility_button: Button
+
+func _ready() -> void:
+	_rock_warning_accessibility_button = Button.new()
+	_rock_warning_accessibility_button.name = "RockWarningAccessibility"
+	_rock_warning_accessibility_button.text = ""
+	_rock_warning_accessibility_button.tooltip_text = tr("Falling rock")
+	_rock_warning_accessibility_button.accessibility_name = tr("Falling rock")
+	_rock_warning_accessibility_button.focus_mode = Control.FOCUS_ALL
+	_rock_warning_accessibility_button.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_rock_warning_accessibility_button.flat = true
+	_rock_warning_accessibility_button.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	_rock_warning_accessibility_button.size = Vector2(48.0, 48.0)
+	_rock_warning_accessibility_button.visible = false
+	add_child(_rock_warning_accessibility_button)
 
 static func create_hazard(scene: PackedScene, at_position: Vector2, size: Vector2, from_ceiling: bool, surface_rotation: float = 0.0) -> Node2D:
 	var hazard := scene.instantiate() as Node2D
@@ -41,6 +57,9 @@ static func create_hazard(scene: PackedScene, at_position: Vector2, size: Vector
 	hazard.call("configure", size, from_ceiling)
 	hazard.rotation = surface_rotation
 	return hazard
+
+static func rock_warning_marker_center(camera_left: float, viewport_size: Vector2, floor_y: float) -> Vector2:
+	return Vector2(maxf(camera_left, 0.0) + viewport_size.x - 56.0, floor_y - 70.0)
 
 func load_manifest(course_manifest: Resource) -> String:
 	reset()
@@ -175,6 +194,7 @@ func _tag_presentation_target(node: Node2D, stable_id: String, kind: String, mov
 
 func set_camera_left(camera_left: float) -> void:
 	_camera_left = maxf(camera_left, 0.0)
+	_update_rock_warning_accessibility_marker()
 	queue_redraw()
 
 func set_render_profile_enabled(enabled: bool) -> void:
@@ -201,6 +221,7 @@ func set_world_state(world_state: Dictionary) -> void:
 				rock_node.call("apply_world_state", rock_state)
 			if FallingRockModel.offscreen_marker_active(str(rock_state.get("phase", ""))):
 				_rock_warning_states.append(rock_state)
+	_update_rock_warning_accessibility_marker()
 	var barrels: Variant = world_state.get("barrels", [])
 	if barrels is Array:
 		for state_value in barrels:
@@ -247,6 +268,8 @@ func _destroy_node(node: Node2D) -> void:
 
 func reset() -> void:
 	for child in get_children():
+		if child == _rock_warning_accessibility_button:
+			continue
 		child.queue_free()
 	event_nodes.clear()
 	terrain_events.clear()
@@ -258,6 +281,7 @@ func reset() -> void:
 	manifest = null
 	_surface_index = null
 	_rock_warning_states.clear()
+	_update_rock_warning_accessibility_marker()
 
 func _draw() -> void:
 	if manifest == null:
@@ -283,12 +307,29 @@ func _draw_rock_warning_markers() -> void:
 		var x := float(state.get("x", 0.0))
 		if x - _camera_left <= view_width:
 			continue
-		var marker_x := _camera_left + view_width - 44.0
 		var floor_y := float(event.get("floor_y", _world_height - 80.0))
-		draw_line(Vector2(marker_x, floor_y - 42.0), Vector2(marker_x, floor_y - 6.0), Color("ff814f"), 4.0)
-		draw_line(Vector2(marker_x - 9.0, floor_y - 16.0), Vector2(marker_x, floor_y - 6.0), Color("ff814f"), 4.0)
-		draw_line(Vector2(marker_x + 9.0, floor_y - 16.0), Vector2(marker_x, floor_y - 6.0), Color("ff814f"), 4.0)
-		draw_string(ThemeDB.fallback_font, Vector2(marker_x - 35.0, floor_y - 50.0), tr("ROCK DROP"), HORIZONTAL_ALIGNMENT_CENTER, 80.0, 14, Color("ffe1a3"))
+		var marker_center := rock_warning_marker_center(_camera_left, get_viewport_rect().size, floor_y)
+		RockWarningIcon.draw(self, marker_center, 48.0)
+		RockWarningIcon.draw_forward_chevron(self, marker_center + Vector2(30.0, 0.0), 9.0)
+
+func _update_rock_warning_accessibility_marker() -> void:
+	if not is_instance_valid(_rock_warning_accessibility_button):
+		return
+	_rock_warning_accessibility_button.visible = false
+	var view_size := get_viewport_rect().size
+	for state in _rock_warning_states:
+		var event: Dictionary = state.get("event", {})
+		var rock_x := float(state.get("x", 0.0))
+		if rock_x < _camera_left:
+			continue
+		var center: Vector2
+		if rock_x - _camera_left > view_size.x:
+			center = rock_warning_marker_center(_camera_left, view_size, float(event.get("floor_y", _world_height - 80.0)))
+		else:
+			center = Vector2(rock_x, float(event.get("floor_y", _world_height - 80.0)) - 68.0)
+		_rock_warning_accessibility_button.position = center - Vector2(24.0, 24.0)
+		_rock_warning_accessibility_button.visible = true
+		return
 
 func take_render_profile() -> Dictionary:
 	var result := {"terrain_draw_count": _render_profile_draw_count, "terrain_total_usec": _render_profile_total_usec, "terrain_max_usec": _render_profile_max_usec, "surface_query_count": _render_profile_surface_queries}

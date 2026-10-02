@@ -138,7 +138,8 @@ func validate() -> String:
 			var height := float(event.get("height", NAN))
 			var warning := int(event.get("warning_ticks", -1))
 			var fall := int(event.get("fall_ticks", -1))
-			if not is_finite(width) or not is_finite(height) or width < 60.0 or width > 140.0 or height < 60.0 or height > 150.0 or warning < 20 or warning > 90 or fall < 8 or fall > 45 or not is_finite(float(event.get("floor_y", NAN))) or not is_finite(float(event.get("ceiling_y", NAN))):
+			var max_warning_ticks := 120 if generator_version >= 8 else 90
+			if not is_finite(width) or not is_finite(height) or width < 60.0 or width > 140.0 or height < 60.0 or height > 150.0 or warning < 20 or warning > max_warning_ticks or fall < 8 or fall > 45 or not is_finite(float(event.get("floor_y", NAN))) or not is_finite(float(event.get("ceiling_y", NAN))):
 				return "The falling rock has invalid versioned geometry or timing."
 		previous_x = event_x
 	var seen_collectibles: Dictionary = {}
