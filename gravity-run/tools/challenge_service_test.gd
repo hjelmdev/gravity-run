@@ -13,7 +13,7 @@ func _run_tests() -> void:
 	root.add_child(service)
 	service.call("begin_run")
 	var code: String = service.call("get_challenge_code")
-	_check(code.begins_with("GR6-"), "new challenge codes should carry the current generator version")
+	_check(code.begins_with("GR7-"), "new challenge codes should carry the current generator version")
 	var challenge_link: String = service.call("get_challenge_link", code)
 	_check(challenge_link.contains("?challenge=" + code), "the share link should pass its challenge code directly to the Pages app")
 	var first_seed := int(service.get("seed_value"))

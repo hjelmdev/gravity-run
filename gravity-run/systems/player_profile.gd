@@ -1,6 +1,7 @@
 extends Node
 
 signal music_volume_changed(value: float)
+signal music_enabled_changed(enabled: bool)
 
 const DEFAULT_CHARACTER_STATS := preload("res://characters/runner_stats.tres")
 const SAVE_PATH := "user://gravity_run_profile.cfg"
@@ -11,6 +12,7 @@ var leaderboard_name := ""
 var language := ""
 const DEFAULT_MUSIC_VOLUME := 0.25
 var music_volume := DEFAULT_MUSIC_VOLUME
+var music_enabled := true
 var character_stats: Resource
 var _saved_challenges: Array[Dictionary] = []
 var _music_save_timer: Timer
@@ -66,6 +68,7 @@ func _load_profile() -> void:
 		flip_control = legacy_control if DisplayServer.is_touchscreen_available() and legacy_control in ["swipe", "tap"] else default_control
 	var saved_music_volume: Variant = config.get_value("settings", "music_volume", DEFAULT_MUSIC_VOLUME)
 	music_volume = normalize_music_volume(saved_music_volume)
+	music_enabled = bool(config.get_value("settings", "music_enabled", true))
 
 static func normalize_music_volume(value: Variant, default_value: float = DEFAULT_MUSIC_VOLUME) -> float:
 	if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)):
@@ -98,6 +101,13 @@ func set_music_volume(value: float) -> void:
 	else:
 		_save_profile()
 
+func set_music_enabled(enabled: bool) -> void:
+	if music_enabled == enabled:
+		return
+	music_enabled = enabled
+	music_enabled_changed.emit(music_enabled)
+	_save_profile()
+
 func flush_settings() -> void:
 	if is_instance_valid(_music_save_timer):
 		_music_save_timer.stop()
@@ -116,6 +126,7 @@ func _save_profile() -> void:
 	config.set_value("settings", "flip_control", flip_control)
 	config.set_value("settings", "language", language)
 	config.set_value("settings", "music_volume", music_volume)
+	config.set_value("settings", "music_enabled", music_enabled)
 	var error := config.save(SAVE_PATH)
 	if error != OK:
 		push_warning("Could not save Gravity Run profile (error %s)." % error)
@@ -179,5 +190,5 @@ func forget_seed_challenge(challenge_code: String) -> void:
 
 func _is_valid_challenge_code(code: String) -> bool:
 	var pattern := RegEx.new()
-	pattern.compile("^(GC-[A-F0-9]{12}|GR3-[0-9]{10})$")
+	pattern.compile("^(GC-[A-F0-9]{12}|GR[3-7]-[0-9]{10})$")
 	return pattern.search(code) != null

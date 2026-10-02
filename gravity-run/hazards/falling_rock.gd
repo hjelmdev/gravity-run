@@ -75,9 +75,7 @@ func _draw() -> void:
 	var height := float(event.get("height", Model.HEIGHT))
 	if _render_phase in ["dormant", "warning"]:
 		var hanging := Rect2(Vector2(-width * 0.5 + _shake, -height * 0.5), Vector2(width, height))
-		draw_colored_polygon(PackedVector2Array([hanging.position + Vector2(0, -height * 0.5), Vector2(hanging.end.x, hanging.position.y + 10), Vector2(hanging.end.x - 5, hanging.end.y - 12), Vector2(hanging.position.x + 4, hanging.end.y)]), Color("7c7770"))
-		draw_line(Vector2(-width * 0.24, -height * 0.28), Vector2(-width * 0.06, -height * 0.03), Color("383c40"), 3.0)
-		draw_line(Vector2(width * 0.08, -height * 0.12), Vector2(width * 0.28, height * 0.13), Color("383c40"), 3.0)
+		_draw_stone_silhouette(hanging)
 		if _render_phase == "warning":
 			var floor_y := float(event.get("floor_y", 460.0))
 			var marker_y := floor_y - Model.BURIAL_DEPTH
@@ -86,10 +84,35 @@ func _draw() -> void:
 	else:
 		var rect := _render_hitbox
 		var local_rect := Rect2(rect.position - position, rect.size)
-		draw_rect(local_rect, Color("676a68"))
-		draw_line(local_rect.position + Vector2(width * 0.3, 8), local_rect.position + Vector2(width * 0.46, height * 0.45), Color("30383c"), 3.0)
+		_draw_stone_silhouette(local_rect)
 		if _render_phase == "falling":
 			draw_circle(Vector2(0, height * 0.55), width * 0.36, Color(0.68, 0.62, 0.5, 0.28))
 		else:
 			var floor_y := float(event.get("floor_y", 460.0))
 			draw_line(Vector2(-width * 0.52, floor_y - position.y), Vector2(width * 0.52, floor_y - position.y), Color("c79466"), 2.0)
+
+func _draw_stone_silhouette(rect: Rect2) -> void:
+	if rect.size.x <= 0.0 or rect.size.y <= 0.0:
+		return
+	var origin := rect.position
+	var size := rect.size
+	var points := PackedVector2Array([
+		origin + Vector2(0.00 * size.x, 0.20 * size.y),
+		origin + Vector2(0.13 * size.x, 0.04 * size.y),
+		origin + Vector2(0.34 * size.x, 0.12 * size.y),
+		origin + Vector2(0.52 * size.x, 0.00 * size.y),
+		origin + Vector2(0.81 * size.x, 0.08 * size.y),
+		origin + Vector2(1.00 * size.x, 0.22 * size.y),
+		origin + Vector2(0.94 * size.x, 0.68 * size.y),
+		origin + Vector2(0.73 * size.x, 0.96 * size.y),
+		origin + Vector2(0.48 * size.x, 0.84 * size.y),
+		origin + Vector2(0.20 * size.x, 1.00 * size.y),
+		origin + Vector2(0.04 * size.x, 0.77 * size.y),
+	])
+	draw_colored_polygon(points, Color("747773"))
+	var outline := points.duplicate()
+	outline.append(points[0])
+	draw_polyline(outline, Color("454a49"), 2.0, true)
+	draw_line(origin + Vector2(size.x * 0.29, size.y * 0.29), origin + Vector2(size.x * 0.42, size.y * 0.55), Color("353c3f"), 2.5)
+	draw_line(origin + Vector2(size.x * 0.42, size.y * 0.55), origin + Vector2(size.x * 0.34, size.y * 0.69), Color("353c3f"), 2.5)
+	draw_line(origin + Vector2(size.x * 0.64, size.y * 0.20), origin + Vector2(size.x * 0.53, size.y * 0.42), Color("353c3f"), 2.0)

@@ -34,6 +34,7 @@ signal round_prepare_requested(descriptor: Dictionary)
 signal round_started(round_id: String, descriptor: Dictionary)
 signal round_failed(reason: String)
 signal start_failure_changed(message: String)
+signal start_attempt_status_changed(snapshot: Dictionary)
 signal world_event_committed(commit: Dictionary)
 signal world_baseline_received(baseline: Dictionary)
 signal world_interaction_resolved(request_id: String, accepted: bool, message: String, commit: Dictionary)
@@ -41,7 +42,7 @@ signal results_received(result: Dictionary)
 signal lobby_returned
 signal membership_removed(reason: String)
 
-const V2_GAME_VERSION := "2.1.20261002.2"
+const V2_GAME_VERSION := "2.1.20261002.3"
 const MAX_PLAYERS := 5
 const POSITION_RATE_HZ := 30
 
@@ -158,6 +159,11 @@ var _peer_mapping_verified_sample := false
 var _last_host_heartbeat_usec := -1
 var _start_attempt_id := ""
 var _start_in_flight := false
+var _start_attempt_started_usec := -1
+var _start_attempt_stage := "idle"
+var _start_attempt_peer_status: Dictionary = {}
+var _start_attempt_metrics: Dictionary = {}
+var _start_attempt_last_error := ""
 var _room_refresh_in_flight := false
 var last_start_failure := ""
 const DISCONNECT_GRACE_USEC := 10_000_000
@@ -371,9 +377,19 @@ func request_start() -> void:
 		return
 	_start_attempt_id = Crypto.new().generate_random_bytes(12).hex_encode()
 	_start_in_flight = true
+	_start_attempt_started_usec = Time.get_ticks_usec()
+	_start_attempt_stage = "prepare_rpc_queued"
+	_start_attempt_peer_status.clear()
+	_start_attempt_metrics.clear()
+	_start_attempt_last_error = ""
+	for member_value in room_state.get("members", []):
+		if member_value is Dictionary:
+			var slot := int(member_value.get("player_slot", -1))
+			_start_attempt_peer_status[str(slot)] = {"player_slot": slot, "scene": "waiting", "account_binding": "waiting", "clock": "not_required_on_host", "prepared": "waiting", "registration": "waiting", "start_commit": "waiting"}
 	last_start_failure = ""
 	diagnostics.session["attempt_id"] = _start_attempt_id
 	diagnostics.record_event("start_attempt_requested", {"attempt_id": _start_attempt_id, "phase": str(room_state.get("phase", "")), "generation": int(room_state.get("lobby_generation", -1)), "room_id": str(room_state.get("room_id", ""))})
+	_update_start_attempt("prepare_rpc_queued")
 	if not is_room_owner():
 		_fail_start_attempt("not_host", tr("Only the host can start the round."), false)
 		return
@@ -388,8 +404,29 @@ func request_start() -> void:
 		return
 	_begin_identity_action("prepare_round", {"room_id": str(room_state.get("room_id", "")), "attempt_id": _start_attempt_id})
 
+func _update_start_attempt(stage: String, peer_slot: int = -1, peer_fields: Dictionary = {}, error: String = "") -> void:
+	if _start_attempt_id.is_empty():
+		return
+	_start_attempt_stage = stage
+	if peer_slot >= 0:
+		var peer_key := str(peer_slot)
+		var peer_state: Dictionary = _start_attempt_peer_status.get(peer_key, {"player_slot": peer_slot})
+		for key in peer_fields:
+			peer_state[str(key)] = peer_fields[key]
+		_start_attempt_peer_status[peer_key] = peer_state
+	else:
+		for key in peer_fields:
+			_start_attempt_metrics[str(key)] = peer_fields[key]
+	if not error.is_empty():
+		_start_attempt_last_error = error.left(240)
+	var snapshot := {"schema_version": 1, "attempt_id": _start_attempt_id, "stage": stage, "elapsed_usec": maxi(0, Time.get_ticks_usec() - _start_attempt_started_usec) if _start_attempt_started_usec >= 0 else 0, "room_phase": str(room_state.get("phase", "")), "lobby_generation": int(room_state.get("lobby_generation", -1)), "manifest_hash": str(room_state.get("manifest_hash", "")), "runtime_round_id": _round_id, "role": str(session.get("role", "")), "local_peer_id": int(session.get("local_peer_id", -1)), "coordinator_state": _coordinator_state_name(_round_coordinator.state), "peers": _start_attempt_peer_status.duplicate(true), "metrics": _start_attempt_metrics.duplicate(true), "last_error": _start_attempt_last_error, "build_id": V2_GAME_VERSION}
+	diagnostics.record_start_attempt(snapshot)
+	start_attempt_status_changed.emit(snapshot.duplicate(true))
+	diagnostics.record_event("start_attempt_stage", {"attempt_id": _start_attempt_id, "stage": stage, "peer_slot": peer_slot, "elapsed_usec": int(snapshot.elapsed_usec), "error": _start_attempt_last_error})
+
 func _fail_start_attempt(reason: String, display_message: String, notify_peers: bool = true) -> void:
 	var attempt_id := _start_attempt_id
+	_update_start_attempt("failed", -1, {}, reason)
 	last_start_failure = "%s (attempt %s)" % [reason, attempt_id.left(8)]
 	_start_in_flight = false
 	diagnostics.record_event("start_attempt_failed", {"attempt_id": attempt_id, "reason": reason, "round_id": _round_id, "phase": str(room_state.get("phase", "")), "generation": int(room_state.get("lobby_generation", -1))})
@@ -552,7 +589,7 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 		var candidate: Variant = data.get("room", data)
 		if candidate is Dictionary:
 			response_room = candidate
-	diagnostics.record_event("lobby_rpc_response", {"action": action, "success": success, "context": context, "attempt_id": str(request_meta.get("attempt_id", "")), "request_elapsed_usec": Time.get_ticks_usec() - int(request_meta.get("started_usec", Time.get_ticks_usec())), "generation_at_dispatch": int(request_meta.get("generation", -1)), "phase_at_dispatch": str(request_meta.get("phase", "")), "local_generation_before_apply": int(local_before_response.get("lobby_generation", -1)), "local_phase_before_apply": str(local_before_response.get("phase", "")), "response_generation": int(response_room.get("lobby_generation", -1)), "response_phase": str(response_room.get("phase", ""))})
+	diagnostics.record_event("lobby_rpc_response", {"action": action, "success": success, "attempt_id": str(request_meta.get("attempt_id", "")), "request_elapsed_usec": Time.get_ticks_usec() - int(request_meta.get("started_usec", Time.get_ticks_usec())), "generation_at_dispatch": int(request_meta.get("generation", -1)), "phase_at_dispatch": str(request_meta.get("phase", "")), "local_generation_before_apply": int(local_before_response.get("lobby_generation", -1)), "local_phase_before_apply": str(local_before_response.get("phase", "")), "response_generation": int(response_room.get("lobby_generation", -1)), "response_phase": str(response_room.get("phase", ""))})
 	if action == "refresh_room":
 		_room_refresh_in_flight = false
 		_room_refresh_requested_again = false
@@ -609,6 +646,7 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 			call_deferred("return_to_lobby")
 			return
 		diagnostics.record_event("backend_prepare_accepted", {"attempt_id": _start_attempt_id, "round_id": _round_id, "phase": str(room_state.get("phase", "")), "generation": int(descriptor.lobby_generation), "room_session_id": str(descriptor.room_session_id), "manifest_hash": str(descriptor.manifest_hash), "peer_ids": Array(peers)})
+		_update_start_attempt("prepare_round_sent")
 		if peers.is_empty():
 			_on_coordinator_prepare_received()
 		lobby_request_finished.emit(action, true, "")
@@ -696,13 +734,15 @@ func _accept_room_snapshot(next_room: Dictionary, action: String, context: Strin
 		"response_generation": int(next_room.get("lobby_generation", -1)),
 		"current_phase": str(room_state.get("phase", "")),
 		"response_phase": str(next_room.get("phase", "")),
-		"context": context
 	})
 	return false
 
 func _on_lobby_request_timing(action: String, context: String, queue_usec: int, request_usec: int) -> void:
 	var meta: Dictionary = _lobby_request_meta.get(context, {})
-	diagnostics.record_event("lobby_rpc_timing", {"action": action, "context": context, "attempt_id": str(meta.get("attempt_id", _start_attempt_id if action == "prepare_round" else "")), "queue_usec": queue_usec, "http_usec": request_usec, "generation_at_queue": int(meta.get("generation", -1)), "phase_at_queue": str(meta.get("phase", ""))})
+	var attempt_id := str(meta.get("attempt_id", _start_attempt_id if action == "prepare_round" else ""))
+	diagnostics.record_event("lobby_rpc_timing", {"action": action, "attempt_id": attempt_id, "queue_usec": queue_usec, "http_usec": request_usec, "generation_at_queue": int(meta.get("generation", -1)), "phase_at_queue": str(meta.get("phase", ""))})
+	if action == "prepare_round" and attempt_id == _start_attempt_id:
+		_update_start_attempt("prepare_rpc_completed", -1, {"prepare_queue_usec": queue_usec, "prepare_http_usec": request_usec})
 
 static func room_snapshot_rejection_reason(current_room: Dictionary, next_room: Dictionary, action: String = "") -> String:
 	if current_room.is_empty() or action in ["create_room", "join_room"]:
@@ -903,6 +943,8 @@ func send_control(peer_id: int, kind: String, payload: Dictionary) -> void:
 	if _active and connected_peer_ids().has(peer_id):
 		if kind in ["PREPARE_ROUND", "PREPARE_RECEIVED", "PREPARE_REJECTED", "PREPARE_FAILED", "PREPARED", "COMMIT_START", "START_ACK", "CANCEL_START", "START_ABORT", "ROUND_FAILED", "ROUND_FAILED_ACK", "ROUND_ABORT", "RECONNECT_SYNC", "RECONNECT_SYNC_ACK", "RECONNECT_SYNC_CONFIRMED", "RECONNECT_SYNC_COMPLETE"]:
 			diagnostics.record_event("control_sent", {"kind": kind, "peer_id": peer_id, "attempt_id": str(payload.get("attempt_id", _start_attempt_id)), "round_id": str(payload.get("round_id", _round_id)), "generation": int(payload.get("lobby_generation", room_state.get("lobby_generation", -1))), "manifest_hash": str(payload.get("manifest_hash", ""))})
+		if kind == "COMMIT_START":
+			_update_start_attempt("start_commit_sent", peer_id, {"start_commit": "sent", "start_at_host_usec": int(payload.get("start_at_host_usec", -1))})
 		var packet := _session_envelope()
 		packet.merge(payload, true)
 		rpc_endpoint.send_control(peer_id, kind, packet)
@@ -1146,7 +1188,7 @@ func _on_control_rpc(sender_peer_id: int, kind: String, payload: Dictionary) -> 
 		return
 	var sync_control_kinds := ["RECONNECT_SYNC", "RECONNECT_SYNC_ACK", "RECONNECT_SYNC_CONFIRMED", "RECONNECT_SYNC_COMPLETE"]
 	if str(session.get("role", "")) == "host":
-		if sender_peer_id != 1 and (not _is_roster_peer(sender_peer_id) or kind not in ["PREPARE_RECEIVED", "PREPARED", "PREPARE_REJECTED", "PREPARE_FAILED", "ROUND_FAILED", "ROUND_FAILED_ACK", "START_ACK", "CLOCK_PING", "HEARTBEAT", "WORLD_EVENT_ACK", "RESULT_ACK", "TERMINAL_ACK", "WORLD_HASH", "RECONNECT_SYNC", "RECONNECT_SYNC_CONFIRMED"]):
+		if sender_peer_id != 1 and (not _is_roster_peer(sender_peer_id) or kind not in ["PREPARE_RECEIVED", "PREPARED", "PREPARE_REJECTED", "PREPARE_FAILED", "ROUND_FAILED", "ROUND_FAILED_ACK", "START_ACK", "CLOCK_PING", "CLOCK_STATUS", "HEARTBEAT", "WORLD_EVENT_ACK", "RESULT_ACK", "TERMINAL_ACK", "WORLD_HASH", "RECONNECT_SYNC", "RECONNECT_SYNC_CONFIRMED"]):
 			diagnostics.record_event("control_rejected", {"peer_id": sender_peer_id, "kind": kind, "reason": "sender_or_kind_not_allowed"})
 			return
 		if sender_peer_id != 1 and _reconnect_sync_pending.has(sender_peer_id) and kind not in ["RECONNECT_SYNC", "RECONNECT_SYNC_CONFIRMED", "WORLD_EVENT_ACK", "ROUND_FAILED", "ROUND_FAILED_ACK"]:
@@ -1263,6 +1305,7 @@ func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary
 			_round_coordinator.cancel("guest_prepare_rejected:%s" % reason)
 		"PREPARE_RECEIVED":
 			diagnostics.record_event("prepare_rpc_ack_received", {"peer_id": sender_peer_id, "round_id": _round_id})
+			_update_start_attempt("prepare_received", sender_peer_id, {"scene": "loading", "prepared": "scene_loading"})
 			_round_coordinator.acknowledge_prepare_received(sender_peer_id, _round_id)
 		"PREPARED":
 			var bound_state := bool(payload.get("coin_account_bound", false))
@@ -1270,15 +1313,19 @@ func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary
 			binding_states[str(sender_peer_id)] = bound_state
 			_round_coordinator.round_descriptor["coin_account_bindings"] = binding_states
 			diagnostics.record_event("scene_ready_received", {"peer_id": sender_peer_id, "round_id": _round_id, "coin_account_bound": bound_state})
+			_update_start_attempt("peer_prepared", sender_peer_id, {"scene": "ready", "account_binding": "bound" if bound_state else "accountless_or_unbound", "prepared": "received"})
 			_round_coordinator.acknowledge_prepared(sender_peer_id, _round_id, Time.get_ticks_usec())
 			if _coin_host_prepare_waiting and _all_remote_peers_prepared():
 				_register_coin_backend_round()
 		"START_ACK":
 			diagnostics.record_event("start_ack_received", {"peer_id": sender_peer_id, "round_id": _round_id})
+			_update_start_attempt("start_ack_received", sender_peer_id, {"start_commit": "acknowledged"})
 			_round_coordinator.acknowledge_start(sender_peer_id, _round_id, Time.get_ticks_usec())
 		"CLOCK_PING":
 			var received := Time.get_ticks_usec()
 			send_control(sender_peer_id, "CLOCK_PONG", {"client_sent_usec": int(payload.get("client_sent_usec", 0)), "host_received_usec": received, "host_sent_usec": Time.get_ticks_usec()})
+		"CLOCK_STATUS":
+			_update_start_attempt("clock_sync", sender_peer_id, {"clock": payload.duplicate(true)})
 		"HEARTBEAT":
 			pass
 		"WORLD_EVENT_ACK":
@@ -1329,7 +1376,14 @@ func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 			pass
 		"PREPARE_ROUND":
 			_start_attempt_id = str(payload.get("attempt_id", ""))
+			_start_attempt_started_usec = Time.get_ticks_usec()
+			_start_attempt_peer_status.clear()
+			_start_attempt_last_error = ""
+			_start_attempt_stage = "prepare_received"
+			var local_slot := int(session.get("local_peer_id", -1))
+			_start_attempt_peer_status[str(local_slot)] = {"player_slot": local_slot, "scene": "loading", "account_binding": "waiting", "clock": "waiting", "prepared": "waiting", "registration": "host_waiting", "start_commit": "waiting"}
 			diagnostics.session["attempt_id"] = _start_attempt_id
+			_update_start_attempt("prepare_received")
 			diagnostics.session["round_id"] = str(payload.get("round_id", ""))
 			diagnostics.record_event("prepare_rpc_received", {"attempt_id": _start_attempt_id, "round_id": str(payload.get("round_id", "")), "generation": int(payload.get("lobby_generation", -1)), "manifest_hash": str(payload.get("manifest_hash", "")), "sender_peer_id": 1})
 			var incoming_generation := int(payload.get("lobby_generation", -1))
@@ -1363,6 +1417,7 @@ func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 				send_control(1, "PREPARE_REJECTED", {"round_id": str(payload.get("round_id", "")), "reason": "coordinator_busy"})
 		"COMMIT_START":
 			var commit_accepted := _round_coordinator.receive_commit_as_guest(payload)
+			_update_start_attempt("start_commit_received", 1, {"start_commit": "accepted" if commit_accepted else "rejected", "clock_synchronized": _round_coordinator.clock.is_synchronized(), "clock_offset_jitter_usec": _round_coordinator.clock.offset_jitter_usec, "clock_min_rtt_usec": _round_coordinator.clock.minimum_round_trip_usec})
 			diagnostics.record_event("commit_start_received", {"round_id": str(payload.get("round_id", "")), "accepted": commit_accepted, "coordinator_state": _round_coordinator.state, "clock_synchronized": _round_coordinator.clock.is_synchronized(), "start_at_host_usec": int(payload.get("start_at_host_usec", -1))})
 			if not commit_accepted:
 				round_failed.emit("The start commit was invalid or the guest clock is not synchronized.")
@@ -1385,6 +1440,9 @@ func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 			diagnostics.record_event("legacy_room_return_packet_ignored", {"generation": int(room_state.get("lobby_generation", -1)), "reason": "individual_return_required"})
 		"CLOCK_PONG":
 			_round_coordinator.clock.record_clock_exchange(int(payload.get("client_sent_usec", 0)), int(payload.get("host_received_usec", 0)), int(payload.get("host_sent_usec", 0)), Time.get_ticks_usec())
+			var clock_status := {"last_rtt_usec": _round_coordinator.clock.last_round_trip_usec, "min_rtt_usec": _round_coordinator.clock.minimum_round_trip_usec, "offset_jitter_usec": _round_coordinator.clock.offset_jitter_usec, "samples": _round_coordinator.clock.sample_count(), "synchronized": _round_coordinator.clock.is_synchronized()}
+			_update_start_attempt("clock_sync", int(session.get("local_peer_id", -1)), {"clock": clock_status})
+			send_control(1, "CLOCK_STATUS", clock_status)
 		"HEARTBEAT":
 			_last_host_heartbeat_usec = Time.get_ticks_usec()
 		"COIN_AWARDS_JOURNALED":
@@ -1498,12 +1556,14 @@ func _mark_local_prepared_now() -> void:
 		return
 	diagnostics.record_event("local_scene_ready", {"round_id": _round_id, "manifest_hash": str(current_manifest.manifest_hash) if current_manifest != null else "", "player_nodes": get_active_round_roster().size(), "world_entities": world_simulation.entity_ledger.entities.size() if world_simulation != null else 0})
 	_round_coordinator.round_descriptor["coin_account_bound"] = _coin_link_bound_generation == _coin_link_context()
+	_update_start_attempt("local_scene_ready", int(session.get("local_peer_id", 1)), {"scene": "ready", "account_binding": "bound" if bool(_round_coordinator.round_descriptor.get("coin_account_bound", false)) else "accountless_or_unbound"})
 	_local_prepare_pending = true
 	if _round_coordinator.is_host or _round_coordinator.clock.is_synchronized():
 		_local_prepare_pending = false
 		_round_coordinator.mark_local_prepared(Time.get_ticks_usec())
 
 func _on_round_started(round_id: String, descriptor: Dictionary) -> void:
+	_update_start_attempt("running")
 	_start_in_flight = false
 	_rock_warning_missed_recovery = false
 	_round_id = round_id
@@ -1528,6 +1588,7 @@ func _request_coin_account_binding() -> void:
 		return
 	_coin_link_requested_generation = context
 	_coin_link_account_contexts[context] = {"token": str(auth.call("get_access_token")), "account_user_id": str(auth.get("user_id")), "room_id": str(room_state.room_id), "round_id": _round_id, "generation": generation}
+	_update_start_attempt("account_binding_sent", int(session.get("local_peer_id", -1)), {"account_binding": "request_sent"})
 	_start_coin_link_rpc("coin_link_request", "request_multiplayer_v2_coin_account_link", {"p_room_id": str(room_state.room_id), "p_lobby_generation": generation}, _identity_adapter.token(), context)
 
 func _start_coin_link_rpc(action: String, rpc_name: String, payload: Dictionary, token: String, context: String) -> void:
@@ -1578,7 +1639,11 @@ static func _supports_shared_coins(manifest: Resource) -> bool:
 	return manifest != null and int(manifest.get("generator_version")) >= CourseGeneratorScript.PUBLISHED_SHARED_GENERATOR_VERSION
 
 func _on_coin_award_request_timing(action: String, context: String, queue_usec: int, http_usec: int) -> void:
-	diagnostics.record_event("coin_rpc_timing", {"action": action, "context": context, "queue_usec": queue_usec, "http_usec": http_usec, "round_id": _round_id, "generation": int(room_state.get("lobby_generation", -1))})
+	# Context can be an account UUID for settlement. Keep timing while omitting
+	# identity-bearing context from downloadable diagnostics.
+	diagnostics.record_event("coin_rpc_timing", {"action": action, "queue_usec": queue_usec, "http_usec": http_usec, "round_id": _round_id, "generation": int(room_state.get("lobby_generation", -1))})
+	if action == "coin_round_register" and context == _round_id:
+		_update_start_attempt("registration_http_completed", -1, {"registration_queue_usec": queue_usec, "registration_http_usec": http_usec})
 
 func _register_coin_backend_round() -> void:
 	if not is_room_owner() or current_manifest == null or _round_id.is_empty() or (_coin_register_inflight and _coin_register_inflight_round == _round_id) or _coin_round_backends.has(_round_id) or not _all_remote_peers_prepared():
@@ -1609,6 +1674,7 @@ func _register_coin_backend_round() -> void:
 		return
 	_coin_round_request_contexts[_round_id] = {"room_id": str(room_state.get("room_id", "")), "generation": int(room_state.get("lobby_generation", -1)), "round_id": _round_id, "host_token": host_token, "host_user_id": identity_user_id, "attempt_id": _start_attempt_id}
 	diagnostics.record_event("coin_round_register_requested", {"round_id": _round_id, "attempt_id": _start_attempt_id, "attempt": int(_coin_register_attempts_by_round[_round_id]), "generation": int(room_state.get("lobby_generation", -1)), "phase": str(room_state.get("phase", "")), "coin_count": ids.size()})
+	_update_start_attempt("registration_sent")
 	_coin_award_provider.call_rpc("coin_round_register", "register_multiplayer_v2_coin_round", {"p_room_id": str(room_state.room_id), "p_lobby_generation": int(room_state.get("lobby_generation", 0)), "p_runtime_round_id": _round_id, "p_manifest_hash": str(current_manifest.manifest_hash), "p_coin_ids": ids}, host_token, _round_id)
 
 func world_baseline_payload_size_bytes() -> int:
@@ -1771,6 +1837,7 @@ func _on_coin_award_request_finished(action: String, success: bool, data: Varian
 				_coin_backend_round_id = backend_round_id
 				_coin_round_backends[context] = backend_round_id
 				_coin_round_contexts[context] = request_context.duplicate(true)
+				_update_start_attempt("registration_complete", -1, {"registration": "registered"})
 				_flush_coin_award_journal()
 				if context == _round_id and _coin_host_prepare_waiting and _all_remote_peers_prepared():
 					_coin_register_waiting_round = ""
@@ -1780,6 +1847,7 @@ func _on_coin_award_request_finished(action: String, success: bool, data: Varian
 		var response_status := int(data.get("http_status", 0)) if data is Dictionary else 0
 		var contract_error := success and (not data is Dictionary or str(data.get("coin_round_id", "")).is_empty())
 		_coin_register_last_error_by_round[context] = {"message": "The backend accepted round registration without returning its required coin_round_id." if contract_error else message, "fatal": contract_error or response_status in [400, 401, 403, 404, 409, 422]}
+		_update_start_attempt("registration_failed", -1, {"registration": "failed", "registration_http_status": response_status}, str(_coin_register_last_error_by_round[context].message))
 		diagnostics.record_event("coin_round_register_failed", {"round_id": context, "attempt_id": str(request_context.get("attempt_id", _start_attempt_id)), "attempt": int(_coin_register_attempts_by_round.get(context, 0)), "generation": int(request_context.get("generation", -1)), "phase": str(room_state.get("phase", "")), "http_status": response_status, "fatal": bool(_coin_register_last_error_by_round[context].fatal), "message": str(_coin_register_last_error_by_round[context].message)})
 		if bool(_coin_register_last_error_by_round[context].fatal):
 			start_failure_changed.emit(tr("Shared coin registration failed: %s") % str(_coin_register_last_error_by_round[context].message))
@@ -1808,12 +1876,13 @@ func _on_coin_award_request_finished(action: String, success: bool, data: Varian
 	elif not success:
 		if action == "coin_awards_settle" and context == _coin_wallet_status_user and _coin_wallet_status == "pending":
 			_coin_wallet_status = "pending"
-		diagnostics.record_event("coin_backend_request_failed", {"action": action, "context": context, "message": message})
+		diagnostics.record_event("coin_backend_request_failed", {"action": action, "message": message})
 
 func _finish_coin_link_barrier(context: String, account_bound: bool) -> void:
 	if context != _coin_link_context() or not _coin_link_waiting_for_prepared:
 		return
 	var auth := get_node_or_null("/root/AuthService")
+	_update_start_attempt("account_binding_completed", int(session.get("local_peer_id", -1)), {"account_binding": "bound" if account_bound else "failed_or_unbound"})
 	if not account_bound and auth != null and bool(auth.get("is_authenticated")):
 		diagnostics.record_event("coin_account_link_required_failed", {"generation": int(room_state.get("lobby_generation", -1)), "room_id": str(room_state.get("room_id", "")), "round_id": _round_id, "message": "Signed-in players cannot start a coin-enabled round without a verified account binding."})
 		start_failure_changed.emit(tr("Account coin linking failed. Check your connection and retry before starting the multiplayer round."))
@@ -2160,6 +2229,7 @@ func _set_backend_phase(phase: String) -> void:
 	_lobby_provider.set_phase(str(room_state.get("room_id", "")), phase, _identity_adapter.token(), context)
 
 func _on_coordinator_round_failed(reason: String) -> void:
+	_update_start_attempt("timeout_or_abort", -1, {}, reason)
 	_start_in_flight = false
 	last_start_failure = "%s (attempt %s)" % [reason, _start_attempt_id.left(8)]
 	start_failure_changed.emit(last_start_failure)

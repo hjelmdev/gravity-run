@@ -1043,6 +1043,24 @@ msgstr "Väntetid mellan gravitationsbyten"
 msgid "Music volume"
 msgstr "Musikvolym"
 
+msgid "Music settings"
+msgstr "Musikinställningar"
+
+msgid "Waiting at: %s"
+msgstr "Väntar vid: %s"
+
+msgid "Waiting for"
+msgstr "Väntar på"
+
+msgid "Music enabled"
+msgstr "Musik på"
+
+msgid "On"
+msgstr "På"
+
+msgid "Off"
+msgstr "Av"
+
 msgid "Item name unavailable"
 msgstr "Föremålsnamn saknas"
 

@@ -12,6 +12,7 @@ const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_
 const CoursePresentationScript := preload("res://systems/race_course_presentation.gd")
 const RoundCoordinatorScript := preload("res://systems/multiplayer_v2/v2_round_coordinator.gd")
 const HudLayout := preload("res://ui/multiplayer_v2/v2_hud_layout.gd")
+const MusicQuickControlScript := preload("res://ui/music_quick_control.gd")
 
 const FIXED_DELTA := 1.0 / 60.0
 const CAMERA_PLAYER_X := 250.0
@@ -63,6 +64,7 @@ var _result_coin_status_label: Label
 var _return_lobby_button: Button
 var _debug_panel: PanelContainer
 var _debug_toggle: Button
+var _music_quick_control: Control
 var _export_confirmation: Label
 var _frozen_roster: Array[Dictionary] = []
 var _debug_open := false
@@ -201,6 +203,10 @@ func _build_overlay() -> void:
 	_debug_toggle.custom_minimum_size = Vector2(104.0, 42.0)
 	_debug_toggle.pressed.connect(_toggle_debug_panel)
 	_hud_root.add_child(_debug_toggle)
+	_music_quick_control = Control.new()
+	_music_quick_control.set_script(MusicQuickControlScript)
+	_music_quick_control.set("right_offset", -152.0)
+	_hud_root.add_child(_music_quick_control)
 	_countdown_label = Label.new()
 	_countdown_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_countdown_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -291,7 +297,7 @@ func _build_overlay() -> void:
 	call_deferred("_layout_hud")
 
 func _layout_hud() -> void:
-	if not is_instance_valid(_hud_root) or not is_instance_valid(_debug_toggle) or not is_instance_valid(_status_label) or not is_instance_valid(_debug_panel) or not is_instance_valid(_countdown_label):
+	if not is_instance_valid(_hud_root) or not is_instance_valid(_debug_toggle) or not is_instance_valid(_status_label) or not is_instance_valid(_debug_panel) or not is_instance_valid(_countdown_label) or not is_instance_valid(_music_quick_control):
 		return
 	var size := _hud_root.size
 	if size.x <= 0.0 or size.y <= 0.0:
@@ -301,10 +307,12 @@ func _layout_hud() -> void:
 	_viewport_size = size
 	var layout := HudLayout.for_viewport(size)
 	var button_rect: Rect2 = layout.get("button", Rect2())
+	var music_rect: Rect2 = layout.get("music_button", Rect2())
 	var status_rect: Rect2 = layout.get("status", Rect2())
 	var panel_rect: Rect2 = layout.get("panel", Rect2())
 	_debug_toggle.position = button_rect.position
 	_debug_toggle.size = button_rect.size
+	_music_quick_control.call("set_right_offset", music_rect.position.x - size.x)
 	_status_label.position = status_rect.position
 	_status_label.size = status_rect.size
 	_debug_panel.position = panel_rect.position

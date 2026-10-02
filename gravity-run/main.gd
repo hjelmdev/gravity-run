@@ -1036,7 +1036,7 @@ func _draw_falling_rock_warning_markers() -> void:
 	var view_left := camera.get_screen_center_position().x - screen_width * 0.5
 	var view_right := view_left + screen_width
 	for obstacle in obstacles:
-		if not is_instance_valid(obstacle) or not obstacle.is_in_group("falling_rocks") or str(obstacle.call("get_phase")) != "warning" or obstacle.global_position.x <= view_right:
+		if not is_instance_valid(obstacle) or not obstacle.is_in_group("falling_rocks") or not FALLING_ROCK_MODEL.offscreen_marker_active(str(obstacle.call("get_phase"))) or obstacle.global_position.x <= view_right:
 			continue
 		var marker_x := view_right - 44.0
 		var event: Dictionary = obstacle.get("event")

@@ -27,10 +27,12 @@ const PLAYER_FLIP_COOLDOWN := 0.42
 const SWITCH_SAFETY_MARGIN := 0.12
 const PLAN_RETRY_SPACING := 48.0
 const BARREL_SPEED_MULTIPLIER := 1.4
-const GENERATOR_VERSION := 6
+const V7_MIN_ROCK_DISTANCE := 2000.0
+const GENERATOR_VERSION := 7
 const PUBLISHED_SHARED_GENERATOR_VERSION := 5
 const LEGACY_GENERATOR_VERSION := 3
 const PREVIOUS_GENERATOR_VERSION := 4
+const PREVIOUS_CURRENT_GENERATOR_VERSION := 6
 const CourseHazardProfileScript = preload("res://systems/course_hazard_profile.gd")
 const CourseDifficultyProfileScript = preload("res://systems/course_difficulty_profile.gd")
 
@@ -112,7 +114,7 @@ func set_difficulty_profile(profile: Resource) -> void:
 func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> bool:
 	_configuration_failed = false
 	_generator_version = generator_version
-	if generator_version not in [GENERATOR_VERSION, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
+	if generator_version not in [GENERATOR_VERSION, PREVIOUS_CURRENT_GENERATOR_VERSION, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
 		push_error("Unsupported course generator version: %d" % generator_version)
 		return false
 	_profiles.clear()
@@ -131,7 +133,7 @@ func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> b
 	_profiles.append(_make_profile(&"terrain_step", &"step", 1.8, BOTH_LANES, Vector2(36.0, 240.0), Vector2i(1, 1), PackedFloat32Array([72.0, 108.0, 148.0, 184.0])))
 	_profiles.append(_make_profile(&"terrain_slope", &"slope", 1.5, BOTH_LANES, Vector2(440.0, 440.0), Vector2i(1, 1), PackedFloat32Array([64.0, 100.0, 140.0, 176.0])))
 	if generator_version >= PUBLISHED_SHARED_GENERATOR_VERSION:
-		var rock_weight := 1.0 if generator_version >= GENERATOR_VERSION else 0.22
+		var rock_weight := 1.6 if generator_version >= GENERATOR_VERSION else (1.0 if generator_version >= PREVIOUS_CURRENT_GENERATOR_VERSION else 0.22)
 		_profiles.append(_make_profile(&"falling_rock", &"rock", rock_weight, FLOOR_LANE, Vector2(90.0, 90.0), Vector2i(1, 1), PackedFloat32Array([100.0])))
 	return true
 
@@ -253,7 +255,11 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 		if profile == null:
 			break
 		var candidate := profile.create_event(_rng, _next_event_distance, _difficulty, _preferred_lane())
+		_apply_generator_timing(candidate)
 		var candidate_is_rock := str(candidate.get("kind", "")) == "rock"
+		if candidate_is_rock and _generator_version >= GENERATOR_VERSION:
+			_next_event_distance = maxf(_next_event_distance, V7_MIN_ROCK_DISTANCE)
+			candidate["course_distance"] = _next_event_distance
 		var candidate_clearance := maxf(clearance, _get_rock_switch_clearance_distance(track_height)) if candidate_is_rock else clearance
 		var intrinsic_probe: Dictionary = candidate.duplicate()
 		intrinsic_probe["course_distance"] = 1000000.0
@@ -295,6 +301,12 @@ func _apply_rock_switch_clearance(event: Dictionary, required_distance: float) -
 		if threat_value is Dictionary:
 			threat_value["switch_clearance"] = required_distance
 
+func _apply_generator_timing(event: Dictionary) -> void:
+	if str(event.get("kind", "")) == "rock" and _generator_version >= GENERATOR_VERSION:
+		event["trigger_lead"] = 1800.0
+		event["warning_ticks"] = 90
+		event["fall_ticks"] = 42
+
 func _try_append_independent_barrel(base_event: Dictionary, clearance: float) -> void:
 	var barrel_weight := _barrel_profile.weight * _get_profile_weight_multiplier(_barrel_profile.profile_id)
 	if barrel_weight <= 0.0:
@@ -327,6 +339,7 @@ func _append_safe_fallback(speed: float, track_height: float) -> void:
 	for profile in _profiles:
 		for attempt in range(64):
 			var candidate := profile.create_event(_rng, safe_distance, _difficulty, 0)
+			_apply_generator_timing(candidate)
 			candidate["course_distance"] = safe_distance
 			candidate["threats"] = profile.build_threat_intervals(candidate)
 			if is_plan_solvable(_events + [candidate], clearance):

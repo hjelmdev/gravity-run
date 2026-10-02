@@ -22,6 +22,9 @@ static func phase_at(event: Dictionary, activation_tick: int, tick: int) -> Stri
 		return "falling"
 	return "buried"
 
+static func offscreen_marker_active(phase: String) -> bool:
+	return phase in ["warning", "falling"]
+
 static func center_at(event: Dictionary, activation_tick: int, tick: float) -> Vector2:
 	var x := float(event.get("x", 0.0))
 	var ceiling_y := float(event.get("ceiling_y", 80.0))

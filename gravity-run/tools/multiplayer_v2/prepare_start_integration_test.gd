@@ -2,6 +2,7 @@ extends SceneTree
 
 const ServiceScript := preload("res://systems/multiplayer_v2/multiplayer_v2_service.gd")
 const Builder := preload("res://systems/course_manifest_builder.gd")
+const CourseGenerator := preload("res://systems/course_generator.gd")
 const World := preload("res://systems/multiplayer_v2/v2_world_simulation.gd")
 
 class ControlledCoinProvider extends Node:
@@ -74,11 +75,11 @@ func _initialize() -> void:
 func _setup() -> void:
 	var auth := root.get_node("AuthService")
 	auth.is_authenticated = false
-	var built: Dictionary = Builder.new().build(43, 45000, 6)
-	_check(str(built.get("error", "")).is_empty(), "v6 manifest builds for a full prepare test")
+	var built: Dictionary = Builder.new().build(43, 45000, CourseGenerator.GENERATOR_VERSION)
+	_check(str(built.get("error", "")).is_empty(), "current v7 manifest builds for a full prepare test")
 	var manifest: Resource = built.manifest
 	var room_id := "00000000-0000-0000-0000-000000000043"
-	var base_room := {"room_id": room_id, "room_session_id": "prepare-test-session", "owner_user_id": "test-network-1", "phase": "OPEN", "lobby_generation": 1, "state_revision": 1, "lobby_cycle": 1, "content_revision": 0, "game_version": ServiceScript.V2_GAME_VERSION, "generator_version": 6, "seed": 43, "course_length_px": 45000, "manifest_hash": str(manifest.get("manifest_hash")), "signaling_topic": "local-prepare-test", "members": []}
+	var base_room := {"room_id": room_id, "room_session_id": "prepare-test-session", "owner_user_id": "test-network-1", "phase": "OPEN", "lobby_generation": 1, "state_revision": 1, "lobby_cycle": 1, "content_revision": 0, "game_version": ServiceScript.V2_GAME_VERSION, "generator_version": CourseGenerator.GENERATOR_VERSION, "seed": 43, "course_length_px": 45000, "manifest_hash": str(manifest.get("manifest_hash")), "signaling_topic": "local-prepare-test", "members": []}
 	var roster: Array = []
 	for peer_id in [1, 2, 3]:
 		roster.append({"user_id": "test-network-%d" % peer_id, "display_name": "Runner %d" % peer_id, "player_slot": peer_id, "is_ready": true, "ready_cycle": 1, "ready_content_revision": 0, "returned_for_cycle": 1, "is_connected": true, "loaded_manifest_hash": str(manifest.get("manifest_hash")), "loadout_hash": "", "ready_loadout_hash": ""})

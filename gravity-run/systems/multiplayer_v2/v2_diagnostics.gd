@@ -4,6 +4,7 @@ class_name MultiplayerV2Diagnostics
 const MAX_FRAMES := 4096
 const MAX_EVENTS := 2000
 const MAX_ROUND_TRACES := 4
+const MAX_START_ATTEMPTS := 8
 const ROUND_TRACE_LIMITS := {"presented_frames": 600, "local_steps": 512, "local_poses": 512, "remote_samples": 1536}
 const PRESENTED_FRAME_INTERVAL_USEC := 8333 # 120 Hz; four seconds fit within 600 entries.
 
@@ -13,6 +14,7 @@ var events: Array[Dictionary] = []
 var metrics: Dictionary = {}
 var terminal_frames: Array[Dictionary] = []
 var round_traces: Array[Dictionary] = []
+var start_attempts: Array[Dictionary] = []
 var active_round_trace: Dictionary = {}
 var dropped_frames := 0
 var dropped_events := 0
@@ -22,6 +24,7 @@ func begin_session(metadata: Dictionary) -> void:
 	frames.clear()
 	terminal_frames.clear()
 	round_traces.clear()
+	start_attempts.clear()
 	active_round_trace.clear()
 	events.clear()
 	metrics.clear()
@@ -46,6 +49,19 @@ func record_event(event_name: String, details: Dictionary = {}) -> void:
 		events.pop_front()
 		dropped_events += 1
 	events.append({"at_usec": Time.get_ticks_usec(), "at_unix_usec": int(Time.get_unix_time_from_system() * 1_000_000.0), "round_id": str(session.get("round_id", "")), "name": event_name, "details": details.duplicate(true)})
+
+func record_start_attempt(snapshot: Dictionary) -> void:
+	var captured := snapshot.duplicate(true)
+	var attempt_id := str(captured.get("attempt_id", ""))
+	for index in range(start_attempts.size()):
+		if str(start_attempts[index].get("attempt_id", "")) == attempt_id:
+			start_attempts[index] = captured
+			session["last_start_attempt"] = captured.duplicate(true)
+			return
+	start_attempts.append(captured)
+	while start_attempts.size() > MAX_START_ATTEMPTS:
+		start_attempts.pop_front()
+	session["last_start_attempt"] = captured.duplicate(true)
 
 func increment_metric(name: String, amount: int = 1) -> void:
 	metrics[name] = int(metrics.get(name, 0)) + amount
@@ -91,4 +107,4 @@ func freeze_round_trace(reason: String) -> void:
 	active_round_trace.clear()
 
 func export_report() -> Dictionary:
-	return {"session": session.duplicate(true), "terminal_frames": terminal_frames.duplicate(true), "round_traces": round_traces.duplicate(true), "active_round_trace": active_round_trace.duplicate(true), "metrics": metrics.duplicate(true), "frames": frames.duplicate(true), "events": events.duplicate(true), "dropped_frames": dropped_frames, "dropped_events": dropped_events, "exported_at_unix": Time.get_unix_time_from_system()}
+	return {"session": session.duplicate(true), "start_attempts": start_attempts.duplicate(true), "terminal_frames": terminal_frames.duplicate(true), "round_traces": round_traces.duplicate(true), "active_round_trace": active_round_trace.duplicate(true), "metrics": metrics.duplicate(true), "frames": frames.duplicate(true), "events": events.duplicate(true), "dropped_frames": dropped_frames, "dropped_events": dropped_events, "exported_at_unix": Time.get_unix_time_from_system()}

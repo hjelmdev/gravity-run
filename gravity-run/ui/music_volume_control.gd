@@ -2,6 +2,7 @@ extends HBoxContainer
 
 var _value_label: Label
 var _slider: HSlider
+var _enabled_button: CheckButton
 
 func _ready() -> void:
 	add_theme_constant_override("separation", 10)
@@ -26,8 +27,14 @@ func _ready() -> void:
 	_slider.drag_ended.connect(func(_changed: bool) -> void: PlayerProfile.flush_settings())
 	_slider.focus_exited.connect(func() -> void: PlayerProfile.flush_settings())
 	add_child(_slider)
+	_enabled_button = CheckButton.new()
+	_enabled_button.text = tr("Music enabled")
+	_enabled_button.toggled.connect(func(enabled: bool) -> void: PlayerProfile.set_music_enabled(enabled))
+	add_child(_enabled_button)
 	_sync_value(float(PlayerProfile.music_volume) * 100.0)
 	PlayerProfile.music_volume_changed.connect(func(value: float) -> void: _sync_value(value * 100.0))
+	_sync_enabled(PlayerProfile.music_enabled)
+	PlayerProfile.music_enabled_changed.connect(_sync_enabled)
 
 func _exit_tree() -> void:
 	if PlayerProfile != null:
@@ -43,3 +50,7 @@ func _sync_value(value: float) -> void:
 	if is_instance_valid(_value_label):
 		_value_label.text = "%d%%" % roundi(value)
 		_value_label.accessibility_name = "%s %s" % [tr("Music volume"), _value_label.text]
+
+func _sync_enabled(enabled: bool) -> void:
+	if is_instance_valid(_enabled_button):
+		_enabled_button.set_pressed_no_signal(enabled)

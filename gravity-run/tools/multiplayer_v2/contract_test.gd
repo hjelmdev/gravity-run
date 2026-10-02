@@ -13,12 +13,13 @@ const World := preload("res://systems/multiplayer_v2/v2_world_simulation.gd")
 const Runner := preload("res://systems/multiplayer_v2/v2_local_runner.gd")
 const Coordinator := preload("res://systems/multiplayer_v2/v2_round_coordinator.gd")
 const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_export.gd")
+const Diagnostics := preload("res://systems/multiplayer_v2/v2_diagnostics.gd")
 const V2Service := preload("res://systems/multiplayer_v2/multiplayer_v2_service.gd")
 const V2Transport := preload("res://systems/multiplayer_v2/v2_webrtc_transport.gd")
 const HudLayout := preload("res://ui/multiplayer_v2/v2_hud_layout.gd")
 
 func _initialize() -> void:
-	var lobby_version_migration := FileAccess.get_file_as_string("res://supabase/migrations/202610020001_generator6_gameplay_release.sql")
+	var lobby_version_migration := FileAccess.get_file_as_string("res://supabase/migrations/202610020002_generator7_rock_readability.sql")
 	_assert(lobby_version_migration.contains("p_game_version <> '%s'" % V2Service.V2_GAME_VERSION), "V2 client lobby version matches the shared-coin room-creation gate")
 	var numeric_roster := [
 		{"user_id": "host-user", "player_slot": 1.0},
@@ -92,6 +93,13 @@ func _initialize() -> void:
 	_assert(bool(bounded_report.get("export_truncated", false)), "oversized diagnostics explicitly record export truncation")
 	_assert(JSON.stringify(bounded_report).to_utf8_buffer().size() <= DiagnosticsExport.MAX_EXPORT_BYTES, "diagnostics export stays within the browser download size limit")
 	_assert(bounded_report.frames.size() < oversized_report.frames.size(), "diagnostics export trims the oldest frame samples first")
+	var attempt_diagnostics = Diagnostics.new()
+	attempt_diagnostics.begin_session({"build_id": "diagnostic-test"})
+	attempt_diagnostics.record_start_attempt({"attempt_id": "failed-test", "stage": "timeout", "last_error": "prepare_timeout", "peers": {"2": {"scene": "ready", "account_binding": "bound", "prepared": "missing"}}})
+	attempt_diagnostics.record_event("return_to_lobby_applied", {"phase": "OPEN"})
+	var after_return: Dictionary = attempt_diagnostics.export_report()
+	_assert(after_return.start_attempts.size() == 1 and after_return.session.last_start_attempt.stage == "timeout", "failed start timeline survives lobby return and is available to diagnostics export")
+	_assert(str(JSON.stringify(after_return)).find("token") < 0 and str(JSON.stringify(after_return)).find("nonce") < 0, "bounded start diagnostics do not export token or nonce fields")
 
 	var expected := {"room_id": "room", "room_session_id": "session", "lobby_generation": 4, "round_id": "round"}
 	var envelope: Dictionary = Protocol.envelope("room", "session", 4, "round", "SAMPLE", 2, 1, {"world_x": 10.0})
@@ -103,6 +111,24 @@ func _initialize() -> void:
 	for i in 3:
 		clock.record_clock_exchange(1_000_000 + i * 100_000, 1_010_000 + i * 100_000, 1_010_100 + i * 100_000, 1_020_100 + i * 100_000)
 	_assert(clock.is_synchronized(), "clock sync accepts three low-latency exchanges")
+	var high_rtt_clock = Clock.new()
+	for i in 3:
+		var offset_jitter := i * 500
+		var sent := 2_000_000 + i * 100_000
+		var received_at_host := sent + 32_000 + offset_jitter
+		var sent_from_host := received_at_host + 100
+		var received_at_client := sent + 50_100
+		high_rtt_clock.record_clock_exchange(sent, received_at_host, sent_from_host, received_at_client)
+	_assert(high_rtt_clock.minimum_round_trip_usec >= 50_000, "clock test uses a stable network path above the former RTT/2 gate")
+	_assert(high_rtt_clock.is_synchronized(), "stable high-latency clock offsets pass the estimator-quality gate")
+	_assert(high_rtt_clock.offset_jitter_usec <= 16_667.0, "high-latency clock synchronization remains bounded by measured offset jitter")
+	_assert(absf(float(high_rtt_clock.host_time_to_local_usec(8_000_000)) - 7_993_000.0) <= 1000.0, "high-latency host deadline maps within one millisecond of the known offset")
+	var unstable_clock = Clock.new()
+	for i in 3:
+		var sent := 3_000_000 + i * 100_000
+		var noisy_offset: int = [0, 30_000, -25_000][i]
+		unstable_clock.record_clock_exchange(sent, sent + 32_000 + noisy_offset, sent + 32_100 + noisy_offset, sent + 50_100)
+	_assert(not unstable_clock.is_synchronized(), "unstable offset estimates remain blocked instead of weakening the start barrier")
 	_assert(clock.commit_start(2_000_000), "clock commits start once")
 	_assert(not clock.commit_start(2_000_001), "clock rejects duplicate start")
 	_assert(clock.advance(Clock.FIXED_DELTA * 3.0) == 3, "clock advances fixed simulation ticks")

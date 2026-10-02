@@ -52,6 +52,7 @@ func _ready() -> void:
 	MultiplayerV2Service.signaling_state_changed.connect(_on_signaling_state)
 	MultiplayerV2Service.transport_state_changed.connect(_on_transport_state)
 	MultiplayerV2Service.start_failure_changed.connect(_on_start_failure_changed)
+	MultiplayerV2Service.start_attempt_status_changed.connect(_on_start_attempt_status_changed)
 	MultiplayerV2Service.round_prepare_requested.connect(_on_round_prepare_requested)
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 	_on_viewport_size_changed()
@@ -445,6 +446,21 @@ func _on_start_failure_changed(message: String) -> void:
 		_status.text = tr("Last start attempt failed: %s") % message
 	elif not _room.is_empty():
 		_on_room_changed(_room)
+
+func _on_start_attempt_status_changed(snapshot: Dictionary) -> void:
+	if not MultiplayerV2Service.last_start_failure.is_empty():
+		_status.text = tr("Last start attempt failed: %s") % MultiplayerV2Service.last_start_failure
+		return
+	if str(_room.get("phase", "")) == "PREPARING_COURSE":
+		var stage := tr(str(snapshot.get("stage", "waiting")))
+		var waiting := PackedStringArray()
+		for peer_value in (snapshot.get("peers", {}) as Dictionary).values():
+			if peer_value is Dictionary and str(peer_value.get("prepared", "")) == "waiting":
+				waiting.append("slot %d" % int(peer_value.get("player_slot", -1)))
+		var detail := tr("Waiting at: %s") % stage
+		if not waiting.is_empty():
+			detail += " · " + tr("Waiting for") + " " + ", ".join(waiting)
+		_status.text = tr("The race is preparing. Waiting for every player to accept the same round.") + "\n" + detail
 
 func _refresh_controls() -> void:
 	var in_room := not _room.is_empty()

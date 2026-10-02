@@ -40,3 +40,15 @@ msgstr "Gravity Boots"
 
 msgid "item.boots_gravity_01.description"
 msgstr "Sturdy soles built for changing gravity."
+
+msgid "Music settings"
+msgstr "Music settings"
+
+msgid "Music enabled"
+msgstr "Music enabled"
+
+msgid "On"
+msgstr "On"
+
+msgid "Off"
+msgstr "Off"

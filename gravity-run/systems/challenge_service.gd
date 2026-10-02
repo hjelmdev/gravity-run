@@ -289,13 +289,16 @@ func _get_available_profiles(generator_version: int = GENERATOR_VERSION) -> Arra
 	return generator.get_profile_catalog(generator_version)
 
 func _supports_generator_version(generator_version: int) -> bool:
-	return generator_version in [GENERATOR_VERSION, CourseGeneratorScript.PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]
+	return generator_version in [GENERATOR_VERSION, CourseGeneratorScript.PREVIOUS_CURRENT_GENERATOR_VERSION, CourseGeneratorScript.PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]
 
 func _new_default_ruleset(generator_version: int) -> Resource:
 	var default_ruleset := RulesetScript.new() as Resource
 	if generator_version == LEGACY_GENERATOR_VERSION:
 		default_ruleset.set("event_density", 1.0)
 	elif generator_version == GENERATOR_VERSION:
+		default_ruleset.set("revision", 4)
+		default_ruleset.set("event_density", 1.5)
+	elif generator_version == CourseGeneratorScript.PREVIOUS_CURRENT_GENERATOR_VERSION:
 		default_ruleset.set("revision", 3)
 		default_ruleset.set("event_density", 1.5)
 	elif generator_version == CourseGeneratorScript.PUBLISHED_SHARED_GENERATOR_VERSION:

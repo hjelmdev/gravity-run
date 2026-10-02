@@ -13,6 +13,7 @@ const CourseGenerator := preload("res://systems/course_generator.gd")
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const CourseSurfaceRenderer := preload("res://systems/course_surface_renderer.gd")
 const SurfaceIndexScript := preload("res://systems/course_surface_index.gd")
+const FallingRockModel := preload("res://systems/falling_rock_model.gd")
 
 var manifest: Resource
 var event_nodes: Dictionary = {}
@@ -198,7 +199,7 @@ func set_world_state(world_state: Dictionary) -> void:
 			var rock_node: Variant = event_nodes.get(str(rock_state.get("event_id", "")))
 			if is_instance_valid(rock_node) and rock_node.has_method("apply_world_state"):
 				rock_node.call("apply_world_state", rock_state)
-			if str(rock_state.get("phase", "")) == "warning":
+			if FallingRockModel.offscreen_marker_active(str(rock_state.get("phase", ""))):
 				_rock_warning_states.append(rock_state)
 	var barrels: Variant = world_state.get("barrels", [])
 	if barrels is Array:
