@@ -54,6 +54,8 @@ func _run() -> void:
 	var viewport_size := get_viewport().get_visible_rect().size
 	if not Rect2(Vector2.ZERO, viewport_size).encloses(mp_speaker.get_global_rect()) or not Rect2(Vector2.ZERO, viewport_size).encloses(mp_expand.get_global_rect()): failures.append("MP shared music controls are outside the actual viewport")
 	if not is_equal_approx(mp_speaker.get_global_rect().get_center().y, landscape_menu_rect.get_center().y) or not is_equal_approx(mp_expand.get_global_rect().get_center().y, landscape_menu_rect.get_center().y): failures.append("MP menu/speaker/expander centers differ in landscape: menu=%s speaker=%s arrow=%s" % [str(landscape_menu_rect), str(mp_speaker.get_global_rect()), str(mp_expand.get_global_rect())])
+	var landscape_toolbar_gap: float = landscape_menu_rect.position.x - mp_speaker.get_global_rect().end.x
+	if landscape_toolbar_gap < 8.0 or landscape_toolbar_gap > 12.0: failures.append("MP audio group/menu gap outside 8-12px in landscape: %.2fpx" % landscape_toolbar_gap)
 	var count: Label = mp_hud.get_node("CoinCount")
 	if count.text != "08": failures.append("shared coin counter did not render its mode-neutral count")
 	get_viewport().size = Vector2(540, 960)
@@ -78,6 +80,8 @@ func _run() -> void:
 	if mp_speaker.get_global_rect().intersects(mp_menu_button.get_global_rect()) or mp_expand.get_global_rect().intersects(mp_menu_button.get_global_rect()):
 		failures.append("MP shared audio controls overlap the actual menu allocation: speaker=%s expand=%s menu=%s offset=%s" % [str(mp_speaker.get_global_rect()), str(mp_expand.get_global_rect()), str(mp_menu_button.get_global_rect()), str(mp_music.get("right_offset"))])
 	if not is_equal_approx(mp_speaker.get_global_rect().get_center().y, mp_menu_rect.get_center().y) or not is_equal_approx(mp_expand.get_global_rect().get_center().y, mp_menu_rect.get_center().y): failures.append("MP menu/speaker/expander centers differ in portrait: menu=%s speaker=%s arrow=%s" % [str(mp_menu_rect), str(mp_speaker.get_global_rect()), str(mp_expand.get_global_rect())])
+	var portrait_toolbar_gap: float = mp_menu_rect.position.x - mp_speaker.get_global_rect().end.x
+	if portrait_toolbar_gap < 8.0 or portrait_toolbar_gap > 12.0: failures.append("MP audio group/menu gap outside 8-12px in portrait: %.2fpx" % portrait_toolbar_gap)
 	var mp_status_rect: Rect2 = mp_layout.status
 	if mp_speaker.get_global_rect().intersects(mp_status_rect) or mp_expand.get_global_rect().intersects(mp_status_rect):
 		failures.append("MP shared audio controls overlap the status allocation")
