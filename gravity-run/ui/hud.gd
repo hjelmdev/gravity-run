@@ -19,14 +19,27 @@ var speed_debug_visible := false
 var speed_debug_actual := 0.0
 var speed_debug_base := 0.0
 var speed_debug_equipment_percent := 100.0
+const SharedRunHudScene := preload("res://ui/shared_run_hud.tscn")
+var _shared_run_hud: Control
 
 func _ready() -> void:
+	_shared_run_hud = SharedRunHudScene.instantiate() as Control
+	add_child(_shared_run_hud)
+	_layout_shared_run_hud()
+	get_viewport().size_changed.connect(_layout_shared_run_hud)
+	_shared_run_hud.call("set_show_distance", true)
 	PlayerAccountProfile.profile_changed.connect(_on_account_profile_changed)
 	AccountProgress.progress_changed.connect(_on_account_progress_changed)
 	AuthService.auth_state_changed.connect(_on_auth_state_changed)
 	ChallengeService.leaderboard_received.connect(_on_seed_leaderboard_received)
 	bank_coins = AccountProgress.wallet_coins
 	set_process(false)
+
+func _layout_shared_run_hud() -> void:
+	if not is_instance_valid(_shared_run_hud):
+		return
+	_shared_run_hud.position = Vector2.ZERO
+	_shared_run_hud.size = get_viewport_rect().size
 
 func show_pass_flash(nickname: String) -> void:
 	pass_flash_name = nickname
@@ -44,6 +57,9 @@ func _process(delta: float) -> void:
 func update_stats(new_distance_m: float, new_coins: int) -> void:
 	distance_m = new_distance_m
 	run_coins = new_coins
+	if is_instance_valid(_shared_run_hud):
+		_shared_run_hud.call("set_distance_m", new_distance_m)
+		_shared_run_hud.call("set_coins", new_coins)
 	queue_redraw()
 
 func set_loot_pending_count(count: int) -> void:
@@ -95,13 +111,6 @@ func _draw() -> void:
 	var viewport_size := get_viewport_rect().size
 	var viewport_width := viewport_size.x
 	var viewport_height := viewport_size.y
-	draw_string(ThemeDB.fallback_font, Vector2(20.0, 22.0), "GRAVITY RUN", HORIZONTAL_ALIGNMENT_LEFT, 135.0, 17, Color("f4f7ff"))
-	var player_name := PlayerAccountProfile.nickname if PlayerAccountProfile.has_profile else PlayerProfile.leaderboard_name
-	if not player_name.is_empty():
-		draw_string(ThemeDB.fallback_font, Vector2(160.0, 22.0), tr("PLAYER: %s") % player_name, HORIZONTAL_ALIGNMENT_LEFT, 135.0, 11, Color("42d6c5"))
-	draw_string(ThemeDB.fallback_font, Vector2(300.0, 22.0), tr("COINS  %02d") % run_coins, HORIZONTAL_ALIGNMENT_LEFT, 82.0, 11, Color("f5d45e"))
-	# Leave room for the inventory/shop/pause buttons anchored at the top-right.
-	draw_string(ThemeDB.fallback_font, Vector2(viewport_width - 360.0, 22.0), tr("DISTANCE  %06d m") % int(distance_m / 10.0), HORIZONTAL_ALIGNMENT_RIGHT, 190.0, 15, Color("b8c7dc"))
 	if speed_debug_visible:
 		var debug_rect := Rect2(14.0, 29.0, 360.0, 24.0)
 		draw_rect(debug_rect, Color("101827", 0.92))
@@ -140,15 +149,7 @@ func _draw_seed_chase_strip(viewport_width: float, viewport_height: float) -> vo
 	if not next_score.is_empty():
 		var gap := int(next_score.get("best_distance_m", 0)) - current_m
 		draw_string(ThemeDB.fallback_font, Vector2(390.0, 22.0), tr("NEXT: %s · %d m") % [str(next_score.get("player_name", "")), gap], HORIZONTAL_ALIGNMENT_LEFT, maxf(100.0, viewport_width - 680.0), 10, Color("f5d45e"))
-	elif seed_scores.is_empty():
-		var note := tr("SEED SCORES UNAVAILABLE") if seed_scores_error else tr("FIRST RUN ON THIS SEED") if seed_scores_loaded else tr("SEED LEADERBOARD")
-		draw_string(ThemeDB.fallback_font, Vector2(390.0, 22.0), note, HORIZONTAL_ALIGNMENT_LEFT, maxf(100.0, viewport_width - 680.0), 9, Color("b8c7dc"))
-
-	if seed_scores.is_empty():
-		var empty_message := tr("Could not load this seed's leaderboard") if seed_scores_error else tr("No shared runs on this seed yet") if seed_scores_loaded else ""
-		if not empty_message.is_empty():
-			draw_string(ThemeDB.fallback_font, Vector2(track_left, viewport_height - 34.0), empty_message, HORIZONTAL_ALIGNMENT_LEFT, track_width, 9, Color("8292aa"))
-	else:
+	if not seed_scores.is_empty():
 		var best_distance := 1000
 		for score in seed_scores:
 			best_distance = maxi(best_distance, int(score.get("best_distance_m", 0)) + 150)

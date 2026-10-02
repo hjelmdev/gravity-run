@@ -12,8 +12,8 @@ const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_
 const CoursePresentationScript := preload("res://systems/race_course_presentation.gd")
 const RoundCoordinatorScript := preload("res://systems/multiplayer_v2/v2_round_coordinator.gd")
 const HudLayout := preload("res://ui/multiplayer_v2/v2_hud_layout.gd")
-const MusicQuickControlScript := preload("res://ui/music_quick_control.gd")
-const ActionIconScript := preload("res://ui/action_icon.gd")
+const SharedRunHudScene := preload("res://ui/shared_run_hud.tscn")
+const ConfirmedCoinPresentationScript := preload("res://systems/confirmed_coin_presentation.gd")
 
 const FIXED_DELTA := 1.0 / 60.0
 const CAMERA_PLAYER_X := 250.0
@@ -61,13 +61,11 @@ var _status_label: Label
 var _result_panel: PanelContainer
 var _result_text: RichTextLabel
 var _results_view: ScrollContainer
-var _coin_count_indicator: HBoxContainer
-var _coin_count_icon: Control
-var _coin_count_label: Label
+var _coin_commit_presentation = ConfirmedCoinPresentationScript.new()
 var _return_lobby_button: Button
 var _debug_panel: PanelContainer
 var _debug_toggle: Button
-var _music_quick_control: Control
+var _shared_run_hud: Control
 var _export_confirmation: Label
 var _frozen_roster: Array[Dictionary] = []
 var _debug_open := false
@@ -196,6 +194,10 @@ func _build_overlay() -> void:
 	_hud_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud_root.resized.connect(_layout_hud)
 	overlay.add_child(_hud_root)
+	_shared_run_hud = SharedRunHudScene.instantiate() as Control
+	_shared_run_hud.name = "SharedRunHud"
+	_hud_root.add_child(_shared_run_hud)
+	_shared_run_hud.call("set_show_distance", false)
 	_status_label = Label.new()
 	_status_label.add_theme_font_size_override("font_size", 17)
 	status_style(_status_label)
@@ -206,28 +208,6 @@ func _build_overlay() -> void:
 	_debug_toggle.custom_minimum_size = Vector2(104.0, 42.0)
 	_debug_toggle.pressed.connect(_toggle_debug_panel)
 	_hud_root.add_child(_debug_toggle)
-	_music_quick_control = Control.new()
-	_music_quick_control.set_script(MusicQuickControlScript)
-	_music_quick_control.set("right_offset", -152.0)
-	_hud_root.add_child(_music_quick_control)
-	_coin_count_indicator = HBoxContainer.new()
-	_coin_count_indicator.name = "LocalCoinCount"
-	_coin_count_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_coin_count_indicator.add_theme_constant_override("separation", 5)
-	_hud_root.add_child(_coin_count_indicator)
-	_coin_count_icon = Control.new()
-	_coin_count_icon.set_script(ActionIconScript)
-	_coin_count_icon.set("icon_name", "coin")
-	_coin_count_icon.custom_minimum_size = Vector2(24.0, 24.0)
-	_coin_count_icon.tooltip_text = tr("My coins")
-	_coin_count_icon.accessibility_name = tr("My coins")
-	_coin_count_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_coin_count_indicator.add_child(_coin_count_icon)
-	_coin_count_label = Label.new()
-	_coin_count_label.name = "LocalCoinCountValue"
-	_coin_count_label.add_theme_font_size_override("font_size", 16)
-	_coin_count_label.add_theme_color_override("font_color", Color("ffd166"))
-	_coin_count_indicator.add_child(_coin_count_label)
 	_countdown_label = Label.new()
 	_countdown_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_countdown_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -312,7 +292,7 @@ func _build_overlay() -> void:
 	call_deferred("_layout_hud")
 
 func _layout_hud() -> void:
-	if not is_instance_valid(_hud_root) or not is_instance_valid(_debug_toggle) or not is_instance_valid(_status_label) or not is_instance_valid(_debug_panel) or not is_instance_valid(_countdown_label) or not is_instance_valid(_music_quick_control):
+	if not is_instance_valid(_hud_root) or not is_instance_valid(_debug_toggle) or not is_instance_valid(_status_label) or not is_instance_valid(_debug_panel) or not is_instance_valid(_countdown_label) or not is_instance_valid(_shared_run_hud):
 		return
 	var size := _hud_root.size
 	if size.x <= 0.0 or size.y <= 0.0:
@@ -325,12 +305,9 @@ func _layout_hud() -> void:
 	var music_rect: Rect2 = layout.get("music_button", Rect2())
 	var status_rect: Rect2 = layout.get("status", Rect2())
 	var panel_rect: Rect2 = layout.get("panel", Rect2())
-	var coin_rect: Rect2 = layout.get("coin_count", Rect2())
 	_debug_toggle.position = button_rect.position
 	_debug_toggle.size = button_rect.size
-	_music_quick_control.call("set_right_offset", music_rect.position.x - size.x)
-	_coin_count_indicator.position = coin_rect.position
-	_coin_count_indicator.size = coin_rect.size
+	_shared_run_hud.call("set_music_right_offset", music_rect.position.x - size.x)
 	_status_label.position = status_rect.position
 	_status_label.size = status_rect.size
 	_debug_panel.position = panel_rect.position
@@ -709,8 +686,7 @@ func _on_world_commit(commit: Dictionary) -> void:
 	var applied := commit_result == "applied"
 	if str(commit.get("action", "")) == "collect":
 		_pending_coin_claims.erase(str(commit.get("entity_id", "")))
-		if applied and is_instance_valid(_course_presentation):
-			_course_presentation.call("play_confirmed_coin_collection", str(commit.get("entity_id", "")), str(commit.get("commit_id", "")))
+		_coin_commit_presentation.present(commit, commit_result, _course_presentation)
 	MultiplayerV2Service.diagnostics.record_event("world_commit_presented", {"commit_id": str(commit.get("commit_id", "")), "result": applied, "revision": int(commit.get("world_revision", 0))})
 	var transition: Dictionary = commit.get("linked_player_transition", {})
 	if not transition.is_empty() and int(transition.get("owner_peer_id", -1)) == int(MultiplayerV2Service.session.get("local_peer_id", 1)):
@@ -758,8 +734,7 @@ func _on_interaction_resolved(request_id: String, accepted: bool, reason: String
 			_pending_coin_claims.erase(entity_id)
 			if not commit.is_empty():
 				var commit_result := str(_world.apply_world_commit(commit))
-				if commit_result == "applied" and str(commit.get("action", "")) == "collect" and is_instance_valid(_course_presentation):
-					_course_presentation.call("play_confirmed_coin_collection", str(commit.get("entity_id", "")), str(commit.get("commit_id", "")))
+				_coin_commit_presentation.present(commit, commit_result, _course_presentation)
 			if not accepted and reason not in ["coin_claim_lost", "already_collected"]:
 				MultiplayerV2Service.diagnostics.record_event("coin_claim_retryable", {"entity_id": str(entity_id), "reason": reason})
 			return
@@ -1413,8 +1388,8 @@ func _update_hud() -> void:
 		_status_label.text = ""
 
 func _update_coin_count_indicator() -> void:
-	if is_instance_valid(_coin_count_label):
-		_coin_count_label.text = str(_local_shared_coin_count())
+	if is_instance_valid(_shared_run_hud):
+		_shared_run_hud.call("set_coins", _local_shared_coin_count())
 
 func _local_shared_coin_count() -> int:
 	if _world == null:
@@ -1567,6 +1542,7 @@ func _save_diagnostics() -> void:
 	_diagnostics_export_in_progress = true
 	var report := MultiplayerV2Service.diagnostics.export_report()
 	report["current_state"] = MultiplayerV2Service.current_diagnostic_state()
+	report["course_presentation_snapshot"] = _course_presentation_diagnostic_snapshot()
 	if not _result.is_empty():
 		report["frozen_result"] = _result.duplicate(true)
 		report["frozen_roster"] = _frozen_roster.duplicate(true)
@@ -1581,6 +1557,36 @@ func _save_diagnostics() -> void:
 		if generation == _export_notice_generation and is_instance_valid(_export_confirmation):
 			_export_confirmation.visible = false
 	)
+
+func _course_presentation_diagnostic_snapshot() -> Dictionary:
+	var snapshot := {"mode": "multiplayer_v2", "round_id": _round_id, "generator_version": int(_manifest.get("generator_version")) if _manifest != null else -1, "world_tick": _world.tick if _world != null else -1, "camera_left": _camera_left, "viewport": [get_viewport_rect().size.x, get_viewport_rect().size.y], "world_distance": float(_runner.player_state.get("world_x", 0.0)) - float(_manifest.get("start_x")) if _runner != null and _manifest != null else 0.0, "generated_coins": 0, "generated_hazards": {}, "presented_event_nodes": 0, "visible_event_nodes": 0, "coin_nodes": 0, "active_coins": 0, "collected_coins": 0, "visible_coins": 0, "in_view_coins": 0, "rocks": []}
+	if _manifest != null:
+		snapshot["generated_coins"] = _manifest.collectibles.size()
+		for event in _manifest.events:
+			var kind := str(event.get("kind", "unknown"))
+			var counts: Dictionary = snapshot["generated_hazards"]
+			counts[kind] = int(counts.get(kind, 0)) + 1
+			if kind == "rock" and snapshot["rocks"].size() < 12:
+				snapshot["rocks"].append({"event_id": str(event.get("event_id", "")), "x": float(event.get("x", 0.0)), "trigger_lead": float(event.get("trigger_lead", 0.0)), "warning_ticks": int(event.get("warning_ticks", 0)), "warning_seconds": float(event.get("warning_ticks", 0)) / 60.0, "fall_ticks": int(event.get("fall_ticks", 0)), "fall_seconds": float(event.get("fall_ticks", 0)) / 60.0})
+	var ledger_entities: Dictionary = _world.entity_ledger.entities if _world != null else {}
+	var nodes: Dictionary = _course_presentation.event_nodes if is_instance_valid(_course_presentation) else {}
+	snapshot["presented_event_nodes"] = nodes.size()
+	var view_right := _camera_left + get_viewport_rect().size.x
+	for entity_id in nodes:
+		var node_value: Variant = nodes[entity_id]
+		if not is_instance_valid(node_value) or not node_value is Node2D:
+			continue
+		var node: Node2D = node_value
+		var entity_state: Dictionary = ledger_entities.get(str(entity_id), {})
+		if node.visible: snapshot["visible_event_nodes"] = int(snapshot["visible_event_nodes"]) + 1
+		if not str(entity_id).begins_with("coin_"):
+			continue
+		snapshot["coin_nodes"] = int(snapshot["coin_nodes"]) + 1
+		if str(entity_state.get("state", "active")) == "active": snapshot["active_coins"] = int(snapshot["active_coins"]) + 1
+		if str(entity_state.get("state", "active")) == "collected": snapshot["collected_coins"] = int(snapshot["collected_coins"]) + 1
+		if node.visible: snapshot["visible_coins"] = int(snapshot["visible_coins"]) + 1
+		if node.position.x >= _camera_left and node.position.x <= view_right: snapshot["in_view_coins"] = int(snapshot["in_view_coins"]) + 1
+	return snapshot
 
 func _toggle_debug_panel() -> void:
 	_debug_open = not _debug_open

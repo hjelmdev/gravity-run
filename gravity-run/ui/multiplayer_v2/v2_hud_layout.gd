@@ -11,4 +11,4 @@ static func for_viewport(size: Vector2) -> Dictionary:
 	var music_control_x := button.position.x - 48.0
 	var status_right := music_control_x - 30.0 - 12.0
 	status_width = minf(status_width, maxf(status_right - margin, 0.0))
-	return {"margin": margin, "button": button, "music_button": Rect2(music_control_x, margin, 64.0, 42.0), "coin_count": Rect2(margin, margin + 58.0, minf(112.0, size.x - margin * 2.0), 30.0), "status": Rect2(margin, margin + 7.0, status_width, 48.0), "panel": Rect2(size.x - margin - panel_width, margin + 50.0, panel_width, panel_height)}
+	return {"margin": margin, "button": button, "music_button": Rect2(music_control_x, margin, 64.0, 42.0), "coin_count": Rect2(margin, margin + 70.0, minf(112.0, size.x - margin * 2.0), 30.0), "status": Rect2(margin, margin + 34.0, status_width, 30.0), "panel": Rect2(size.x - margin - panel_width, margin + 50.0, panel_width, panel_height)}

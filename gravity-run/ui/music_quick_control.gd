@@ -2,6 +2,7 @@ extends Control
 class_name MusicQuickControl
 
 const ActionIconScript := preload("res://ui/action_icon.gd")
+const ChevronIconScript := preload("res://ui/chevron_icon.gd")
 
 @export var right_offset := -156.0
 
@@ -61,7 +62,7 @@ func _build_ui() -> void:
 
 	_expand_button = Button.new()
 	_expand_button.name = "MusicVolumeExpand"
-	_expand_button.text = "⌄"
+	_expand_button.text = ""
 	_expand_button.tooltip_text = tr("Show music volume")
 	_expand_button.accessibility_name = tr("Show music volume")
 	_expand_button.focus_mode = Control.FOCUS_ALL
@@ -72,6 +73,12 @@ func _build_ui() -> void:
 	_expand_button.focus_entered.connect(_on_control_focus_entered)
 	_expand_button.focus_exited.connect(_on_control_focus_exited)
 	add_child(_expand_button)
+	var chevron := Control.new()
+	chevron.name = "ChevronIcon"
+	chevron.set_script(ChevronIconScript)
+	chevron.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	chevron.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_expand_button.add_child(chevron)
 
 	_panel = PanelContainer.new()
 	_panel.name = "MusicVolumePopover"

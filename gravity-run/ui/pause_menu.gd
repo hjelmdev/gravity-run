@@ -4,7 +4,6 @@ const MAIN_MENU_SCENE := "res://ui/main_menu.tscn"
 const INVENTORY_SCREEN_SCENE := preload("res://ui/inventory_screen.tscn")
 const ActionIconScript := preload("res://ui/action_icon.gd")
 const MusicVolumeControlScript := preload("res://ui/music_volume_control.gd")
-const MusicQuickControlScript := preload("res://ui/music_quick_control.gd")
 
 var pause_button: Button
 var pause_overlay: Control
@@ -78,10 +77,6 @@ func _build_pause_button() -> void:
 	shop_button.offset_left = -100.0
 	shop_button.offset_right = -60.0
 	add_child(shop_button)
-	var music_control := Control.new()
-	music_control.set_script(MusicQuickControlScript)
-	music_control.set("right_offset", -196.0)
-	add_child(music_control)
 
 func _make_hud_action(icon_name: String, accessible_name: String, mode: String) -> Button:
 	var button := Button.new()
