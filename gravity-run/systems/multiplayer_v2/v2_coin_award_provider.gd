@@ -8,6 +8,8 @@ signal request_timing(action: String, context: String, queue_usec: int, http_use
 var _request: HTTPRequest
 var _queue: Array[Dictionary] = []
 var _active: Dictionary = {}
+var _project_url := Config.PROJECT_URL
+var _publishable_key := Config.PUBLISHABLE_KEY
 
 func _ready() -> void:
 	_request = HTTPRequest.new()
@@ -47,18 +49,22 @@ func call_rpc(action: String, rpc_name: String, payload: Dictionary, token: Stri
 func _start(item: Dictionary) -> void:
 	_active = item
 	_active["started_usec"] = Time.get_ticks_usec()
-	var headers := PackedStringArray(["apikey: " + Config.PUBLISHABLE_KEY, "Authorization: Bearer " + str(item.token), "Content-Type: application/json", "Accept: application/json"])
-	var url := "%s/rest/v1/rpc/%s" % [Config.PROJECT_URL, str(item.rpc)]
+	var headers := PackedStringArray(["apikey: " + _publishable_key, "Authorization: Bearer " + str(item.token), "Content-Type: application/json", "Accept: application/json"])
+	var url := "%s/rest/v1/rpc/%s" % [_project_url, str(item.rpc)]
 	var err := _request.request(url, headers, HTTPClient.METHOD_POST, JSON.stringify(item.payload))
 	if err != OK:
-		_active.clear()
+		# _active aliases item, so clear() would erase the request metadata used
+		# by the completion and timing callbacks below.
+		_active = {}
 		request_timing.emit(str(item.action), str(item.context), maxi(Time.get_ticks_usec() - int(item.get("queued_usec", Time.get_ticks_usec())), 0), 0)
 		request_finished.emit(str(item.action), false, {"error_code": "request_start_failed", "error": err}, "Could not start coin RPC request (%d)." % err, str(item.context))
 		_dispatch_next.call_deferred()
 
 func _on_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	var item := _active
-	_active.clear()
+	# Detach ownership before emitting signals: completion handlers may enqueue
+	# another startup RPC immediately and must not mutate this completed request.
+	_active = {}
 	var data: Variant = JSON.parse_string(body.get_string_from_utf8()) if not body.is_empty() else null
 	var ok := result == HTTPRequest.RESULT_SUCCESS and response_code >= 200 and response_code < 300
 	var queue_usec := maxi(int(item.get("started_usec", Time.get_ticks_usec())) - int(item.get("queued_usec", Time.get_ticks_usec())), 0)
