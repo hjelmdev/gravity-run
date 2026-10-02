@@ -164,6 +164,10 @@ func _ready() -> void:
 	MultiplayerV2Service.player_sample_received.connect(_on_remote_sample)
 	MultiplayerV2Service.terminal_report_received.connect(_on_terminal_report)
 	MultiplayerV2Service.world_event_committed.connect(_on_world_commit)
+	if not MultiplayerV2Service.coin_contact_presented.is_connected(_on_verified_coin_contact):
+		MultiplayerV2Service.coin_contact_presented.connect(_on_verified_coin_contact)
+	if not MultiplayerV2Service.coin_contact_presentation_cancelled.is_connected(_on_coin_contact_cancelled):
+		MultiplayerV2Service.coin_contact_presentation_cancelled.connect(_on_coin_contact_cancelled)
 	MultiplayerV2Service.world_interaction_resolved.connect(_on_interaction_resolved)
 	MultiplayerV2Service.results_received.connect(_on_results_received)
 	MultiplayerV2Service.round_failed.connect(_on_round_failed)
@@ -185,6 +189,10 @@ func _configure_profiling() -> void:
 func _exit_tree() -> void:
 	_close_barrel_frame_trace("match_scene_exit")
 	_close_flow_trace("match_scene_exit")
+	if MultiplayerV2Service.coin_contact_presented.is_connected(_on_verified_coin_contact):
+		MultiplayerV2Service.coin_contact_presented.disconnect(_on_verified_coin_contact)
+	if MultiplayerV2Service.coin_contact_presentation_cancelled.is_connected(_on_coin_contact_cancelled):
+		MultiplayerV2Service.coin_contact_presentation_cancelled.disconnect(_on_coin_contact_cancelled)
 
 func _build_overlay() -> void:
 	var overlay := CanvasLayer.new()
@@ -707,6 +715,36 @@ func _on_world_commit(commit: Dictionary) -> void:
 		if MultiplayerV2Service.is_room_owner():
 			_runner.stop("dead")
 	queue_redraw()
+
+func _on_verified_coin_contact(presentation: Dictionary) -> void:
+	if _world == null or _course_presentation == null or str(presentation.get("round_id", "")) != _round_id:
+		return
+	var entity_id := str(presentation.get("entity_id", ""))
+	var incarnation := int(presentation.get("incarnation", -1))
+	if entity_id.is_empty() or incarnation < 1 or not _world.entity_ledger.is_active(entity_id, incarnation):
+		return
+	var entity_state: Dictionary = _world.entity_ledger.entities.get(entity_id, {})
+	if str(entity_state.get("kind", "")) != "coin":
+		return
+	var started_usec := Time.get_ticks_usec()
+	var presented: bool = bool(_coin_commit_presentation.present_contact(presentation, _course_presentation))
+	if presented:
+		var pending: Dictionary = _pending_coin_claims.get(entity_id, {})
+		var contact_to_effect_usec := maxi(started_usec - int(pending.get("contact_usec", started_usec)), 0) if str(pending.get("round_id", "")) == _round_id else -1
+		MultiplayerV2Service.diagnostics.record_event("coin_contact_effect_presented", {"round_id": _round_id, "entity_id": entity_id, "incarnation": incarnation, "peer_id": int(presentation.get("peer_id", -1)), "contact_tick": float(presentation.get("contact_tick", -1.0)), "local_contact_to_effect_usec": contact_to_effect_usec})
+	queue_redraw()
+
+func _on_coin_contact_cancelled(presentation: Dictionary) -> void:
+	if _world == null or _course_presentation == null or str(presentation.get("round_id", "")) != _round_id:
+		return
+	var entity_id := str(presentation.get("entity_id", ""))
+	var incarnation := int(presentation.get("incarnation", -1))
+	if entity_id.is_empty() or incarnation < 1 or not _world.entity_ledger.is_active(entity_id, incarnation):
+		return
+	var restored: bool = bool(_coin_commit_presentation.cancel_contact(presentation, _course_presentation))
+	if restored:
+		MultiplayerV2Service.diagnostics.record_event("coin_contact_effect_restored", {"round_id": _round_id, "entity_id": entity_id, "incarnation": incarnation, "reason": str(presentation.get("reason", ""))})
+		queue_redraw()
 
 func _rock_event_for_entity(entity_id: String) -> Dictionary:
 	if _manifest == null:

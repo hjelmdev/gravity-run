@@ -262,16 +262,32 @@ func set_world_state(world_state: Dictionary) -> void:
 			var entity_kind := str(entities[entity_id].get("kind", ""))
 			var node_value: Variant = event_nodes.get(str(entity_id))
 			if entity_kind == "coin" and is_instance_valid(node_value) and node_value is Node2D:
-				if not bool(node_value.get("is_being_collected")):
+				var pending_presentation: Dictionary = _coin_visual_predictions.get(str(entity_id), {})
+				if not pending_presentation.is_empty() and bool(node_value.get("is_being_collected")):
+					node_value.call("confirm_visual_prediction", str(pending_presentation.get("request_id", "")))
+					_coin_visual_predictions.erase(str(entity_id))
+				elif not bool(node_value.get("is_being_collected")):
 					node_value.visible = false
 			else:
 				apply_destroyed_entity(str(entity_id))
 
 func play_confirmed_coin_collection(entity_id: String, commit_id: String = "", request_id: String = "", round_id: String = "", incarnation: int = -1) -> bool:
-	if entity_id.is_empty() or _confirmed_coin_bursts.has(entity_id):
+	if entity_id.is_empty():
 		return false
 	var coin: Variant = event_nodes.get(entity_id)
 	if not is_instance_valid(coin) or not coin.has_method("animate_collection"):
+		return false
+	if _confirmed_coin_bursts.has(entity_id):
+		var pending: Dictionary = _coin_visual_predictions.get(entity_id, {})
+		if not pending.is_empty() and (round_id.is_empty() or str(pending.get("round_id", "")) == round_id) and (incarnation < 0 or int(pending.get("incarnation", -1)) == incarnation):
+			coin.visible = true
+			coin.call("confirm_visual_prediction", str(pending.get("request_id", "")))
+			_coin_visual_predictions.erase(entity_id)
+			var confirmed: Dictionary = _confirmed_coin_bursts[entity_id]
+			confirmed["commit_id"] = commit_id
+			confirmed["request_id"] = request_id
+			confirmed["presentation_only"] = false
+			_confirmed_coin_bursts[entity_id] = confirmed
 		return false
 	if _coin_visual_predictions.has(entity_id):
 		var prediction: Dictionary = _coin_visual_predictions[entity_id]
@@ -286,6 +302,39 @@ func play_confirmed_coin_collection(entity_id: String, commit_id: String = "", r
 			return false
 	_confirmed_coin_bursts[entity_id] = {"commit_id": commit_id, "request_id": request_id, "round_id": round_id, "incarnation": incarnation}
 	return true
+
+func present_verified_coin_contact(presentation_id: String, entity_id: String, round_id: String, incarnation: int, request_id: String) -> bool:
+	if presentation_id.is_empty() or entity_id.is_empty() or round_id.is_empty() or request_id.is_empty() or incarnation < 1 or _confirmed_coin_bursts.has(entity_id):
+		return false
+	var coin: Variant = event_nodes.get(entity_id)
+	if not is_instance_valid(coin) or not coin.has_method("animate_collection"):
+		return false
+	var predicted: Dictionary = _coin_visual_predictions.get(entity_id, {})
+	if not predicted.is_empty():
+		if str(predicted.get("round_id", "")) != round_id or int(predicted.get("incarnation", -1)) != incarnation:
+			return false
+		coin.visible = true
+	else:
+		coin.visible = true
+		if not bool(coin.call("begin_visual_prediction", request_id)):
+			return false
+		_coin_visual_predictions[entity_id] = {"incarnation": incarnation, "round_id": round_id, "request_id": request_id}
+	_confirmed_coin_bursts[entity_id] = {"commit_id": presentation_id, "request_id": request_id, "round_id": round_id, "incarnation": incarnation, "presentation_only": true}
+	return true
+
+func cancel_verified_coin_contact(presentation_id: String, entity_id: String, round_id: String, incarnation: int) -> bool:
+	var confirmed: Dictionary = _confirmed_coin_bursts.get(entity_id, {})
+	var predicted: Dictionary = _coin_visual_predictions.get(entity_id, {})
+	if confirmed.is_empty() or str(confirmed.get("commit_id", "")) != presentation_id or str(confirmed.get("round_id", "")) != round_id or int(confirmed.get("incarnation", -1)) != incarnation or predicted.is_empty():
+		return false
+	var coin: Variant = event_nodes.get(entity_id)
+	if not is_instance_valid(coin) or not coin.has_method("reject_visual_prediction"):
+		return false
+	var restored: bool = bool(coin.call("reject_visual_prediction", str(predicted.get("request_id", ""))))
+	if restored:
+		_coin_visual_predictions.erase(entity_id)
+		_confirmed_coin_bursts.erase(entity_id)
+	return restored
 
 func predict_coin_collection(entity_id: String, incarnation: int, round_id: String, request_id: String) -> bool:
 	if entity_id.is_empty() or request_id.is_empty() or _coin_visual_predictions.has(entity_id) or _confirmed_coin_bursts.has(entity_id):
@@ -307,7 +356,11 @@ func resolve_coin_visual_prediction(entity_id: String, incarnation: int, round_i
 	if not is_instance_valid(coin):
 		return false
 	if still_active:
-		return bool(coin.call("reject_visual_prediction", request_id))
+		var restored: bool = bool(coin.call("reject_visual_prediction", request_id))
+		var confirmed: Dictionary = _confirmed_coin_bursts.get(entity_id, {})
+		if str(confirmed.get("round_id", "")) == round_id and int(confirmed.get("incarnation", -1)) == incarnation:
+			_confirmed_coin_bursts.erase(entity_id)
+		return restored
 	coin.call("confirm_visual_prediction")
 	_confirmed_coin_bursts[entity_id] = {"commit_id": "resolved_elsewhere", "request_id": request_id, "round_id": round_id, "incarnation": incarnation}
 	return true

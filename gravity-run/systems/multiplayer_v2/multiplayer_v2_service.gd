@@ -36,6 +36,8 @@ signal round_failed(reason: String)
 signal start_failure_changed(message: String)
 signal start_attempt_status_changed(snapshot: Dictionary)
 signal world_event_committed(commit: Dictionary)
+signal coin_contact_presented(presentation: Dictionary)
+signal coin_contact_presentation_cancelled(presentation: Dictionary)
 signal world_baseline_received(baseline: Dictionary)
 signal world_interaction_resolved(request_id: String, accepted: bool, message: String, commit: Dictionary)
 signal results_received(result: Dictionary)
@@ -122,6 +124,8 @@ var world_simulation: Variant
 var terminal_status: Dictionary = {}
 var _interaction_results: Dictionary = {}
 var _pending_interactions: Array[Dictionary] = []
+var _coin_contact_presentations: Dictionary = {}
+const MAX_COIN_CONTACT_PRESENTATIONS_PER_ROUND := 2048
 const BARREL_CLAIM_BATCH_USEC := 150_000
 const COIN_CLAIM_WINDOW_USEC := 120_000
 var _world_event_acks: Dictionary = {}
@@ -978,6 +982,7 @@ func begin_round(round_id: String, roster_revision: int) -> void:
 	terminal_status.clear()
 	_interaction_results.clear()
 	_pending_interactions.clear()
+	_coin_contact_presentations.clear()
 	# Contact and outage state belong to the peer session, not one individual round.
 	diagnostics.record_event("round_began", {"round_id": round_id, "roster_revision": roster_revision})
 
@@ -1448,6 +1453,16 @@ func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 		"COIN_AWARDS_JOURNALED":
 			if str(payload.get("round_id", "")) == _round_id:
 				_settle_coin_wallet()
+		"COIN_CONTACT_PRESENTATION":
+			var presentation_id := str(payload.get("presentation_id", ""))
+			if _is_valid_coin_contact_presentation(payload) and not _coin_contact_presentations.has(presentation_id) and _coin_contact_presentations.size() < MAX_COIN_CONTACT_PRESENTATIONS_PER_ROUND:
+				_coin_contact_presentations[presentation_id] = true
+				coin_contact_presented.emit(payload.duplicate(true))
+		"COIN_CONTACT_PRESENTATION_CANCEL":
+			var presentation_id := str(payload.get("presentation_id", ""))
+			if _is_valid_coin_contact_cancellation(payload) and _coin_contact_presentations.has(presentation_id):
+				_coin_contact_presentations.erase(presentation_id)
+				coin_contact_presentation_cancelled.emit(payload.duplicate(true))
 		"WORLD_COMMIT":
 			var commit: Dictionary = payload
 			if world_simulation != null and not commit.is_empty():
@@ -2401,6 +2416,9 @@ func _process_world_interaction(owner_peer_id: int, request: Dictionary) -> void
 		for pending in _pending_interactions:
 			if _coin_claim_key(str(pending.request.get("round_id", "")), int(pending.owner_peer_id), str(pending.request.get("request_id", ""))) == scoped_key:
 				return
+		var verified_contact := _validate_coin_contact_claim(owner_peer_id, request)
+		if bool(verified_contact.get("valid", false)):
+			_broadcast_verified_coin_contact(owner_peer_id, request, float(verified_contact.get("contact_tick", -1.0)))
 		_pending_interactions.append({"owner_peer_id": owner_peer_id, "request": request.duplicate(true), "received_usec": Time.get_ticks_usec()})
 		return
 	if _interaction_results.has(request_id):
@@ -2412,6 +2430,80 @@ func _process_world_interaction(owner_peer_id: int, request: Dictionary) -> void
 			return
 	_pending_interactions.append({"owner_peer_id": owner_peer_id, "request": request.duplicate(true), "received_usec": Time.get_ticks_usec()})
 	diagnostics.record_event("world_claim_queued", {"peer_id": owner_peer_id, "entity_id": str(request.get("entity_id", "")), "tick": int(request.get("simulation_tick", -1))})
+
+func _validate_coin_contact_claim(owner_peer_id: int, request: Dictionary) -> Dictionary:
+	var request_id := str(request.get("request_id", ""))
+	var entity_id := str(request.get("entity_id", ""))
+	if request_id.is_empty() or entity_id.is_empty() or int(request.get("owner_peer_id", -1)) != owner_peer_id or str(request.get("round_id", "")) != _round_id or str(request.get("action", "")) != "collect" or not _is_roster_peer(owner_peer_id):
+		return {"valid": false, "reason": "invalid_claim"}
+	if world_simulation == null:
+		return {"valid": false, "reason": "world_unavailable"}
+	var coin_state: Dictionary = world_simulation.entity_ledger.entities.get(entity_id, {})
+	if str(coin_state.get("kind", "")) != "coin":
+		return {"valid": false, "reason": "invalid_entity"}
+	if int(request.get("incarnation", -1)) != int(coin_state.get("incarnation", -2)):
+		return {"valid": false, "reason": "incarnation_mismatch"}
+	if not world_simulation.entity_ledger.is_active(entity_id, int(coin_state.get("incarnation", -1))):
+		return {"valid": false, "reason": "already_collected"}
+	var input_sequence := int(request.get("input_seq", -1))
+	if input_sequence < 0 or input_sequence > int(_last_input_sequence_by_peer.get(owner_peer_id, 0)):
+		return {"valid": false, "reason": "invalid_input_sequence"}
+	var motion := _validated_coin_motion(owner_peer_id, request)
+	if motion.is_empty():
+		return {"valid": false, "reason": "unverified_contact"}
+	var terminal: Dictionary = terminal_status.get(owner_peer_id, {})
+	if not terminal.is_empty() and float(motion.contact_tick) >= float(terminal.get("terminal_contact_tick", terminal.get("simulation_tick", INF))):
+		return {"valid": false, "reason": "contact_after_death"}
+	return {"valid": true, "contact_tick": float(motion.contact_tick), "incarnation": int(coin_state.get("incarnation", 1))}
+
+func _broadcast_verified_coin_contact(owner_peer_id: int, request: Dictionary, contact_tick: float) -> void:
+	var entity_id := str(request.get("entity_id", ""))
+	var incarnation := int(request.get("incarnation", -1))
+	var presentation_id := "%s|%s|%d" % [_round_id, entity_id, incarnation]
+	if _coin_contact_presentations.has(presentation_id) or _coin_contact_presentations.size() >= MAX_COIN_CONTACT_PRESENTATIONS_PER_ROUND:
+		return
+	var presentation := {"presentation_id": presentation_id, "round_id": _round_id, "entity_id": entity_id, "incarnation": incarnation, "request_id": str(request.get("request_id", "")), "peer_id": owner_peer_id, "contact_tick": contact_tick}
+	_coin_contact_presentations[presentation_id] = true
+	diagnostics.record_event("coin_contact_verified_for_presentation", {"round_id": _round_id, "entity_id": entity_id, "incarnation": incarnation, "peer_id": owner_peer_id, "contact_tick": contact_tick})
+	coin_contact_presented.emit(presentation.duplicate(true))
+	for target in connected_peer_ids():
+		send_control(int(target), "COIN_CONTACT_PRESENTATION", presentation)
+
+func _cancel_verified_coin_contact(entity_id: String, reason: String) -> void:
+	var coin_state: Dictionary = world_simulation.entity_ledger.entities.get(entity_id, {}) if world_simulation != null else {}
+	var incarnation := int(coin_state.get("incarnation", -1))
+	var presentation_id := "%s|%s|%d" % [_round_id, entity_id, incarnation]
+	if not _coin_contact_presentations.has(presentation_id):
+		return
+	_coin_contact_presentations.erase(presentation_id)
+	var cancellation := {"presentation_id": presentation_id, "round_id": _round_id, "entity_id": entity_id, "incarnation": incarnation, "reason": reason}
+	coin_contact_presentation_cancelled.emit(cancellation.duplicate(true))
+	diagnostics.record_event("coin_contact_presentation_cancelled", cancellation)
+	for target in connected_peer_ids():
+		send_control(int(target), "COIN_CONTACT_PRESENTATION_CANCEL", cancellation)
+
+func _is_valid_coin_contact_presentation(presentation: Dictionary) -> bool:
+	var round_id := str(presentation.get("round_id", ""))
+	var entity_id := str(presentation.get("entity_id", ""))
+	var incarnation := int(presentation.get("incarnation", -1))
+	var contact_tick := float(presentation.get("contact_tick", NAN))
+	var presentation_id := "%s|%s|%d" % [round_id, entity_id, incarnation]
+	if round_id.is_empty() or round_id != _round_id or entity_id.is_empty() or incarnation < 1 or str(presentation.get("presentation_id", "")) != presentation_id or str(presentation.get("request_id", "")).is_empty() or not is_finite(contact_tick) or contact_tick < 0.0:
+		return false
+	var peer_id := int(presentation.get("peer_id", -1))
+	if not _is_roster_peer(peer_id) or world_simulation == null:
+		return false
+	var coin_state: Dictionary = world_simulation.entity_ledger.entities.get(entity_id, {})
+	return str(coin_state.get("kind", "")) == "coin" and int(coin_state.get("incarnation", -1)) == incarnation and world_simulation.entity_ledger.is_active(entity_id, incarnation)
+
+func _is_valid_coin_contact_cancellation(presentation: Dictionary) -> bool:
+	var round_id := str(presentation.get("round_id", ""))
+	var entity_id := str(presentation.get("entity_id", ""))
+	var incarnation := int(presentation.get("incarnation", -1))
+	if round_id.is_empty() or round_id != _round_id or entity_id.is_empty() or incarnation < 1 or str(presentation.get("presentation_id", "")) != "%s|%s|%d" % [round_id, entity_id, incarnation] or str(presentation.get("reason", "")).is_empty() or world_simulation == null:
+		return false
+	var coin_state: Dictionary = world_simulation.entity_ledger.entities.get(entity_id, {})
+	return str(coin_state.get("kind", "")) == "coin" and int(coin_state.get("incarnation", -1)) == incarnation and world_simulation.entity_ledger.is_active(entity_id, incarnation)
 
 func _drain_interaction_claims() -> void:
 	if _pending_interactions.is_empty():
@@ -2471,29 +2563,17 @@ func _decide_coin_claim_bucket(entity_id: String, claims: Array) -> void:
 		var owner_peer_id := int(claim.owner_peer_id)
 		var request: Dictionary = claim.request
 		var request_id := str(request.get("request_id", ""))
-		if request_id.is_empty() or int(request.get("owner_peer_id", -1)) != owner_peer_id or str(request.get("round_id", "")) != _round_id or str(request.get("action", "")) != "collect" or str(request.get("entity_id", "")) != entity_id or not _is_roster_peer(owner_peer_id):
-			rejection_by_request[_coin_claim_key(_round_id, owner_peer_id, request_id)] = "invalid_claim"
-			continue
 		var scoped_key := _coin_claim_key(_round_id, owner_peer_id, request_id)
 		if _interaction_results.has(scoped_key):
 			continue
-		var coin_state: Dictionary = world_simulation.entity_ledger.entities.get(entity_id, {})
-		if int(request.get("incarnation", -1)) != int(coin_state.get("incarnation", -2)):
-			rejection_by_request[scoped_key] = "incarnation_mismatch"
+		var verified_contact := _validate_coin_contact_claim(owner_peer_id, request)
+		if not bool(verified_contact.get("valid", false)):
+			rejection_by_request[scoped_key] = str(verified_contact.get("reason", "invalid_claim"))
 			continue
-		var input_sequence := int(request.get("input_seq", -1))
-		if input_sequence < 0 or input_sequence > int(_last_input_sequence_by_peer.get(owner_peer_id, 0)):
-			rejection_by_request[scoped_key] = "invalid_input_sequence"
+		if str(request.get("entity_id", "")) != entity_id:
+			rejection_by_request[scoped_key] = "invalid_claim"
 			continue
-		var motion := _validated_coin_motion(owner_peer_id, request)
-		if motion.is_empty():
-			rejection_by_request[scoped_key] = "unverified_contact"
-			continue
-		var terminal: Dictionary = terminal_status.get(owner_peer_id, {})
-		if not terminal.is_empty() and float(motion.contact_tick) >= float(terminal.get("terminal_contact_tick", terminal.get("simulation_tick", INF))):
-			rejection_by_request[scoped_key] = "contact_after_death"
-			continue
-		valid.append({"peer_id": owner_peer_id, "request": request, "contact_tick": float(motion.contact_tick)})
+		valid.append({"peer_id": owner_peer_id, "request": request, "contact_tick": float(verified_contact.contact_tick)})
 	valid.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		var tick_a := float(a.contact_tick)
 		var tick_b := float(b.contact_tick)
@@ -2517,6 +2597,8 @@ func _decide_coin_claim_bucket(entity_id: String, claims: Array) -> void:
 			for target in connected_peer_ids():
 				send_control(int(target), "WORLD_COMMIT", commit)
 			_queue_coin_award_persistence(entity_id, winner_peer, 1)
+	if commit.is_empty():
+		_cancel_verified_coin_contact(entity_id, "no_valid_award")
 	for claim in claims:
 		var peer_id := int(claim.owner_peer_id)
 		var request: Dictionary = claim.request
