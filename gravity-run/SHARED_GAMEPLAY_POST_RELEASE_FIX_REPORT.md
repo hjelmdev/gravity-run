@@ -20,7 +20,7 @@ Datum: 2026-10-02. Ändringen är presentationsbegränsad: spelregler, 120 ms co
 
 ## Publicering
 
-Azure `codex/current-prototype` och GitHub Pages `main` publiceras efter testkörningen. Aktiv Pages-root är [https://hjelmdev.github.io/gravity-run/](https://hjelmdev.github.io/gravity-run/). Slutliga source-/Pages-commits, workflowstatus, build-ID och publikt PCK-hash dokumenteras när deployment är klart.
+Azure `codex/current-prototype` implementation commit: `e6fad38` (`Respond immediately to shared coin contacts`). Synlig version: `2026.10.02-shared-coin-hud-feedback`. GitHub Pages `main` commit: `2af42bb` (`Publish shared coin feedback release`). Workflow run `37061044122` avslutades med success ([workflow](https://github.com/hjelmdev/gravity-run/actions/runs/37061044122)). Aktiv Pages-root: [https://hjelmdev.github.io/gravity-run/](https://hjelmdev.github.io/gravity-run/). Root och spel-loader returnerade HTTP 200 och använde build-ID `shared-coin-hud-e6fad38-20261002` med `mainPack=index.shared-coin-hud-e6fad38-20261002.pck`. Export och publik PCK är 2 786 160 byte, SHA-256 `F98C6C7BAB1C54ACB858BD5067E94B11BFB9CEE198C0364AC53A4FF47CF6E396`.
 
 ## Användarprov
 
@@ -28,3 +28,4 @@ Azure `codex/current-prototype` och GitHub Pages `main` publiceras efter testkö
 2. I MP, spring genom en coin och kontrollera att effekten börjar vid kontakt före hostbekräftelsen. Låt sedan två spelare tävla om samma coin; bara värdens utsedda vinnare ska få belöningen.
 3. Hovra över speakerikonen: volympanelen ska förbli stängd. Klicka speaker för mute/unmute; öppna reglaget med pilen. Prova samma beteende i SP och MP.
 4. Kontrollera att MP menu-knapp och speaker/pil ligger på samma horisontella linje i liggande och stående format.
+
