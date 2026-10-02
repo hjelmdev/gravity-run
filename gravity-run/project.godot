@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="Gravity Run"
-config/version="2026.10.02-rock-warning-audio-v8"
+config/version="2026.10.02-shared-run-hud-fix"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.svg"
 run/main_scene="res://ui/main_menu.tscn"
