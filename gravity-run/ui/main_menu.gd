@@ -7,6 +7,8 @@ const MULTIPLAYER_LOBBY_SCENE := preload("res://ui/multiplayer_v2/multiplayer_v2
 const MULTIPLAYER_MATCH_SCENE := preload("res://ui/multiplayer_v2/multiplayer_v2_match.tscn")
 const COURSE_GENERATOR_SCRIPT := preload("res://systems/course_generator.gd")
 const COURSE_RULESET_SCRIPT := preload("res://systems/course_generation_ruleset.gd")
+const MusicVolumeControlScript := preload("res://ui/music_volume_control.gd")
+const GameIconScript := preload("res://ui/game_icon.gd")
 
 var menu_panel: PanelContainer
 var _leaderboard_rows: VBoxContainer
@@ -50,6 +52,7 @@ var _multiplayer_lobby: Control
 var _return_to_hub_after_screen := false
 
 func _ready() -> void:
+	MusicController.enter_menu()
 	MobileTextEntry.entry_submitted.connect(_on_mobile_text_submitted)
 	Leaderboard.top_runs_received.connect(_on_top_runs_received)
 	AuthService.auth_state_changed.connect(_on_auth_state_changed)
@@ -196,6 +199,7 @@ func _show_multiplayer_lobby() -> void:
 	add_child(_multiplayer_lobby)
 
 func _start_multiplayer_match() -> void:
+	MusicController.prepare_round()
 	get_tree().change_scene_to_packed(MULTIPLAYER_MATCH_SCENE)
 
 
@@ -344,26 +348,43 @@ func _show_achievements_menu() -> void:
 		var group_content := VBoxContainer.new()
 		group_content.add_theme_constant_override("separation", 2)
 		group_card.add_child(group_content)
+		var group_button_row := HBoxContainer.new()
+		group_button_row.add_theme_constant_override("separation", 3)
+		group_content.add_child(group_button_row)
+		var category_icon: Control = GameIconScript.new()
+		category_icon.icon_family = "achievement_category"
+		category_icon.icon_key = _achievement_category_key(achievement_id, group_definitions)
+		category_icon.custom_minimum_size = Vector2(18, 18)
+		category_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		group_button_row.add_child(category_icon)
 		var group_button := Button.new()
 		var base_title := _achievement_group_title(tr(str(group_definitions[0].get("title", achievement_id))))
-		group_button.text = "▸ " + base_title + "  %d/%d" % [group_unlocked, group_definitions.size()]
+		group_button.text = base_title + "  %d/%d" % [group_unlocked, group_definitions.size()]
 		group_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		group_button.flat = true
 		group_button.custom_minimum_size.y = 20.0
+		group_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		group_button.accessibility_name = "%s, %s, %d/%d" % [base_title, tr("Achievement group"), group_unlocked, group_definitions.size()]
+		group_button.tooltip_text = group_button.accessibility_name
 		group_button.add_theme_font_size_override("font_size", 10)
 		group_button.add_theme_color_override("font_color", Color("edf3ff"))
 		group_button.pressed.connect(_show_achievement_group_overlay.bind(achievement_id, displayable_definitions, group_card))
-		group_content.add_child(group_button)
+		group_button_row.add_child(group_button)
+		var expand_icon: Control = GameIconScript.new()
+		expand_icon.icon_family = "chevron"
+		expand_icon.icon_key = "chevron"
+		expand_icon.custom_minimum_size = Vector2(16, 18)
+		expand_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		group_button_row.add_child(expand_icon)
 		var next_unlocked := AchievementService.is_unlocked(achievement_id, int(current_definition.get("tier", 1)))
 		var summary_row := HBoxContainer.new()
 		summary_row.add_theme_constant_override("separation", 4)
 		group_content.add_child(summary_row)
-		var summary_badge := Label.new()
-		summary_badge.text = "★" if next_unlocked else "◇"
+		var summary_badge: Control = GameIconScript.new()
+		summary_badge.icon_family = "achievement_status"
+		summary_badge.unlocked = next_unlocked
 		summary_badge.custom_minimum_size = Vector2(12, 12)
-		summary_badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		summary_badge.add_theme_font_size_override("font_size", 9)
-		summary_badge.add_theme_color_override("font_color", Color("f5d45e") if next_unlocked else Color("718098"))
+		summary_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		summary_row.add_child(summary_badge)
 		var summary_column := VBoxContainer.new()
 		summary_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -434,15 +455,21 @@ func _show_achievement_group_overlay(achievement_id: String, definitions: Array,
 		card.add_child(content)
 		var heading_row := HBoxContainer.new()
 		content.add_child(heading_row)
-		var badge := Label.new()
-		badge.text = "★" if is_unlocked else "◇"
+		var badge: Control = GameIconScript.new()
+		badge.icon_family = "achievement_status"
+		badge.unlocked = is_unlocked
 		badge.custom_minimum_size = Vector2(12.0, 12.0)
-		badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		badge.add_theme_font_size_override("font_size", 9)
-		badge.add_theme_color_override("font_color", Color("f5d45e") if is_unlocked else Color("718098"))
+		badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		heading_row.add_child(badge)
+		var category_icon: Control = GameIconScript.new()
+		category_icon.icon_family = "achievement_category"
+		category_icon.icon_key = _achievement_category_key(achievement_id, definitions)
+		category_icon.custom_minimum_size = Vector2(15.0, 15.0)
+		category_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		heading_row.add_child(category_icon)
 		var title := Label.new()
 		title.text = tr(str(definition.get("title", achievement_id)))
+		title.accessibility_name = "%s, %s %d, %s" % [title.text, tr("Tier"), tier, tr("Unlocked") if is_unlocked else tr("Locked")]
 		title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		title.add_theme_font_size_override("font_size", 9)
 		title.add_theme_color_override("font_color", Color("edf3ff") if is_unlocked else Color("b8c7dc"))
@@ -485,6 +512,28 @@ func _achievement_group_title(title: String) -> String:
 		if title.ends_with(suffix):
 			return title.trim_suffix(suffix)
 	return title
+
+func _achievement_category_key(achievement_id: String, definitions: Array) -> String:
+	if achievement_id == "coins_earned":
+		return "coins_earned"
+	if achievement_id == "gravity_flips":
+		return "gravity_flips"
+	if achievement_id == "hazards_discovered" or achievement_id.begins_with("hazard_"):
+		return "hazards_discovered"
+	if achievement_id == "distance_run":
+		return "distance_run"
+	if achievement_id == "distance_total":
+		return "distance_total"
+	for definition in definitions:
+		if not definition is Dictionary:
+			continue
+		match str(definition.get("metric", "")):
+			"total_coins_earned": return "coins_earned"
+			"total_gravity_flips": return "gravity_flips"
+			"distinct_hazards_seen", "hazard_encounters": return "hazards_discovered"
+			"best_run_distance_m": return "distance_run"
+			"total_distance_m": return "distance_total"
+	return "unknown"
 
 func _achievement_menu_card_style(is_unlocked: bool) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
@@ -1427,22 +1476,31 @@ func _show_options_menu() -> void:
 	menu_panel = PanelContainer.new()
 	# Leave enough room for the heading, device-specific choices, and Back.
 	# The previous 330 px minimum let the VBox overflow on some web canvas scales.
-	menu_panel.custom_minimum_size = Vector2(380.0, 410.0)
-	menu_panel.anchor_left = 1.0
-	menu_panel.anchor_right = 1.0
+	var viewport_size := get_viewport_rect().size
+	var panel_width := minf(380.0, viewport_size.x - 24.0)
+	var panel_height := minf(450.0, viewport_size.y - 24.0)
+	menu_panel.custom_minimum_size = Vector2(panel_width, panel_height)
+	menu_panel.anchor_left = 0.5
+	menu_panel.anchor_right = 0.5
 	menu_panel.anchor_top = 0.5
 	menu_panel.anchor_bottom = 0.5
-	menu_panel.offset_left = -404.0
-	menu_panel.offset_right = -24.0
-	menu_panel.offset_top = -205.0
-	menu_panel.offset_bottom = 205.0
+	menu_panel.offset_left = -panel_width * 0.5
+	menu_panel.offset_right = panel_width * 0.5
+	menu_panel.offset_top = -panel_height * 0.5
+	menu_panel.offset_bottom = panel_height * 0.5
 	menu_panel.add_theme_stylebox_override("panel", _panel_style())
 	menu_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(menu_panel)
 
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	menu_panel.add_child(scroll)
 	var layout := VBoxContainer.new()
+	layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	layout.add_theme_constant_override("separation", 12)
-	menu_panel.add_child(layout)
+	scroll.add_child(layout)
 	var title := Label.new()
 	title.text = tr("OPTIONS")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1472,6 +1530,8 @@ func _show_options_menu() -> void:
 		layout.add_child(control_button)
 		if first_control_button == null:
 			first_control_button = control_button
+	var music_volume_control: Control = MusicVolumeControlScript.new()
+	layout.add_child(music_volume_control)
 	var language_row := HBoxContainer.new()
 	language_row.add_theme_constant_override("separation", 8)
 	language_row.alignment = BoxContainer.ALIGNMENT_CENTER

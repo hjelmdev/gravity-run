@@ -1,5 +1,7 @@
 extends Node
 
+signal music_volume_changed(value: float)
+
 const DEFAULT_CHARACTER_STATS := preload("res://characters/runner_stats.tres")
 const SAVE_PATH := "user://gravity_run_profile.cfg"
 
@@ -7,13 +9,21 @@ var best_distance_m := 0.0
 var flip_control := "keyboard"
 var leaderboard_name := ""
 var language := ""
+var music_volume := 0.6
 var character_stats: Resource
 var _saved_challenges: Array[Dictionary] = []
+var _music_save_timer: Timer
 
 func _ready() -> void:
 	character_stats = DEFAULT_CHARACTER_STATS.duplicate(true)
 	flip_control = "swipe" if DisplayServer.is_touchscreen_available() else "keyboard"
 	_load_profile()
+	_music_save_timer = Timer.new()
+	_music_save_timer.one_shot = true
+	_music_save_timer.wait_time = 0.45
+	_music_save_timer.process_mode = Node.PROCESS_MODE_ALWAYS
+	_music_save_timer.timeout.connect(_save_profile)
+	add_child(_music_save_timer)
 	if language.is_empty():
 		language = "en" if OS.get_locale_language().to_lower() == "en" else "sv"
 	TranslationServer.set_locale(language)
@@ -53,6 +63,13 @@ func _load_profile() -> void:
 	if not _is_valid_flip_control(flip_control):
 		var legacy_control := str(config.get_value("settings", "mobile_flip_control", default_control))
 		flip_control = legacy_control if DisplayServer.is_touchscreen_available() and legacy_control in ["swipe", "tap"] else default_control
+	var saved_music_volume: Variant = config.get_value("settings", "music_volume", 0.6)
+	music_volume = normalize_music_volume(saved_music_volume)
+
+static func normalize_music_volume(value: Variant, default_value: float = 0.6) -> float:
+	if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)):
+		return default_value
+	return clampf(float(value), 0.0, 1.0)
 
 func set_flip_control(mode: String) -> void:
 	if not _is_valid_flip_control(mode):
@@ -67,16 +84,37 @@ func set_language(value: String) -> void:
 	TranslationServer.set_locale(language)
 	_save_profile()
 
+func set_music_volume(value: float) -> void:
+	if not is_finite(value):
+		return
+	var normalized := clampf(value, 0.0, 1.0)
+	if is_equal_approx(music_volume, normalized):
+		return
+	music_volume = normalized
+	music_volume_changed.emit(music_volume)
+	if is_instance_valid(_music_save_timer):
+		_music_save_timer.start()
+	else:
+		_save_profile()
+
+func flush_settings() -> void:
+	if is_instance_valid(_music_save_timer):
+		_music_save_timer.stop()
+	_save_profile()
+
 func _is_valid_flip_control(mode: String) -> bool:
 	return mode in ["keyboard", "mouse", "swipe", "tap"]
 
 func _save_profile() -> void:
 	var config := ConfigFile.new()
+	# Preserve settings and profile keys written by other systems or newer builds.
+	config.load(SAVE_PATH)
 	config.set_value("profile", "best_distance_m", best_distance_m)
 	config.set_value("profile", "leaderboard_name", leaderboard_name)
 	config.set_value("profile", "saved_challenges", _saved_challenges)
 	config.set_value("settings", "flip_control", flip_control)
 	config.set_value("settings", "language", language)
+	config.set_value("settings", "music_volume", music_volume)
 	var error := config.save(SAVE_PATH)
 	if error != OK:
 		push_warning("Could not save Gravity Run profile (error %s)." % error)

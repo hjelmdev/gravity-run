@@ -657,6 +657,7 @@ func _on_interaction_resolved(request_id: String, accepted: bool, reason: String
 	queue_redraw()
 
 func _on_results_received(result: Dictionary) -> void:
+	MusicController.enter_menu()
 	_result = result.duplicate(true)
 	_close_flow_trace("results_received")
 	MultiplayerV2Service.diagnostics.freeze_round_trace("results_received")
@@ -682,6 +683,7 @@ static func spectator_display_name(peer_id: int, roster: Array, fallback: String
 	return fallback
 
 func _on_round_failed(reason: String) -> void:
+	MusicController.enter_menu()
 	_round_aborted = true
 	_round_started = false
 	_close_flow_trace("round_aborted")
@@ -699,6 +701,7 @@ func _on_room_changed_for_abort(room: Dictionary) -> void:
 		_status_label.text = tr("The round was aborted. Return to the lobby when you are ready.")
 
 func _on_membership_removed(reason: String) -> void:
+	MusicController.enter_menu()
 	_round_started = false
 	_result_panel.visible = true
 	_result_text.clear()
@@ -713,6 +716,7 @@ func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 		return
 	var callback_started_usec := Time.get_ticks_usec()
 	_round_started = true
+	MusicController.start_round(round_id)
 	_world_tick = 0
 	_local_start_deadline_usec = int(MultiplayerV2Service._round_coordinator.clock.started_at_usec)
 	_first_physics_step_usec = -1
@@ -1454,6 +1458,7 @@ func _leave_v2() -> void:
 	get_tree().change_scene_to_file("res://ui/main_menu.tscn")
 
 func _show_failure(message: String) -> void:
+	MusicController.enter_menu()
 	if _round_started or MultiplayerV2Service._round_coordinator.state in [RoundCoordinatorScript.State.PREPARING, RoundCoordinatorScript.State.COMMITTING]:
 		_round_aborted = true
 		MultiplayerV2Service.report_local_prepare_failure(message, "match_scene_ready")

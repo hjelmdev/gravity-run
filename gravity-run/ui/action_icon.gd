@@ -3,6 +3,10 @@ extends Control
 @export var icon_name := "inventory"
 
 func _draw() -> void:
+	var scale_factor := minf(size.x, size.y) / 30.0
+	if scale_factor <= 0.0:
+		return
+	draw_set_transform(Vector2((size.x - 30.0 * scale_factor) * 0.5, (size.y - 30.0 * scale_factor) * 0.5), 0.0, Vector2.ONE * scale_factor)
 	var ink := Color("edf3ff")
 	var accent := Color("42d6c5")
 	if icon_name == "shop":
@@ -21,3 +25,4 @@ func _draw() -> void:
 		draw_line(Vector2(20, 12), Vector2(20, 8), accent, 2.0)
 		draw_line(Vector2(10, 8), Vector2(20, 8), accent, 2.0)
 		draw_line(Vector2(5, 16), Vector2(25, 16), ink, 1.5)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)

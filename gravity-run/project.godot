@@ -27,11 +27,15 @@ PlayerAccountProfile="*res://systems/player_account_profile.gd"
 AchievementService="*res://systems/achievement_service.gd"
 InventoryService="*res://systems/inventory_service.gd"
 AppNavigation="*res://systems/app_navigation.gd"
+MusicController="*res://systems/music_controller.gd"
 MultiplayerV2Service="*res://systems/multiplayer_v2/multiplayer_v2_service.gd"
 MobileTextEntry="*res://systems/mobile_text_entry.gd"
 
 [internationalization]
-locale/translations=PackedStringArray("res://locale/sv.po")
+locale/translations=PackedStringArray("res://locale/sv.po", "res://locale/en.po")
+
+[audio]
+buses/default_bus_layout="res://assets/audio/default_bus_layout.tres"
 
 [display]
 

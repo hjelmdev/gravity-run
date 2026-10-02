@@ -1,6 +1,7 @@
 extends CanvasLayer
 
 const COPY_ICON_SCRIPT := preload("res://ui/copy_icon.gd")
+const GameIconScript := preload("res://ui/game_icon.gd")
 
 var _diagnostic_save_button: Button
 var _distance_m := 0
@@ -28,6 +29,7 @@ var _achievement_section: VBoxContainer
 var _achievement_title: Label
 var _achievement_description: Label
 var _achievement_counter: Label
+var _achievement_category_icon: Control
 var _achievement_previous: Button
 var _achievement_next: Button
 var _run_achievements: Array[Dictionary] = []
@@ -215,14 +217,17 @@ func _build_ui() -> void:
 	var achievement_card_row := HBoxContainer.new()
 	achievement_card_row.add_theme_constant_override("separation", 10)
 	achievement_card.add_child(achievement_card_row)
-	var badge := Label.new()
-	badge.text = "★"
+	var badge: Control = GameIconScript.new()
+	badge.icon_family = "achievement_status"
+	badge.unlocked = true
 	badge.custom_minimum_size = Vector2(42, 42)
-	badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	badge.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	badge.add_theme_font_size_override("font_size", 23)
-	badge.add_theme_color_override("font_color", Color("f5d45e"))
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	achievement_card_row.add_child(badge)
+	_achievement_category_icon = GameIconScript.new()
+	_achievement_category_icon.icon_family = "achievement_category"
+	_achievement_category_icon.custom_minimum_size = Vector2(26, 26)
+	_achievement_category_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	achievement_card_row.add_child(_achievement_category_icon)
 	var achievement_text := VBoxContainer.new()
 	achievement_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	achievement_card_row.add_child(achievement_text)
@@ -470,9 +475,23 @@ func _update_achievement_carousel() -> void:
 	var entry: Dictionary = _run_achievements[_achievement_index]
 	_achievement_title.text = tr(str(entry.get("title", "Achievement")))
 	_achievement_description.text = tr(str(entry.get("description", "")))
+	_achievement_category_icon.icon_key = _achievement_category_key(str(entry.get("id", "")), str(entry.get("metric", "")))
 	_achievement_counter.text = "%d / %d" % [_achievement_index + 1, _run_achievements.size()]
 	_achievement_previous.disabled = _run_achievements.size() < 2
 	_achievement_next.disabled = _run_achievements.size() < 2
+
+func _achievement_category_key(achievement_id: String, metric: String) -> String:
+	if achievement_id == "coins_earned" or metric == "total_coins_earned":
+		return "coins_earned"
+	if achievement_id == "gravity_flips" or metric == "total_gravity_flips":
+		return "gravity_flips"
+	if achievement_id == "hazards_discovered" or metric in ["distinct_hazards_seen", "hazard_encounters"]:
+		return "hazards_discovered"
+	if achievement_id == "distance_run" or metric == "best_run_distance_m":
+		return "distance_run"
+	if achievement_id == "distance_total" or metric == "total_distance_m":
+		return "distance_total"
+	return "unknown"
 
 func _achievement_card_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()

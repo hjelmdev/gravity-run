@@ -1,0 +1,42 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Gravity Run\n"
+"Language: en\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "item.helmet_copper_01.name"
+msgstr "Copper Helmet"
+
+msgid "item.helmet_copper_01.description"
+msgstr "A simple helmet made of copper."
+
+msgid "item.helmet_scout_01.name"
+msgstr "Scout Hood"
+
+msgid "item.helmet_scout_01.description"
+msgstr "A light hood for quick expeditions."
+
+msgid "item.helmet_night_01.name"
+msgstr "Night Visor"
+
+msgid "item.helmet_night_01.description"
+msgstr "A dark visor with an unusual sheen."
+
+msgid "item.boots_canvas_01.name"
+msgstr "Canvas Boots"
+
+msgid "item.boots_canvas_01.description"
+msgstr "Comfortable canvas shoes."
+
+msgid "item.boots_runner_01.name"
+msgstr "Runner Boots"
+
+msgid "item.boots_runner_01.description"
+msgstr "Durable shoes made for long runs."
+
+msgid "item.boots_gravity_01.name"
+msgstr "Gravity Boots"
+
+msgid "item.boots_gravity_01.description"
+msgstr "Sturdy soles built for changing gravity."

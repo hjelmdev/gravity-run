@@ -108,6 +108,7 @@ func _start_run() -> void:
 	run_end_panel.visible = false
 	if not demo_mode:
 		AchievementService.begin_run()
+		MusicController.start_round("singleplayer:%d" % Time.get_ticks_usec())
 	player.call("reset_to_floor", WORLD_HEIGHT - 80.0)
 	var loadout_snapshot: Resource = InventoryService.create_run_loadout_snapshot(PlayerProfile.get_character_stats())
 	run_state.call("set_loadout_snapshot", loadout_snapshot)
@@ -417,6 +418,8 @@ func _physics_process(delta: float) -> void:
 
 func _end_run() -> void:
 	game_over = true
+	if not demo_mode:
+		MusicController.enter_menu()
 	_presentation.reset(player.position)
 	for obstacle in obstacles:
 		if obstacle.has_method("freeze_render_motion"):

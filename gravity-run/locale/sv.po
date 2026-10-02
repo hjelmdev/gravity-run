@@ -1023,19 +1023,61 @@ msgid "item.boots_canvas_01.name"
 msgstr "Lärkor"
 
 msgid "item.boots_canvas_01.description"
-msgstr "Bekväma tygskor som ger 1 % högre löphastighet."
+msgstr "Bekväma skor av tyg."
 
 msgid "item.boots_runner_01.name"
 msgstr "Löparskor"
 
 msgid "item.boots_runner_01.description"
-msgstr "Slitstarka skor som ger 2,5 % högre löphastighet."
+msgstr "Slitstarka skor för långa rundor."
 
 msgid "item.boots_gravity_01.name"
 msgstr "Gravitationsstövlar"
 
 msgid "item.boots_gravity_01.description"
-msgstr "Stadiga sulor som minskar pausen mellan gravitationsvändningar med 3 %."
+msgstr "Stadiga sulor gjorda för att byta gravitation."
+
+msgid "Gravity flip cooldown"
+msgstr "Väntetid mellan gravitationsbyten"
+
+msgid "Music volume"
+msgstr "Musikvolym"
+
+msgid "Item name unavailable"
+msgstr "Föremålsnamn saknas"
+
+msgid "Item description unavailable"
+msgstr "Beskrivning saknas"
+
+msgid "Achievement group"
+msgstr "Prestationer"
+
+msgid "Tier"
+msgstr "Nivå"
+
+msgid "Unlocked"
+msgstr "Upplåst"
+
+msgid "Locked"
+msgstr "Låst"
+
+msgid "Equipped"
+msgstr "Utrustad"
+
+msgid "Equip"
+msgstr "Utrusta"
+
+msgid "Unequip"
+msgstr "Ta av"
+
+msgid "No item is equipped in this slot."
+msgstr "Ingen utrustning sitter på den här platsen."
+
+msgid "Item details unavailable"
+msgstr "Föremålsdetaljer saknas"
+
+msgid "Unknown slot"
+msgstr "Okänd plats"
 
 msgid "Flip gravity"
 msgstr "Vänd gravitationen"

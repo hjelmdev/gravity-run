@@ -1,5 +1,7 @@
 extends SceneTree
 
+const ItemPresentationScript := preload("res://ui/item_presentation.gd")
+
 var failures := 0
 
 func _initialize() -> void:
@@ -37,8 +39,14 @@ func _run_tests() -> void:
 	_check(str(TranslationServer.translate("THIS MONTH — TOP 20")) == "DEN HÄR MÅNADEN — TOPP 20", "Swedish monthly leaderboard title should load")
 	_check(str(TranslationServer.translate("BANK  %d") % 123) == "BANK  123", "Swedish account wallet HUD label should load")
 	_check(str(TranslationServer.translate("Sign in to save coins and total distance.")) == "Logga in för att spara mynt och total distans.", "Swedish guest account-progress hint should load")
+	_check(str(TranslationServer.translate("Music volume")) == "Musikvolym", "Swedish music volume label should load")
+	_check(str(TranslationServer.translate("Equip")) == "Utrusta" and str(TranslationServer.translate("Unequip")) == "Ta av", "Swedish equipment actions should load")
+	_check(str(TranslationServer.translate("item.boots_canvas_01.name")) == "Lärkor", "Swedish symbolic item name should load")
+	_check(str(TranslationServer.translate("item.boots_canvas_01.description")) == "Bekväma skor av tyg.", "Swedish item description should omit catalog-driven modifiers")
 	TranslationServer.set_locale("en")
 	_check(str(TranslationServer.translate("RUN OVER")) == "RUN OVER", "English should use the source text")
+	_check(str(TranslationServer.translate("item.boots_canvas_01.name")) == "Canvas Boots", "English symbolic item name should load")
+	_check(str(TranslationServer.translate("item.helmet_scout_01.description")) == "A light hood for quick expeditions.", "English symbolic item description should load")
 	if failures == 0:
 		print("Localization tests passed.")
 	quit(1 if failures > 0 else 0)

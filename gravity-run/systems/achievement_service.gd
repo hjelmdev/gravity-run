@@ -16,7 +16,7 @@ var _toast_layer: CanvasLayer
 var _toast_card: PanelContainer
 var _toast_title: Label
 var _toast_description: Label
-var _toast_badge: Label
+var _toast_badge: Control
 var _toast_heading: Label
 var _toast_queue: Array[Dictionary] = []
 var _toast_timer: Timer
@@ -220,13 +220,12 @@ func _build_toast() -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
 	_toast_card.add_child(row)
-	_toast_badge = Label.new()
-	_toast_badge.text = "★"
-	_toast_badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_toast_badge.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_toast_badge = Control.new()
+	_toast_badge.set_script(preload("res://ui/game_icon.gd"))
+	_toast_badge.set("icon_family", "achievement_status")
+	_toast_badge.set("unlocked", true)
 	_toast_badge.custom_minimum_size = Vector2(52, 52)
-	_toast_badge.add_theme_font_size_override("font_size", 26)
-	_toast_badge.add_theme_color_override("font_color", Color("f5d45e"))
+	_toast_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(_toast_badge)
 	var text_column := VBoxContainer.new()
 	text_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL

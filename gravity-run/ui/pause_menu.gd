@@ -3,6 +3,7 @@ extends CanvasLayer
 const MAIN_MENU_SCENE := "res://ui/main_menu.tscn"
 const INVENTORY_SCREEN_SCENE := preload("res://ui/inventory_screen.tscn")
 const ActionIconScript := preload("res://ui/action_icon.gd")
+const MusicVolumeControlScript := preload("res://ui/music_volume_control.gd")
 
 var pause_button: Button
 var pause_overlay: Control
@@ -121,13 +122,20 @@ func _build_pause_overlay() -> void:
 	pause_overlay.add_child(center)
 
 	pause_panel = PanelContainer.new()
-	pause_panel.custom_minimum_size = Vector2(360.0, 450.0)
+	var pause_size := get_viewport().get_visible_rect().size
+	pause_panel.custom_minimum_size = Vector2(minf(360.0, pause_size.x - 24.0), minf(450.0, pause_size.y - 24.0))
 	pause_panel.add_theme_stylebox_override("panel", _panel_style())
 	center.add_child(pause_panel)
 
+	var pause_scroll := ScrollContainer.new()
+	pause_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pause_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	pause_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	pause_panel.add_child(pause_scroll)
 	menu_layout = VBoxContainer.new()
+	menu_layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	menu_layout.add_theme_constant_override("separation", 14)
-	pause_panel.add_child(menu_layout)
+	pause_scroll.add_child(menu_layout)
 	_show_pause_actions()
 
 func _show_pause_actions() -> void:
@@ -241,6 +249,8 @@ func _show_control_options() -> void:
 		button.custom_minimum_size = Vector2(0.0, 44.0)
 		button.pressed.connect(_select_control.bind(mode))
 		menu_layout.add_child(button)
+	var music_volume_control: Control = MusicVolumeControlScript.new()
+	menu_layout.add_child(music_volume_control)
 
 	var back_button := Button.new()
 	var language_row := HBoxContainer.new()
@@ -285,6 +295,7 @@ func _apply_pause_state() -> void:
 	if not is_inside_tree():
 		return
 	get_tree().paused = manual_pause_requested or portrait_forced_pause or is_instance_valid(_inventory_screen)
+	MusicController.set_stream_paused(get_tree().paused)
 	if is_instance_valid(pause_overlay):
 		pause_overlay.visible = manual_pause_requested and not is_instance_valid(_inventory_screen)
 	if is_instance_valid(pause_button):

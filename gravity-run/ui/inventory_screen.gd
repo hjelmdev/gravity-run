@@ -5,6 +5,8 @@ signal back_requested
 const EquipmentStatsScript := preload("res://systems/equipment_stats.gd")
 const ItemDefinitionScript := preload("res://systems/item_definition.gd")
 const SpriteFramesResource := preload("res://assets/character/run_frames.tres")
+const ItemPresentationScript := preload("res://ui/item_presentation.gd")
+const GameIconScript := preload("res://ui/game_icon.gd")
 
 var view_mode := "character"
 var equipment_locked := false
@@ -18,6 +20,7 @@ var _state: Dictionary = {}
 var _stale := false
 var _error_message := ""
 var _selected_instance_id := ""
+var _selected_empty_slot := ""
 var _selected_shop_item_id := ""
 var _action_pending := false
 
@@ -231,10 +234,35 @@ func _build_character() -> void:
 			var instance_id := str(raw_item.get("instance_id", ""))
 			var cell := Button.new()
 			cell.custom_minimum_size = Vector2(64.0, 44.0) if grid.columns == 4 else Vector2(70.0, 48.0)
-			cell.text = _slot_glyph(str(definition.get("slot_type", ""))) + "\n" + _short_item_name(definition)
-			cell.tooltip_text = _display_item_name(definition)
+			var equipped_state: Variant = _state.get("equipment", {})
+			var item_equipped := equipped_state is Dictionary and str(equipped_state.get(str(definition.get("slot_type", "")), "")) == instance_id
+			cell.tooltip_text = ItemPresentationScript.tooltip(definition, {"equipped": item_equipped})
+			cell.accessibility_name = cell.tooltip_text
 			cell.add_theme_color_override("font_color", _rarity_color(str(definition.get("rarity", "common"))))
 			cell.pressed.connect(_select_item.bind(instance_id))
+			var cell_layout := VBoxContainer.new()
+			cell_layout.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+			cell_layout.offset_left = 3.0
+			cell_layout.offset_right = -3.0
+			cell_layout.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			cell_layout.alignment = BoxContainer.ALIGNMENT_CENTER
+			cell_layout.add_theme_constant_override("separation", 1)
+			cell.add_child(cell_layout)
+			var item_icon: Control = GameIconScript.new()
+			item_icon.icon_key = str(definition.get("icon_key", "unknown"))
+			item_icon.custom_minimum_size = Vector2(22, 20)
+			item_icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			item_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			cell_layout.add_child(item_icon)
+			var item_label := Label.new()
+			item_label.text = _display_item_name(definition)
+			item_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			item_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			item_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			item_label.add_theme_font_size_override("font_size", 9)
+			item_label.add_theme_color_override("font_color", _rarity_color(str(definition.get("rarity", "common"))))
+			item_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			cell_layout.add_child(item_label)
 			grid.add_child(cell)
 			count += 1
 	for _empty_index in range(24 - count):
@@ -267,11 +295,18 @@ func _make_character_slot(slot: String, instance_id: String, owned: Dictionary) 
 	var slot_button := Button.new()
 	slot_button.custom_minimum_size = Vector2(44.0, 42.0)
 	slot_button.add_theme_font_size_override("font_size", 17)
-	slot_button.text = _slot_glyph(slot)
 	var definition: Dictionary = owned.get("definition", {})
 	var equipped_name := _display_item_name(definition) if not definition.is_empty() else tr("Empty slot")
-	slot_button.tooltip_text = "%s · %s" % [_slot_name(slot), equipped_name]
+	slot_button.tooltip_text = ItemPresentationScript.tooltip(definition, {"equipped": true}) if not definition.is_empty() else "%s · %s · %s" % [_slot_name(slot), tr("Empty slot"), tr("No item is equipped in this slot.")]
+	slot_button.accessibility_name = slot_button.tooltip_text
 	slot_button.add_theme_color_override("font_color", _rarity_color(str(definition.get("rarity", "common"))) if not definition.is_empty() else Color("8292aa"))
+	var slot_icon: Control = GameIconScript.new()
+	slot_icon.icon_key = str(definition.get("icon_key", "helmet_copper_01" if slot == "helmet" else "boots_canvas_01"))
+	slot_icon.custom_minimum_size = Vector2(30, 30)
+	slot_icon.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	slot_icon.position = Vector2(-15, -15)
+	slot_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	slot_button.add_child(slot_icon)
 	slot_button.pressed.connect(_on_character_slot_pressed.bind(slot, instance_id))
 	slot_column.add_child(slot_button)
 	var slot_label := Label.new()
@@ -291,6 +326,9 @@ func _on_character_slot_pressed(slot: String, equipped_instance_id: String) -> v
 	if _selected_instance_id.is_empty():
 		if not equipped_instance_id.is_empty():
 			_select_item(equipped_instance_id)
+		else:
+			_selected_empty_slot = slot
+			_render()
 		return
 	var selected := _find_owned_item(_selected_instance_id)
 	var definition: Dictionary = selected.get("definition", {})
@@ -362,7 +400,8 @@ func _build_shop() -> void:
 			first_shop_item = item_id
 		var tile := Button.new()
 		tile.custom_minimum_size = Vector2(95.0, 62.0)
-		tile.tooltip_text = "%s · %s" % [_display_item_name(definition), _rarity_name(str(definition.get("rarity", "common")))]
+		tile.tooltip_text = ItemPresentationScript.tooltip(definition, {"owned": owned.has(item_id)})
+		tile.accessibility_name = tile.tooltip_text
 		var item_color := Color("78869b") if owned.has(item_id) else _rarity_color(str(definition.get("rarity", "common")))
 		var tile_content := VBoxContainer.new()
 		tile_content.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -372,12 +411,11 @@ func _build_shop() -> void:
 		tile_content.add_theme_constant_override("separation", 1)
 		tile_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		tile.add_child(tile_content)
-		var glyph := Label.new()
-		glyph.text = _slot_glyph(str(definition.get("slot_type", "")))
-		glyph.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		glyph.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		glyph.add_theme_font_size_override("font_size", 13)
-		glyph.add_theme_color_override("font_color", item_color)
+		var glyph: Control = GameIconScript.new()
+		glyph.icon_key = str(definition.get("icon_key", "unknown"))
+		glyph.custom_minimum_size = Vector2(26, 26)
+		glyph.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		tile_content.add_child(glyph)
 		var item_name := Label.new()
 		item_name.text = _display_item_name(definition)
@@ -385,6 +423,7 @@ func _build_shop() -> void:
 		item_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		item_name.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		item_name.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		item_name.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		item_name.add_theme_font_size_override("font_size", 9)
 		item_name.add_theme_color_override("font_color", item_color)
 		tile_content.add_child(item_name)
@@ -416,7 +455,7 @@ func _build_shop() -> void:
 
 func _build_shop_detail(definition: Dictionary, owned: Dictionary) -> Control:
 	var card := _card()
-	card.custom_minimum_size.y = 70.0
+	card.custom_minimum_size.y = 96.0
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 2)
 	card.add_child(column)
@@ -428,19 +467,14 @@ func _build_shop_detail(definition: Dictionary, owned: Dictionary) -> Control:
 	if definition.is_empty():
 		detail.text = ""
 	else:
-		detail.text = "%s · %s · %d %s" % [_slot_name(str(definition.get("slot_type", ""))), _rarity_name(str(definition.get("rarity", "common"))), int(definition.get("shop_price", 0)), tr("coins")]
-		var modifiers: Variant = definition.get("stat_modifiers", {})
-		if modifiers is Dictionary:
-			for stat in modifiers:
-				detail.text += " · %s %s" % [tr("Run speed") if str(stat) == "run_speed_percent" else tr("Flip cooldown"), _format_modifier_bps(int(modifiers[stat]))]
-		var description := _display_item_description(definition)
-		if not description.is_empty():
-			detail.text += "\n" + description
+		detail.text = "%s · %s · %d %s\n%s" % [_slot_name(str(definition.get("slot_type", ""))), _rarity_name(str(definition.get("rarity", "common"))), int(definition.get("shop_price", 0)), tr("coins"), _display_item_description(definition)]
 		if owned.has(_selected_shop_item_id):
 			detail.text += " · " + tr("Owned")
 	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	detail.add_theme_font_size_override("font_size", 11)
 	column.add_child(detail)
+	if not definition.is_empty():
+		_add_effect_labels(column, definition)
 	return card
 
 func _select_shop_item(item_id: String) -> void:
@@ -449,30 +483,53 @@ func _select_shop_item(item_id: String) -> void:
 
 func _build_selected_detail() -> Control:
 	var card := _card()
-	card.custom_minimum_size.y = 64.0
+	card.custom_minimum_size.y = 94.0
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 2)
 	card.add_child(column)
 	var item := _find_owned_item(_selected_instance_id)
 	var label := Label.new()
-	label.text = _display_item_name(item.get("definition", {})) if not item.is_empty() else tr("Select an item to see its details.")
+	label.text = _display_item_name(item.get("definition", {})) if not item.is_empty() else ("%s · %s" % [_slot_name(_selected_empty_slot), tr("Empty slot")] if not _selected_empty_slot.is_empty() else tr("Select an item to see its details."))
 	label.add_theme_color_override("font_color", Color("edf3ff"))
 	column.add_child(label)
 	var description := Label.new()
 	if not item.is_empty():
 		var definition: Dictionary = item.get("definition", {})
-		description.text = _display_item_description(definition)
-		var modifiers: Variant = definition.get("stat_modifiers", {})
-		if modifiers is Dictionary and modifiers.is_empty():
-			description.text += " · " + tr("No stat bonuses")
+		var equipment: Variant = _state.get("equipment", {})
+		var slot := str(definition.get("slot_type", ""))
+		var item_instance: Dictionary = item.get("instance", {})
+		var is_equipped := equipment is Dictionary and str(equipment.get(slot, "")) == str(item_instance.get("instance_id", ""))
+		var equipped_text := " · " + tr("Equipped") if is_equipped else ""
+		description.text = "%s · %s%s\n%s" % [_slot_name(slot), _rarity_name(str(definition.get("rarity", "common"))), equipped_text, _display_item_description(definition)]
 	else:
-		description.text = tr("Items change gameplay only when a supported stat bonus is listed.")
+		description.text = tr("No item is equipped in this slot.") if not _selected_empty_slot.is_empty() else tr("Items change gameplay only when a supported stat bonus is listed.")
+	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	description.add_theme_font_size_override("font_size", 11)
 	column.add_child(description)
+	if not item.is_empty():
+		_add_effect_labels(column, item.get("definition", {}))
 	return card
+
+func _add_effect_labels(parent: Control, definition: Dictionary) -> void:
+	var effects := ItemPresentationScript.effects(definition)
+	if effects.is_empty():
+		var neutral := Label.new()
+		neutral.text = tr("No stat bonuses")
+		neutral.add_theme_font_size_override("font_size", 10)
+		neutral.add_theme_color_override("font_color", Color("b8c7dc"))
+		parent.add_child(neutral)
+		return
+	for effect in effects:
+		var effect_label := Label.new()
+		effect_label.text = str(effect.text)
+		effect_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		effect_label.add_theme_font_size_override("font_size", 10)
+		effect_label.add_theme_color_override("font_color", Color("64d879") if bool(effect.beneficial) else Color("ff7b72"))
+		parent.add_child(effect_label)
 
 func _select_item(instance_id: String) -> void:
 	_selected_instance_id = instance_id
+	_selected_empty_slot = ""
 	_render()
 
 func _purchase(item_id: String) -> void:
@@ -560,25 +617,10 @@ func _resolve_equipment() -> Dictionary:
 func _display_item_name(definition: Dictionary) -> String:
 	if definition.is_empty():
 		return tr("Nothing equipped")
-	var key := str(definition.get("name_key", ""))
-	var translated := tr(key)
-	if not key.is_empty() and translated != key:
-		return translated
-	return str(definition.get("item_id", "item")).replace("_", " ").capitalize()
+	return ItemPresentationScript.item_name(definition)
 
 func _display_item_description(definition: Dictionary) -> String:
-	var key := str(definition.get("description_key", ""))
-	if key.is_empty():
-		return ""
-	var translated := tr(key)
-	return str(definition.get("item_id", "" )).replace("_", " ") if translated == key else translated
-
-func _short_item_name(definition: Dictionary) -> String:
-	var name := _display_item_name(definition)
-	return name.substr(0, 8) if name.length() > 8 else name
-
-func _slot_glyph(slot: String) -> String:
-	return "◈" if slot == "helmet" else "▣"
+	return ItemPresentationScript.item_description(definition)
 
 func _slot_name(slot: String) -> String:
 	return tr("Helmet") if slot == "helmet" else tr("Boots")
