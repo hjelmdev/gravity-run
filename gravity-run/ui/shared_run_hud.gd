@@ -107,6 +107,10 @@ func set_music_right_offset(value: float) -> void:
 	if is_instance_valid(_music):
 		_music.call("set_right_offset", value)
 
+func set_music_toolbar_top(value: float, height: float = 42.0) -> void:
+	if is_instance_valid(_music):
+		_music.call("set_toolbar_top_offset", value + maxf((height - 40.0) * 0.5, 0.0))
+
 func _sync_player(_arg1: Variant = null, _arg2: Variant = null) -> void:
 	if not is_instance_valid(_player):
 		return

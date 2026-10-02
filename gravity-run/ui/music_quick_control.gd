@@ -5,6 +5,7 @@ const ActionIconScript := preload("res://ui/action_icon.gd")
 const ChevronIconScript := preload("res://ui/chevron_icon.gd")
 
 @export var right_offset := -156.0
+@export var top_offset := 6.0
 
 var _button: Button
 var _expand_button: Button
@@ -47,10 +48,6 @@ func _build_ui() -> void:
 	_button.focus_mode = Control.FOCUS_ALL
 	_button.custom_minimum_size = Vector2(44.0, 40.0)
 	_button.pressed.connect(_toggle_music)
-	_button.mouse_entered.connect(_on_control_mouse_entered)
-	_button.mouse_exited.connect(_on_control_mouse_exited)
-	_button.focus_entered.connect(_on_control_focus_entered)
-	_button.focus_exited.connect(_on_control_focus_exited)
 	add_child(_button)
 	_speaker_icon = Control.new()
 	_speaker_icon.name = "SpeakerIcon"
@@ -68,9 +65,9 @@ func _build_ui() -> void:
 	_expand_button.focus_mode = Control.FOCUS_ALL
 	_expand_button.custom_minimum_size = Vector2(30.0, 40.0)
 	_expand_button.pressed.connect(_toggle_slider_panel)
-	_expand_button.mouse_entered.connect(_on_control_mouse_entered)
+	_expand_button.mouse_entered.connect(_on_expand_mouse_entered)
 	_expand_button.mouse_exited.connect(_on_control_mouse_exited)
-	_expand_button.focus_entered.connect(_on_control_focus_entered)
+	_expand_button.focus_entered.connect(_on_expand_focus_entered)
 	_expand_button.focus_exited.connect(_on_control_focus_exited)
 	add_child(_expand_button)
 	var chevron := Control.new()
@@ -85,7 +82,7 @@ func _build_ui() -> void:
 	_panel.visible = false
 	_panel.custom_minimum_size = Vector2(230.0, 72.0)
 	_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	_panel.mouse_entered.connect(_on_control_mouse_entered)
+	_panel.mouse_entered.connect(_on_volume_panel_mouse_entered)
 	_panel.mouse_exited.connect(_on_control_mouse_exited)
 	add_child(_panel)
 	var column := VBoxContainer.new()
@@ -117,7 +114,7 @@ func _build_ui() -> void:
 		if is_instance_valid(_profile):
 			_profile.call("flush_settings")
 	)
-	_slider.focus_entered.connect(_on_control_focus_entered)
+	_slider.focus_entered.connect(_on_volume_panel_mouse_entered)
 	_slider.focus_exited.connect(_on_control_focus_exited)
 	column.add_child(_slider)
 
@@ -128,21 +125,26 @@ func _layout() -> void:
 	_button.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	_button.offset_left = right_offset + 4.0
 	_button.offset_right = right_offset + 48.0
-	_button.offset_top = 6.0
-	_button.offset_bottom = 46.0
+	_button.offset_top = top_offset
+	_button.offset_bottom = top_offset + 40.0
 	_expand_button.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	_expand_button.offset_left = right_offset - 30.0
 	_expand_button.offset_right = right_offset + 2.0
-	_expand_button.offset_top = 6.0
-	_expand_button.offset_bottom = 46.0
+	_expand_button.offset_top = top_offset
+	_expand_button.offset_bottom = top_offset + 40.0
 	_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	_panel.offset_left = right_offset - 226.0
 	_panel.offset_right = right_offset + 4.0
-	_panel.offset_top = 50.0
-	_panel.offset_bottom = 126.0
+	_panel.offset_top = top_offset + 44.0
+	_panel.offset_bottom = top_offset + 120.0
 
 func set_right_offset(value: float) -> void:
 	right_offset = value
+	if is_instance_valid(_button):
+		_layout()
+
+func set_toolbar_top_offset(value: float) -> void:
+	top_offset = value
 	if is_instance_valid(_button):
 		_layout()
 
@@ -178,15 +180,18 @@ func _sync_volume(value: float) -> void:
 	if is_instance_valid(_value_label):
 		_value_label.text = "%d%%" % roundi(value * 100.0)
 
-func _on_control_mouse_entered() -> void:
+func _on_expand_mouse_entered() -> void:
 	_close_timer.stop()
 	if not DisplayServer.is_touchscreen_available():
 		_panel.visible = true
 
+func _on_volume_panel_mouse_entered() -> void:
+	_close_timer.stop()
+
 func _on_control_mouse_exited() -> void:
 	_schedule_close()
 
-func _on_control_focus_entered() -> void:
+func _on_expand_focus_entered() -> void:
 	_close_timer.stop()
 	_panel.visible = true
 

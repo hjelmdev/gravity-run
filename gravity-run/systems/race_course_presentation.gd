@@ -20,6 +20,7 @@ const RockWarningPulseScript := preload("res://systems/rock_warning_pulse.gd")
 var manifest: Resource
 var event_nodes: Dictionary = {}
 var _confirmed_coin_bursts: Dictionary = {}
+var _coin_visual_predictions: Dictionary = {}
 var terrain_events: Array[Dictionary] = []
 var gap_events: Array[Dictionary] = []
 var _render_ceiling_gaps: Array[Dictionary] = []
@@ -266,16 +267,49 @@ func set_world_state(world_state: Dictionary) -> void:
 			else:
 				apply_destroyed_entity(str(entity_id))
 
-func play_confirmed_coin_collection(entity_id: String, commit_id: String = "") -> bool:
+func play_confirmed_coin_collection(entity_id: String, commit_id: String = "", request_id: String = "", round_id: String = "", incarnation: int = -1) -> bool:
 	if entity_id.is_empty() or _confirmed_coin_bursts.has(entity_id):
 		return false
 	var coin: Variant = event_nodes.get(entity_id)
 	if not is_instance_valid(coin) or not coin.has_method("animate_collection"):
 		return false
-	coin.visible = true
-	if not bool(coin.call("animate_collection")):
+	if _coin_visual_predictions.has(entity_id):
+		var prediction: Dictionary = _coin_visual_predictions[entity_id]
+		if (not round_id.is_empty() and str(prediction.get("round_id", "")) != round_id) or (incarnation >= 0 and int(prediction.get("incarnation", -1)) != incarnation):
+			return false
+		coin.visible = true
+		coin.call("confirm_visual_prediction")
+		_coin_visual_predictions.erase(entity_id)
+	else:
+		coin.visible = true
+		if not bool(coin.call("animate_collection")):
+			return false
+	_confirmed_coin_bursts[entity_id] = {"commit_id": commit_id, "request_id": request_id, "round_id": round_id, "incarnation": incarnation}
+	return true
+
+func predict_coin_collection(entity_id: String, incarnation: int, round_id: String, request_id: String) -> bool:
+	if entity_id.is_empty() or request_id.is_empty() or _coin_visual_predictions.has(entity_id) or _confirmed_coin_bursts.has(entity_id):
 		return false
-	_confirmed_coin_bursts[entity_id] = commit_id
+	var coin: Variant = event_nodes.get(entity_id)
+	if not is_instance_valid(coin) or not coin.has_method("begin_visual_prediction"):
+		return false
+	if not bool(coin.call("begin_visual_prediction", request_id)):
+		return false
+	_coin_visual_predictions[entity_id] = {"incarnation": incarnation, "round_id": round_id, "request_id": request_id}
+	return true
+
+func resolve_coin_visual_prediction(entity_id: String, incarnation: int, round_id: String, request_id: String, still_active: bool) -> bool:
+	var prediction: Dictionary = _coin_visual_predictions.get(entity_id, {})
+	if prediction.is_empty() or int(prediction.get("incarnation", -1)) != incarnation or str(prediction.get("round_id", "")) != round_id or str(prediction.get("request_id", "")) != request_id:
+		return false
+	var coin: Variant = event_nodes.get(entity_id)
+	_coin_visual_predictions.erase(entity_id)
+	if not is_instance_valid(coin):
+		return false
+	if still_active:
+		return bool(coin.call("reject_visual_prediction", request_id))
+	coin.call("confirm_visual_prediction")
+	_confirmed_coin_bursts[entity_id] = {"commit_id": "resolved_elsewhere", "request_id": request_id, "round_id": round_id, "incarnation": incarnation}
 	return true
 
 func apply_destroyed_entity(entity_id: String) -> void:
@@ -300,6 +334,7 @@ func reset() -> void:
 		child.queue_free()
 	event_nodes.clear()
 	_confirmed_coin_bursts.clear()
+	_coin_visual_predictions.clear()
 	terrain_events.clear()
 	gap_events.clear()
 	_render_ceiling_gaps.clear()

@@ -32,6 +32,10 @@ func _run() -> void:
 	mp_hud.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	mp_hud.size = get_viewport().get_visible_rect().size
 	mp_hud.call("set_show_distance", false)
+	var landscape_layout: Dictionary = MpHudLayout.for_viewport(mp_hud.size)
+	var landscape_music_rect: Rect2 = landscape_layout.music_button
+	mp_hud.call("set_music_right_offset", landscape_music_rect.position.x - mp_hud.size.x)
+	mp_hud.call("set_music_toolbar_top", landscape_music_rect.position.y, landscape_music_rect.size.y)
 	mp_hud.call("set_coins", 8)
 	await get_tree().process_frame
 	var mp_coin: Control = mp_hud.get_node("CoinIcon")
@@ -41,11 +45,15 @@ func _run() -> void:
 	var mp_distance: Control = mp_hud.get_node("Distance")
 	var mp_menu_button := Button.new()
 	add_child(mp_menu_button)
+	var landscape_menu_rect: Rect2 = landscape_layout.button
+	mp_menu_button.position = landscape_menu_rect.position
+	mp_menu_button.size = landscape_menu_rect.size
 	if mp_distance.visible: failures.append("MP capability exposed distance")
 	if mp_coin.get_global_rect() != sp_coin.get_global_rect(): failures.append("SP and MP shared coin icon layouts differ")
 	if mp_speaker.get_global_rect().size != sp_speaker.get_global_rect().size or mp_expand.get_global_rect().size != sp_expand.get_global_rect().size: failures.append("SP and MP shared music control sizes differ")
 	var viewport_size := get_viewport().get_visible_rect().size
 	if not Rect2(Vector2.ZERO, viewport_size).encloses(mp_speaker.get_global_rect()) or not Rect2(Vector2.ZERO, viewport_size).encloses(mp_expand.get_global_rect()): failures.append("MP shared music controls are outside the actual viewport")
+	if not is_equal_approx(mp_speaker.get_global_rect().get_center().y, landscape_menu_rect.get_center().y) or not is_equal_approx(mp_expand.get_global_rect().get_center().y, landscape_menu_rect.get_center().y): failures.append("MP menu/speaker/expander centers differ in landscape: menu=%s speaker=%s arrow=%s" % [str(landscape_menu_rect), str(mp_speaker.get_global_rect()), str(mp_expand.get_global_rect())])
 	var count: Label = mp_hud.get_node("CoinCount")
 	if count.text != "08": failures.append("shared coin counter did not render its mode-neutral count")
 	get_viewport().size = Vector2(540, 960)
@@ -57,6 +65,7 @@ func _run() -> void:
 	var mp_menu_rect: Rect2 = mp_layout.button
 	var mp_music_rect: Rect2 = mp_layout.music_button
 	mp_hud.call("set_music_right_offset", mp_music_rect.position.x - viewport_size.x)
+	mp_hud.call("set_music_toolbar_top", mp_music_rect.position.y, mp_music_rect.size.y)
 	mp_menu_button.position = mp_menu_rect.position
 	mp_menu_button.size = mp_menu_rect.size
 	await get_tree().process_frame
@@ -68,6 +77,7 @@ func _run() -> void:
 			failures.append("SP top-right controls overlap after portrait resize")
 	if mp_speaker.get_global_rect().intersects(mp_menu_button.get_global_rect()) or mp_expand.get_global_rect().intersects(mp_menu_button.get_global_rect()):
 		failures.append("MP shared audio controls overlap the actual menu allocation: speaker=%s expand=%s menu=%s offset=%s" % [str(mp_speaker.get_global_rect()), str(mp_expand.get_global_rect()), str(mp_menu_button.get_global_rect()), str(mp_music.get("right_offset"))])
+	if not is_equal_approx(mp_speaker.get_global_rect().get_center().y, mp_menu_rect.get_center().y) or not is_equal_approx(mp_expand.get_global_rect().get_center().y, mp_menu_rect.get_center().y): failures.append("MP menu/speaker/expander centers differ in portrait: menu=%s speaker=%s arrow=%s" % [str(mp_menu_rect), str(mp_speaker.get_global_rect()), str(mp_expand.get_global_rect())])
 	var mp_status_rect: Rect2 = mp_layout.status
 	if mp_speaker.get_global_rect().intersects(mp_status_rect) or mp_expand.get_global_rect().intersects(mp_status_rect):
 		failures.append("MP shared audio controls overlap the status allocation")

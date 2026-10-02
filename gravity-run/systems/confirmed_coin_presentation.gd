@@ -11,4 +11,4 @@ func present(commit: Dictionary, apply_result: String, course_presentation: Node
 	var commit_id := str(commit.get("commit_id", ""))
 	if entity_id.is_empty() or commit_id.is_empty() or not is_instance_valid(course_presentation):
 		return false
-	return bool(course_presentation.call("play_confirmed_coin_collection", entity_id, commit_id))
+	return bool(course_presentation.call("play_confirmed_coin_collection", entity_id, commit_id, str(commit.get("request_id", "")), str(commit.get("round_id", "")), int(commit.get("incarnation", -1))))

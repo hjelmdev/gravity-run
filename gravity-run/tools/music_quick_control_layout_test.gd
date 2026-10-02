@@ -34,6 +34,7 @@ func _run() -> void:
 		var mp_layout: Dictionary = HudLayout.for_viewport(viewport_size)
 		var mp_music_rect: Rect2 = mp_layout.music_button
 		music_control.call("set_right_offset", mp_music_rect.position.x - viewport_size.x)
+		music_control.call("set_toolbar_top_offset", mp_music_rect.position.y + (mp_music_rect.size.y - 40.0) * 0.5)
 		music_control.call("_layout")
 		await process_frame
 		var speaker: Control = music_control.get("_button")
@@ -41,11 +42,13 @@ func _run() -> void:
 		var panel: Control = music_control.get("_panel")
 		var mp_status: Rect2 = mp_layout.status
 		var mp_music_group: Rect2 = expander.get_global_rect().merge(speaker.get_global_rect())
+		var mp_menu_rect: Rect2 = mp_layout.button
 		_check(_inside(speaker.get_global_rect(), viewport_size), "speaker button fits %s HUD" % _orientation(viewport_size))
 		_check(_inside(expander.get_global_rect(), viewport_size), "touch slider expander fits %s HUD" % _orientation(viewport_size))
 		_check(speaker.size.x >= 40.0 and speaker.size.y >= 40.0, "speaker remains a visible touch target in %s HUD" % _orientation(viewport_size))
 		_check(expander.size.x >= 28.0 and expander.size.y >= 40.0, "separate touch volume control remains usable in %s HUD" % _orientation(viewport_size))
 		_check(not mp_status.intersects(mp_music_group), "MP prepare/status text does not overlap speaker or expander in %s HUD" % _orientation(viewport_size))
+		_check(is_equal_approx(speaker.get_global_rect().get_center().y, mp_menu_rect.get_center().y) and is_equal_approx(expander.get_global_rect().get_center().y, mp_menu_rect.get_center().y), "MP menu, speaker, and slider expander share one toolbar centerline in %s HUD" % _orientation(viewport_size))
 		music_control.call("_layout")
 		_check(_inside(panel.get_global_rect(), viewport_size), "volume popover fits %s HUD" % _orientation(viewport_size))
 		music_control.call("set_right_offset", -196.0)
@@ -63,25 +66,33 @@ func _run() -> void:
 	button.pressed.emit()
 	_check(bool(profile.get("music_enabled")) == toggled_to, "speaker click toggles the real music_enabled setting")
 	_check(is_equal_approx(float(profile.get("music_volume")), original_volume), "speaker mute toggle preserves saved volume")
-	music_control.call("_on_control_mouse_entered")
-	_check(panel.visible, "desktop hover opens volume popover")
+	panel.visible = false
+	button.mouse_entered.emit()
+	_check(not panel.visible, "speaker hover only shows its mute tooltip and never opens the volume popover")
+	button.grab_focus()
+	_check(not panel.visible, "keyboard focus on speaker does not open the volume popover")
+	button.release_focus()
+	music_control.call("_on_expand_mouse_entered")
+	_check(panel.visible, "slider arrow hover opens the volume popover")
 	music_control.call("_on_control_mouse_exited")
-	music_control.call("_on_control_mouse_entered")
+	music_control.call("_on_volume_panel_mouse_entered")
 	await create_timer(0.22).timeout
-	_check(panel.visible, "moving from speaker toward the popover keeps it open")
+	_check(panel.visible, "moving from slider arrow into its popover keeps it open")
 	var enabled_before_slider := bool(profile.get("music_enabled"))
 	var next_volume := 33.0 if original_volume > 0.33 else 67.0
 	slider.value = next_volume
 	_check(bool(profile.get("music_enabled")) == enabled_before_slider, "volume slider does not toggle mute")
 	_check(is_equal_approx(float(profile.get("music_volume")), next_volume / 100.0), "volume slider updates the real profile volume")
-	panel.visible = false
+	music_control.call("_on_control_mouse_exited")
+	await create_timer(0.22).timeout
+	_check(not panel.visible, "popover closes after the pointer leaves the shared arrow/panel area")
 	expander_button.pressed.emit()
 	_check(panel.visible, "separate expansion button opens touch volume controls")
 	expander_button.pressed.emit()
 	_check(not panel.visible, "touch expansion control closes the volume popover")
-	button.grab_focus()
-	_check(panel.visible, "keyboard focus on speaker opens volume controls")
-	button.release_focus()
+	expander_button.grab_focus()
+	_check(panel.visible, "keyboard focus on slider arrow opens volume controls")
+	expander_button.release_focus()
 	# Restore profile state before leaving the fixture.
 	profile.call("set_music_enabled", original_enabled)
 	profile.call("set_music_volume", original_volume)

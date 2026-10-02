@@ -11,6 +11,9 @@ var burst_elapsed := 0.0
 var coin_face_scale_y := 1.0
 var coin_alpha := 1.0
 var sparks: Array[Dictionary] = []
+var _visual_prediction_request_id := ""
+var _visual_prediction_pending := false
+var _prediction_origin := Vector2.ZERO
 
 func get_hitbox_rect() -> Rect2:
 	return Rect2(global_position - COIN_SIZE * 0.5, COIN_SIZE)
@@ -38,6 +41,43 @@ func animate_collection() -> bool:
 	set_process(true)
 	return true
 
+func begin_visual_prediction(request_id: String) -> bool:
+	if request_id.is_empty() or _visual_prediction_pending or is_being_collected:
+		return false
+	_prediction_origin = position
+	_visual_prediction_request_id = request_id
+	_visual_prediction_pending = true
+	return animate_collection()
+
+func confirm_visual_prediction(request_id: String = "") -> bool:
+	if not _visual_prediction_pending:
+		return false
+	if not request_id.is_empty() and request_id != _visual_prediction_request_id:
+		return false
+	_visual_prediction_pending = false
+	_visual_prediction_request_id = ""
+	if burst_elapsed >= BURST_DURATION and sparks.is_empty():
+		queue_free()
+	else:
+		set_process(true)
+	return true
+
+func reject_visual_prediction(request_id: String) -> bool:
+	if not _visual_prediction_pending or request_id != _visual_prediction_request_id:
+		return false
+	_visual_prediction_pending = false
+	_visual_prediction_request_id = ""
+	is_being_collected = false
+	burst_elapsed = 0.0
+	coin_face_scale_y = 1.0
+	coin_alpha = 1.0
+	sparks.clear()
+	position = _prediction_origin
+	visible = true
+	set_process(false)
+	queue_redraw()
+	return true
+
 func _process(delta: float) -> void:
 	if not is_being_collected:
 		return
@@ -54,7 +94,11 @@ func _process(delta: float) -> void:
 	position.y -= 95.0 * delta
 	queue_redraw()
 	if burst_elapsed >= BURST_DURATION and sparks.is_empty():
-		queue_free()
+		if _visual_prediction_pending:
+			visible = false
+			set_process(false)
+		else:
+			queue_free()
 
 func _draw() -> void:
 	for spark in sparks:

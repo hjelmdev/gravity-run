@@ -308,6 +308,7 @@ func _layout_hud() -> void:
 	_debug_toggle.position = button_rect.position
 	_debug_toggle.size = button_rect.size
 	_shared_run_hud.call("set_music_right_offset", music_rect.position.x - size.x)
+	_shared_run_hud.call("set_music_toolbar_top", music_rect.position.y, music_rect.size.y)
 	_status_label.position = status_rect.position
 	_status_label.size = status_rect.size
 	_debug_panel.position = panel_rect.position
@@ -618,7 +619,13 @@ func _submit_coin_claims(previous_state: Dictionary, proposed_state: Dictionary,
 		if entity_id.is_empty() or _pending_coin_claims.has(entity_id):
 			continue
 		var request_id := Crypto.new().generate_random_bytes(16).hex_encode()
-		_pending_coin_claims[entity_id] = request_id
+		var incarnation := int(contact.get("incarnation", 1))
+		var contact_usec := Time.get_ticks_usec()
+		var predicted: bool = bool(_course_presentation.predict_coin_collection(entity_id, incarnation, _round_id, request_id))
+		var contact_tick := float(_runner.simulation_tick - 1) + float(contact.get("fraction", 0.0))
+		_pending_coin_claims[entity_id] = {"request_id": request_id, "incarnation": incarnation, "round_id": _round_id, "contact_usec": contact_usec, "contact_tick": contact_tick, "predicted": predicted}
+		if predicted:
+			MultiplayerV2Service.diagnostics.record_event("coin_visual_prediction", {"round_id": _round_id, "entity_id": entity_id, "incarnation": incarnation, "contact_to_visual_usec": maxi(Time.get_ticks_usec() - contact_usec, 0), "contact_tick": contact_tick})
 		MultiplayerV2Service.submit_local_world_interaction({"round_id": _round_id, "owner_peer_id": int(MultiplayerV2Service.session.get("local_peer_id", 1)), "request_id": request_id, "entity_id": entity_id, "incarnation": int(contact.get("incarnation", 1)), "action": "collect", "simulation_tick": _runner.simulation_tick, "input_seq": _runner.input_sequence, "known_world_revision": _world.entity_ledger.revision})
 
 func _request_shared_barrel(contact: Dictionary) -> void:
@@ -685,8 +692,13 @@ func _on_world_commit(commit: Dictionary) -> void:
 	var commit_result := str(_world.apply_world_commit(commit))
 	var applied := commit_result == "applied"
 	if str(commit.get("action", "")) == "collect":
-		_pending_coin_claims.erase(str(commit.get("entity_id", "")))
+		var entity_id := str(commit.get("entity_id", ""))
+		var pending_claim: Dictionary = _pending_coin_claims.get(entity_id, {})
+		_pending_coin_claims.erase(entity_id)
 		_coin_commit_presentation.present(commit, commit_result, _course_presentation)
+		if not pending_claim.is_empty():
+			var confirmation_usec := maxi(Time.get_ticks_usec() - int(pending_claim.get("contact_usec", Time.get_ticks_usec())), 0)
+			MultiplayerV2Service.diagnostics.record_event("coin_visual_confirmation", {"round_id": _round_id, "entity_id": entity_id, "incarnation": int(pending_claim.get("incarnation", -1)), "contact_to_confirm_usec": confirmation_usec, "commit_result": commit_result})
 	MultiplayerV2Service.diagnostics.record_event("world_commit_presented", {"commit_id": str(commit.get("commit_id", "")), "result": applied, "revision": int(commit.get("world_revision", 0))})
 	var transition: Dictionary = commit.get("linked_player_transition", {})
 	if not transition.is_empty() and int(transition.get("owner_peer_id", -1)) == int(MultiplayerV2Service.session.get("local_peer_id", 1)):
@@ -730,11 +742,18 @@ func _late_rock_route_remains_safe(event: Dictionary, activation_tick: int) -> b
 
 func _on_interaction_resolved(request_id: String, accepted: bool, reason: String, commit: Dictionary) -> void:
 	for entity_id in _pending_coin_claims:
-		if str(_pending_coin_claims[entity_id]) == request_id:
+		var pending_claim: Dictionary = _pending_coin_claims[entity_id]
+		if str(pending_claim.get("request_id", "")) == request_id:
 			_pending_coin_claims.erase(entity_id)
 			if not commit.is_empty():
 				var commit_result := str(_world.apply_world_commit(commit))
 				_coin_commit_presentation.present(commit, commit_result, _course_presentation)
+			elif not accepted and bool(pending_claim.get("predicted", false)):
+				var incarnation := int(pending_claim.get("incarnation", -1))
+				var still_active: bool = bool(_world.entity_ledger.is_active(str(entity_id), incarnation))
+				var should_restore := still_active and reason not in ["coin_claim_lost", "already_collected"]
+				_course_presentation.resolve_coin_visual_prediction(str(entity_id), incarnation, str(pending_claim.get("round_id", "")), request_id, should_restore)
+				MultiplayerV2Service.diagnostics.record_event("coin_visual_prediction_resolved", {"round_id": str(pending_claim.get("round_id", "")), "entity_id": str(entity_id), "reason": reason, "ledger_still_active": still_active, "restored_active_coin": should_restore, "contact_to_resolution_usec": maxi(Time.get_ticks_usec() - int(pending_claim.get("contact_usec", Time.get_ticks_usec())), 0)})
 			if not accepted and reason not in ["coin_claim_lost", "already_collected"]:
 				MultiplayerV2Service.diagnostics.record_event("coin_claim_retryable", {"entity_id": str(entity_id), "reason": reason})
 			return
