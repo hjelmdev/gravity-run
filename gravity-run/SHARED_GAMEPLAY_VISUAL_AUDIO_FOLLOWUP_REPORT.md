@@ -26,4 +26,14 @@ The migration and build-version correction are source commit `4d71fb8737a0d992b7
 
 No live room was created from an authenticated game client in this run because no user JWT/session was available to this agent. The rollback SQL test ran the create and coin-registration RPCs as the local `authenticated` role with the Supabase auth shim; this validates gates and grants but does not substitute for an actual GoTrue/PostgREST client attempt. The user should now retry Create multiplayer room against the published build.
 
+## Central warning and buried-rock visibility follow-up
+
+The warning now presents a brief, soft three-pulse vector triangle near the center-top of the HUD when each rock enters its warning phase. The shared multiplayer presentation and ordinary single-player scene use the same bounded pulse/dedup helper. Event identities are remembered for the round, simultaneous warnings coalesce, repeated snapshots do not restart an alert, and round reset clears deduplication. The existing offscreen direction marker remains available. Visible `ROCK DROP`/`Sten faller` copy was removed; the invisible accessible control retains its translated name and tooltip.
+
+Buried rocks now receive a shallow ground-colored overlay across their bottom eight pixels, with the surface edge and side cracks drawn over the stone; the existing one-time decorative impact chips remain independent and collision-free. This only changes rendering. The v8 permanent hitbox and generator/version contract are unchanged, so no backend migration is required for this follow-up.
+
+Targeted Godot 4.7.2 checks passed: `rock_warning_pulse_test.gd` (dedupe, coalescing, duration/reset and both viewport orientations), `rock_warning_symbol_test.gd` (shared presentation/accessibility), `falling_rock_burial_occlusion_test.gd` (overlay bounds and unchanged model hitbox), `falling_rock_impact_effect_test.gd`, `singleplayer_rock_v8_runtime_test.gd` on `GR8-100000000` (central alert observed during the actual warning phase), and `multiplayer_v2/shared_rock_v8_tick_parity_test.gd` (same authoritative rock lifecycle and permanent collision geometry on both peers). Headless Godot also printed local log-directory and Windows certificate-store warnings; the targeted tests themselves exited successfully.
+
+The visual follow-up has not yet been exported or published. Its release commit, Pages workflow, live bundle checks, and final hashes will be recorded here after publication.
+
 The public test root is [https://hjelmdev.github.io/gravity-run/](https://hjelmdev.github.io/gravity-run/). Suggested focused manual check: pause/resume music mid-track and verify OFF stays silent; start challenge `GR8-100000000` and inspect the warning, later fall, impact cracks/chips, and permanent buried rock. A two-client authenticated room is still needed to verify the complete live account/start flow.

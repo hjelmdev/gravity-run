@@ -4,6 +4,8 @@ class_name FallingRock
 const Model := preload("res://systems/falling_rock_model.gd")
 const WarningIcon := preload("res://systems/rock_warning_icon.gd")
 const ImpactDebris := preload("res://hazards/rock_impact_debris.gd")
+const GroundRenderer := preload("res://systems/course_surface_renderer.gd")
+const VISUAL_GROUND_OCCLUSION_DEPTH := 8.0
 var event: Dictionary = {}
 var simulation_tick := 0
 var activation_tick := -1
@@ -77,6 +79,10 @@ func swept_contact_fraction(previous_rect: Rect2, current_rect: Rect2, start_tic
 func is_destroying_now() -> bool:
 	return false
 
+static func buried_ground_occlusion_mask(surface_local_y: float, rock_width: float, depth: float = VISUAL_GROUND_OCCLUSION_DEPTH) -> Rect2:
+	var mask_depth := maxf(depth, 0.0)
+	return Rect2(Vector2(-rock_width * 0.68, surface_local_y - mask_depth), Vector2(rock_width * 1.36, mask_depth + 5.0))
+
 func _spawn_impact_debris_once() -> void:
 	if _impact_debris_spawned or not is_inside_tree():
 		return
@@ -107,10 +113,17 @@ func _draw() -> void:
 		else:
 			var floor_y := float(event.get("floor_y", 460.0))
 			var surface_y := floor_y - position.y
-			draw_line(Vector2(-width * 0.52, surface_y), Vector2(width * 0.52, surface_y), Color("c79466"), 2.0)
+			# The visible ground is drawn after the stone so its surface clearly
+			# occludes the lower polygon. This is presentation-only; the model hitbox
+			# remains the full permanent buried rectangle.
+			draw_rect(buried_ground_occlusion_mask(surface_y, width), GroundRenderer.FILL_COLOR)
+			var edge_color := GroundRenderer.EDGE_COLOR
+			edge_color.a = 0.82
+			draw_line(Vector2(-width * 0.76, surface_y), Vector2(-width * 0.68, surface_y), edge_color, 2.0, true)
+			draw_line(Vector2(width * 0.68, surface_y), Vector2(width * 0.76, surface_y), edge_color, 2.0, true)
 			var crack_color := Color("b28c69", 0.82)
-			draw_polyline(PackedVector2Array([Vector2(-width * 0.62, surface_y - 2.0), Vector2(-width * 0.39, surface_y - 1.0), Vector2(-width * 0.29, surface_y + 6.0), Vector2(-width * 0.11, surface_y + 8.0)]), crack_color, 2.0, true)
-			draw_polyline(PackedVector2Array([Vector2(width * 0.62, surface_y - 2.0), Vector2(width * 0.39, surface_y - 1.0), Vector2(width * 0.29, surface_y + 6.0), Vector2(width * 0.11, surface_y + 8.0)]), crack_color, 2.0, true)
+			draw_polyline(PackedVector2Array([Vector2(-width * 0.94, surface_y - 2.0), Vector2(-width * 0.82, surface_y + 1.0), Vector2(-width * 0.72, surface_y + 6.0)]), crack_color, 2.0, true)
+			draw_polyline(PackedVector2Array([Vector2(width * 0.94, surface_y - 2.0), Vector2(width * 0.82, surface_y + 1.0), Vector2(width * 0.72, surface_y + 6.0)]), crack_color, 2.0, true)
 
 func _draw_stone_silhouette(rect: Rect2) -> void:
 	if rect.size.x <= 0.0 or rect.size.y <= 0.0:

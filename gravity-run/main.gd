@@ -27,6 +27,8 @@ const LOOT_PLANNER_SCRIPT := preload("res://systems/loot_spawn_planner.gd")
 const SHARED_COIN_PLANNER_SCRIPT := preload("res://systems/shared_coin_planner.gd")
 const FALLING_ROCK_SCRIPT := preload("res://hazards/falling_rock.gd")
 const FALLING_ROCK_MODEL := preload("res://systems/falling_rock_model.gd")
+const ROCK_WARNING_ICON_SCRIPT := preload("res://systems/rock_warning_icon.gd")
+const ROCK_WARNING_PULSE_SCRIPT := preload("res://systems/rock_warning_pulse.gd")
 const MANIFEST_BUILDER_SCRIPT := preload("res://systems/course_manifest_builder.gd")
 const RUN_LOOT_ENABLED := false
 const SLOPE_SCENE := preload("res://terrain/slope.tscn")
@@ -62,6 +64,8 @@ var _pending_shared_coins: Array[Dictionary] = []
 var _shared_coin_planner: RefCounted
 var _shared_coin_planned_until := -INF
 var _singleplayer_simulation_tick := 0
+var _rock_warning_pulse: RefCounted = ROCK_WARNING_PULSE_SCRIPT.new()
+var _rock_warning_accessibility_button: Button
 var _spawned_early_rock_ids: Dictionary = {}
 var _step_start_barrel_centers: Dictionary = {}
 var _manifest_builder: RefCounted
@@ -91,6 +95,18 @@ var _render_interpolation_fraction := 0.0
 const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_export.gd")
 
 func _ready() -> void:
+	_rock_warning_accessibility_button = Button.new()
+	_rock_warning_accessibility_button.name = "RockWarningAccessibility"
+	_rock_warning_accessibility_button.text = ""
+	_rock_warning_accessibility_button.tooltip_text = tr("Falling rock")
+	_rock_warning_accessibility_button.accessibility_name = tr("Falling rock")
+	_rock_warning_accessibility_button.focus_mode = Control.FOCUS_ALL
+	_rock_warning_accessibility_button.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_rock_warning_accessibility_button.flat = true
+	_rock_warning_accessibility_button.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	_rock_warning_accessibility_button.size = Vector2(48.0, 48.0)
+	_rock_warning_accessibility_button.visible = false
+	$HUDLayer.add_child(_rock_warning_accessibility_button)
 	course_generator = COURSE_GENERATOR_SCRIPT.new()
 	loot_spawn_planner = LOOT_PLANNER_SCRIPT.new()
 	_manifest_builder = MANIFEST_BUILDER_SCRIPT.new()
@@ -116,6 +132,8 @@ func _ready() -> void:
 	_start_run()
 
 func _start_run() -> void:
+	_rock_warning_pulse.call("reset")
+	_rock_warning_accessibility_button.visible = false
 	_render_diagnostic_tick = 0
 	_render_diagnostic_frames.clear()
 	run_end_panel.visible = false
@@ -251,6 +269,7 @@ func _process(delta: float) -> void:
 	var sprite := player.get_node("AnimatedSprite2D") as AnimatedSprite2D
 	sprite.position = _render_player_position - player.position + Vector2(0.0, -float(player.call("get_gravity_direction")))
 	_update_camera()
+	_update_singleplayer_rock_warning_pulse(delta)
 	_render_presentation_ready_usec = Time.get_ticks_usec()
 	if render_diagnostics_enabled and not game_over:
 		_record_render_diagnostic(delta)
@@ -477,6 +496,8 @@ func _physics_process(delta: float) -> void:
 
 func _end_run() -> void:
 	game_over = true
+	_rock_warning_pulse.call("reset")
+	_rock_warning_accessibility_button.visible = false
 	if not demo_mode:
 		MusicController.enter_menu()
 	_presentation.reset(player.position)
@@ -692,9 +713,10 @@ func _spawn_course_event(event: Dictionary) -> void:
 					break
 			if not near_terrain and _floor_surface_y(event_x) - _ceiling_surface_y(event_x) >= 260.0:
 				var rock := FALLING_ROCK_SCRIPT.new() as Node2D
-				var rock_event := {"event_id": str(event.get("id", "rock")), "kind": "rock", "x": event_x, "width": width, "height": height, "floor_y": _floor_surface_y(event_x), "ceiling_y": _ceiling_surface_y(event_x), "trigger_lead": float(event.get("trigger_lead", FALLING_ROCK_MODEL.TRIGGER_LEAD)), "warning_ticks": int(event.get("warning_ticks", FALLING_ROCK_MODEL.WARNING_TICKS)), "fall_ticks": int(event.get("fall_ticks", FALLING_ROCK_MODEL.FALL_TICKS)), "burial_depth": float(event.get("burial_depth", FALLING_ROCK_MODEL.BURIAL_DEPTH))}
+				var rock_event_id := _singleplayer_rock_key(event)
+				var rock_event := {"event_id": rock_event_id, "kind": "rock", "x": event_x, "width": width, "height": height, "floor_y": _floor_surface_y(event_x), "ceiling_y": _ceiling_surface_y(event_x), "trigger_lead": float(event.get("trigger_lead", FALLING_ROCK_MODEL.TRIGGER_LEAD)), "warning_ticks": int(event.get("warning_ticks", FALLING_ROCK_MODEL.WARNING_TICKS)), "fall_ticks": int(event.get("fall_ticks", FALLING_ROCK_MODEL.FALL_TICKS)), "burial_depth": float(event.get("burial_depth", FALLING_ROCK_MODEL.BURIAL_DEPTH))}
 				rock.call("configure", rock_event)
-				rock.name = "FallingRock_%s" % str(event.get("id", "rock"))
+				rock.name = "FallingRock_%s" % rock_event_id
 				add_child(rock)
 				obstacles.append(rock)
 		_:
@@ -1021,6 +1043,7 @@ func _draw() -> void:
 	var track_draw_done_usec := Time.get_ticks_usec() if render_diagnostics_enabled else -1
 	_draw_seed_finish_markers()
 	_draw_falling_rock_warning_markers()
+	_draw_rock_hud_warning()
 	if render_diagnostics_enabled and not _render_diagnostic_frames.is_empty():
 		var frame_record: Dictionary = _render_diagnostic_frames.back()
 		if int(frame_record.get("render_callback_index", -1)) == _render_callback_index:
@@ -1041,10 +1064,32 @@ func _draw_falling_rock_warning_markers() -> void:
 		var marker_x := view_right - 44.0
 		var event: Dictionary = obstacle.get("event")
 		var floor_y := float(event.get("floor_y", WORLD_HEIGHT - 80.0))
-		draw_line(Vector2(marker_x, floor_y - 42.0), Vector2(marker_x, floor_y - 6.0), Color("ff814f"), 4.0)
-		draw_line(Vector2(marker_x - 9.0, floor_y - 16.0), Vector2(marker_x, floor_y - 6.0), Color("ff814f"), 4.0)
-		draw_line(Vector2(marker_x + 9.0, floor_y - 16.0), Vector2(marker_x, floor_y - 6.0), Color("ff814f"), 4.0)
-		draw_string(ThemeDB.fallback_font, Vector2(marker_x - 38.0, floor_y - 50.0), tr("ROCK DROP"), HORIZONTAL_ALIGNMENT_CENTER, 84.0, 14, Color("ffe1a3"))
+		ROCK_WARNING_ICON_SCRIPT.draw(self, Vector2(marker_x, floor_y - 64.0), 38.0)
+		ROCK_WARNING_ICON_SCRIPT.draw_forward_chevron(self, Vector2(marker_x + 25.0, floor_y - 64.0), 8.0)
+
+func _update_singleplayer_rock_warning_pulse(delta: float) -> void:
+	_rock_warning_pulse.call("advance", delta)
+	var warnings: Array[Dictionary] = []
+	for obstacle in obstacles:
+		if not is_instance_valid(obstacle) or not obstacle.is_in_group("falling_rocks"):
+			continue
+		var phase := str(obstacle.call("get_phase"))
+		if phase != "warning":
+			continue
+		var event: Dictionary = obstacle.get("event")
+		warnings.append({"event_id": str(event.get("event_id", "")), "phase": phase})
+	_rock_warning_pulse.call("observe_warning_events", warnings)
+	_rock_warning_accessibility_button.visible = not game_over and bool(_rock_warning_pulse.call("is_active"))
+	if _rock_warning_accessibility_button.visible:
+		_rock_warning_accessibility_button.position = ROCK_WARNING_PULSE_SCRIPT.screen_center(get_viewport_rect().size) - Vector2(24.0, 24.0)
+
+func _draw_rock_hud_warning() -> void:
+	if not bool(_rock_warning_pulse.call("is_active")):
+		return
+	var view_left := camera.get_screen_center_position().x - screen_width * 0.5 if is_instance_valid(camera) else _render_course_distance
+	var viewport_size := Vector2(screen_width, screen_height)
+	var center := ROCK_WARNING_PULSE_SCRIPT.world_center(view_left, viewport_size)
+	ROCK_WARNING_ICON_SCRIPT.draw(self, center, 56.0 * float(_rock_warning_pulse.call("scale")), Color("ff814f"), float(_rock_warning_pulse.call("alpha")))
 
 func _on_seed_leaderboard_received(version: int, seed: int, rows: Array, _error_message: String) -> void:
 	if version != _active_seed_version or seed != _active_seed:

@@ -2,18 +2,21 @@ extends RefCounted
 class_name RockWarningIcon
 ## Small reusable vector sign used by the in-world and off-screen rock warnings.
 
-static func draw(canvas: CanvasItem, center: Vector2, size: float, danger_color: Color = Color("ff814f")) -> void:
+static func draw(canvas: CanvasItem, center: Vector2, size: float, danger_color: Color = Color("ff814f"), opacity: float = 1.0) -> void:
 	var half := size * 0.5
+	var alpha := clampf(opacity, 0.0, 1.0)
 	var triangle := PackedVector2Array([
 		center + Vector2(0.0, -half),
 		center + Vector2(half * 0.88, half * 0.55),
 		center + Vector2(-half * 0.88, half * 0.55),
 	])
-	canvas.draw_colored_polygon(triangle, Color(0.09, 0.12, 0.16, 0.96))
+	canvas.draw_colored_polygon(triangle, Color(0.09, 0.12, 0.16, 0.96 * alpha))
 	var outline := triangle.duplicate()
 	outline.append(triangle[0])
-	canvas.draw_polyline(outline, danger_color, maxf(2.0, size * 0.065), true)
-	var stone_color := Color("ffe1a3")
+	var outline_color := danger_color
+	outline_color.a *= alpha
+	canvas.draw_polyline(outline, outline_color, maxf(2.0, size * 0.065), true)
+	var stone_color := Color("ffe1a3", alpha)
 	var small_stone := PackedVector2Array([
 		center + Vector2(-size * 0.23, -size * 0.04),
 		center + Vector2(-size * 0.18, -size * 0.15),
