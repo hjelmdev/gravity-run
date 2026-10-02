@@ -1339,3 +1339,18 @@ msgstr "Kontolänkningen för mynt misslyckades. Kontrollera anslutningen och f�
 
 msgid "The world baseline is too large for multiplayer transfer (%d/%d bytes)."
 msgstr "Världens grunddata är för stor för överföring i flerspelarläge (%d/%d byte)."
+
+msgid "Mute music"
+msgstr "Stäng av musik"
+
+msgid "Enable music"
+msgstr "Sätt på musik"
+
+msgid "Show music volume"
+msgstr "Visa musikvolym"
+
+msgid "Music volume"
+msgstr "Musikvolym"
+
+msgid "My coins"
+msgstr "Mina mynt"

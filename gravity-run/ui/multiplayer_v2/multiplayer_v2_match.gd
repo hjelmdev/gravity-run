@@ -13,6 +13,7 @@ const CoursePresentationScript := preload("res://systems/race_course_presentatio
 const RoundCoordinatorScript := preload("res://systems/multiplayer_v2/v2_round_coordinator.gd")
 const HudLayout := preload("res://ui/multiplayer_v2/v2_hud_layout.gd")
 const MusicQuickControlScript := preload("res://ui/music_quick_control.gd")
+const ActionIconScript := preload("res://ui/action_icon.gd")
 
 const FIXED_DELTA := 1.0 / 60.0
 const CAMERA_PLAYER_X := 250.0
@@ -60,7 +61,9 @@ var _status_label: Label
 var _result_panel: PanelContainer
 var _result_text: RichTextLabel
 var _results_view: ScrollContainer
-var _result_coin_status_label: Label
+var _coin_count_indicator: HBoxContainer
+var _coin_count_icon: Control
+var _coin_count_label: Label
 var _return_lobby_button: Button
 var _debug_panel: PanelContainer
 var _debug_toggle: Button
@@ -207,6 +210,24 @@ func _build_overlay() -> void:
 	_music_quick_control.set_script(MusicQuickControlScript)
 	_music_quick_control.set("right_offset", -152.0)
 	_hud_root.add_child(_music_quick_control)
+	_coin_count_indicator = HBoxContainer.new()
+	_coin_count_indicator.name = "LocalCoinCount"
+	_coin_count_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_coin_count_indicator.add_theme_constant_override("separation", 5)
+	_hud_root.add_child(_coin_count_indicator)
+	_coin_count_icon = Control.new()
+	_coin_count_icon.set_script(ActionIconScript)
+	_coin_count_icon.set("icon_name", "coin")
+	_coin_count_icon.custom_minimum_size = Vector2(24.0, 24.0)
+	_coin_count_icon.tooltip_text = tr("My coins")
+	_coin_count_icon.accessibility_name = tr("My coins")
+	_coin_count_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_coin_count_indicator.add_child(_coin_count_icon)
+	_coin_count_label = Label.new()
+	_coin_count_label.name = "LocalCoinCountValue"
+	_coin_count_label.add_theme_font_size_override("font_size", 16)
+	_coin_count_label.add_theme_color_override("font_color", Color("ffd166"))
+	_coin_count_indicator.add_child(_coin_count_label)
 	_countdown_label = Label.new()
 	_countdown_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_countdown_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -269,12 +290,6 @@ func _build_overlay() -> void:
 	_result_text.scroll_active = false
 	_result_text.custom_minimum_size.y = 30
 	result_layout.add_child(_result_text)
-	_result_coin_status_label = Label.new()
-	_result_coin_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_result_coin_status_label.add_theme_font_size_override("font_size", 14)
-	_result_coin_status_label.add_theme_color_override("font_color", Color("ffd166"))
-	_result_coin_status_label.visible = false
-	result_layout.add_child(_result_coin_status_label)
 	_results_view = ResultsView.new()
 	result_layout.add_child(_results_view)
 	_results_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -310,9 +325,12 @@ func _layout_hud() -> void:
 	var music_rect: Rect2 = layout.get("music_button", Rect2())
 	var status_rect: Rect2 = layout.get("status", Rect2())
 	var panel_rect: Rect2 = layout.get("panel", Rect2())
+	var coin_rect: Rect2 = layout.get("coin_count", Rect2())
 	_debug_toggle.position = button_rect.position
 	_debug_toggle.size = button_rect.size
 	_music_quick_control.call("set_right_offset", music_rect.position.x - size.x)
+	_coin_count_indicator.position = coin_rect.position
+	_coin_count_indicator.size = coin_rect.size
 	_status_label.position = status_rect.position
 	_status_label.size = status_rect.size
 	_debug_panel.position = panel_rect.position
@@ -687,9 +705,12 @@ func _on_world_commit(commit: Dictionary) -> void:
 			if not route_safe:
 				MultiplayerV2Service.request_rock_warning_recovery(str(commit.get("entity_id", "")), activation_tick)
 				return
-	var applied: bool = _world.apply_world_commit(commit)
+	var commit_result := str(_world.apply_world_commit(commit))
+	var applied := commit_result == "applied"
 	if str(commit.get("action", "")) == "collect":
 		_pending_coin_claims.erase(str(commit.get("entity_id", "")))
+		if applied and is_instance_valid(_course_presentation):
+			_course_presentation.call("play_confirmed_coin_collection", str(commit.get("entity_id", "")), str(commit.get("commit_id", "")))
 	MultiplayerV2Service.diagnostics.record_event("world_commit_presented", {"commit_id": str(commit.get("commit_id", "")), "result": applied, "revision": int(commit.get("world_revision", 0))})
 	var transition: Dictionary = commit.get("linked_player_transition", {})
 	if not transition.is_empty() and int(transition.get("owner_peer_id", -1)) == int(MultiplayerV2Service.session.get("local_peer_id", 1)):
@@ -736,7 +757,9 @@ func _on_interaction_resolved(request_id: String, accepted: bool, reason: String
 		if str(_pending_coin_claims[entity_id]) == request_id:
 			_pending_coin_claims.erase(entity_id)
 			if not commit.is_empty():
-				_world.apply_world_commit(commit)
+				var commit_result := str(_world.apply_world_commit(commit))
+				if commit_result == "applied" and str(commit.get("action", "")) == "collect" and is_instance_valid(_course_presentation):
+					_course_presentation.call("play_confirmed_coin_collection", str(commit.get("entity_id", "")), str(commit.get("commit_id", "")))
 			if not accepted and reason not in ["coin_claim_lost", "already_collected"]:
 				MultiplayerV2Service.diagnostics.record_event("coin_claim_retryable", {"entity_id": str(entity_id), "reason": reason})
 			return
@@ -763,7 +786,7 @@ func _on_results_received(result: Dictionary) -> void:
 	_result_text.clear()
 	_result_text.append_text("[center][b]%s[/b][/center]" % tr("Round complete"))
 	_results_view.show_rows(result.get("placements", []))
-	_update_result_coin_status()
+	_update_coin_count_indicator()
 
 func _frozen_member(peer_id: int) -> Dictionary:
 	for member in _frozen_roster:
@@ -1373,8 +1396,9 @@ func _take_phase_profile() -> Dictionary:
 	return profile
 
 func _update_hud() -> void:
+	_update_coin_count_indicator()
 	if not _result.is_empty():
-		_update_result_coin_status()
+		_status_label.text = ""
 		return
 	var state_name := str(_runner.player_state.get("state", "running"))
 	if state_name == "pending_barrel":
@@ -1386,20 +1410,11 @@ func _update_hud() -> void:
 		else:
 			_status_label.text = tr("Waiting for host result…")
 	else:
-		_status_label.text = tr("Shared coins: %d") % _local_shared_coin_count()
-		_append_coin_save_status()
+		_status_label.text = ""
 
-func _append_coin_save_status() -> void:
-	var save_state := MultiplayerV2Service.coin_wallet_status_for_local_awards(_local_shared_coin_count())
-	if not save_state.is_empty():
-		_status_label.text += "\n" + tr(save_state)
-
-func _update_result_coin_status() -> void:
-	if not is_instance_valid(_result_coin_status_label):
-		return
-	var save_state := MultiplayerV2Service.coin_wallet_status_for_local_awards(_local_shared_coin_count())
-	_result_coin_status_label.text = tr(save_state) if not save_state.is_empty() else ""
-	_result_coin_status_label.visible = not save_state.is_empty()
+func _update_coin_count_indicator() -> void:
+	if is_instance_valid(_coin_count_label):
+		_coin_count_label.text = str(_local_shared_coin_count())
 
 func _local_shared_coin_count() -> int:
 	if _world == null:

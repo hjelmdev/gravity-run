@@ -19,10 +19,14 @@ func is_collected() -> bool:
 	return is_being_collected
 
 func collect() -> void:
-	if is_being_collected:
+	if not animate_collection():
 		return
-	is_being_collected = true
 	collected.emit(COIN_VALUE)
+
+func animate_collection() -> bool:
+	if is_being_collected:
+		return false
+	is_being_collected = true
 	for i in range(8):
 		var angle := TAU * float(i) / 8.0 + randf_range(-0.3, 0.3)
 		sparks.append({
@@ -32,6 +36,7 @@ func collect() -> void:
 			"size": randf_range(3.0, 5.0)
 		})
 	set_process(true)
+	return true
 
 func _process(delta: float) -> void:
 	if not is_being_collected:

@@ -19,6 +19,7 @@ const RockWarningPulseScript := preload("res://systems/rock_warning_pulse.gd")
 
 var manifest: Resource
 var event_nodes: Dictionary = {}
+var _confirmed_coin_bursts: Dictionary = {}
 var terrain_events: Array[Dictionary] = []
 var gap_events: Array[Dictionary] = []
 var _render_ceiling_gaps: Array[Dictionary] = []
@@ -260,9 +261,22 @@ func set_world_state(world_state: Dictionary) -> void:
 			var entity_kind := str(entities[entity_id].get("kind", ""))
 			var node_value: Variant = event_nodes.get(str(entity_id))
 			if entity_kind == "coin" and is_instance_valid(node_value) and node_value is Node2D:
-				node_value.visible = false
+				if not bool(node_value.get("is_being_collected")):
+					node_value.visible = false
 			else:
 				apply_destroyed_entity(str(entity_id))
+
+func play_confirmed_coin_collection(entity_id: String, commit_id: String = "") -> bool:
+	if entity_id.is_empty() or _confirmed_coin_bursts.has(entity_id):
+		return false
+	var coin: Variant = event_nodes.get(entity_id)
+	if not is_instance_valid(coin) or not coin.has_method("animate_collection"):
+		return false
+	coin.visible = true
+	if not bool(coin.call("animate_collection")):
+		return false
+	_confirmed_coin_bursts[entity_id] = commit_id
+	return true
 
 func apply_destroyed_entity(entity_id: String) -> void:
 	var node_value: Variant = event_nodes.get(entity_id)
@@ -285,6 +299,7 @@ func reset() -> void:
 			continue
 		child.queue_free()
 	event_nodes.clear()
+	_confirmed_coin_bursts.clear()
 	terrain_events.clear()
 	gap_events.clear()
 	_render_ceiling_gaps.clear()

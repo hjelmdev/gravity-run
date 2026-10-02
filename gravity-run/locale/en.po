@@ -52,3 +52,15 @@ msgstr "On"
 
 msgid "Off"
 msgstr "Off"
+
+msgid "Mute music"
+msgstr "Mute music"
+
+msgid "Enable music"
+msgstr "Enable music"
+
+msgid "Show music volume"
+msgstr "Show music volume"
+
+msgid "My coins"
+msgstr "My coins"
