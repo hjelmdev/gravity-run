@@ -370,7 +370,7 @@ func _physics_process(delta: float) -> void:
 		if RUN_LOOT_ENABLED and AuthService.is_authenticated and not demo_mode:
 			loot_spawn_planner.ensure_horizon(course_distance + screen_width + 1400.0)
 		var spawn_line := course_distance + event_spawn_lead
-		if _active_seed_version >= COURSE_GENERATOR_SCRIPT.GENERATOR_VERSION:
+		if _active_seed_version >= COURSE_GENERATOR_SCRIPT.PUBLISHED_SHARED_GENERATOR_VERSION:
 			var rock_spawn_line := course_distance + FALLING_ROCK_MODEL.TRIGGER_LEAD + 300.0
 			for planned_event in course_generator.get_planned_events():
 				if str(planned_event.get("kind", "")) != "rock" or float(planned_event.get("course_distance", INF)) > rock_spawn_line:
@@ -391,7 +391,7 @@ func _physics_process(delta: float) -> void:
 				_spawn_loot_pickup(loot_event)
 		_update_hazard_discoveries()
 		if not demo_mode:
-			if _active_seed_version >= COURSE_GENERATOR_SCRIPT.GENERATOR_VERSION:
+			if _active_seed_version >= COURSE_GENERATOR_SCRIPT.PUBLISHED_SHARED_GENERATOR_VERSION:
 				_spawn_shared_coins()
 			elif coin_distance >= COIN_DISTANCE:
 				coin_distance -= COIN_DISTANCE

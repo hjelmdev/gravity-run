@@ -27,7 +27,8 @@ const PLAYER_FLIP_COOLDOWN := 0.42
 const SWITCH_SAFETY_MARGIN := 0.12
 const PLAN_RETRY_SPACING := 48.0
 const BARREL_SPEED_MULTIPLIER := 1.4
-const GENERATOR_VERSION := 5
+const GENERATOR_VERSION := 6
+const PUBLISHED_SHARED_GENERATOR_VERSION := 5
 const LEGACY_GENERATOR_VERSION := 3
 const PREVIOUS_GENERATOR_VERSION := 4
 const CourseHazardProfileScript = preload("res://systems/course_hazard_profile.gd")
@@ -111,7 +112,7 @@ func set_difficulty_profile(profile: Resource) -> void:
 func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> bool:
 	_configuration_failed = false
 	_generator_version = generator_version
-	if generator_version != GENERATOR_VERSION and generator_version != PREVIOUS_GENERATOR_VERSION and generator_version != LEGACY_GENERATOR_VERSION:
+	if generator_version not in [GENERATOR_VERSION, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
 		push_error("Unsupported course generator version: %d" % generator_version)
 		return false
 	_profiles.clear()
@@ -129,8 +130,9 @@ func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> b
 	# Terrain changes are part of the course rhythm, not rare decoration.
 	_profiles.append(_make_profile(&"terrain_step", &"step", 1.8, BOTH_LANES, Vector2(36.0, 240.0), Vector2i(1, 1), PackedFloat32Array([72.0, 108.0, 148.0, 184.0])))
 	_profiles.append(_make_profile(&"terrain_slope", &"slope", 1.5, BOTH_LANES, Vector2(440.0, 440.0), Vector2i(1, 1), PackedFloat32Array([64.0, 100.0, 140.0, 176.0])))
-	if generator_version >= GENERATOR_VERSION:
-		_profiles.append(_make_profile(&"falling_rock", &"rock", 0.22, FLOOR_LANE, Vector2(90.0, 90.0), Vector2i(1, 1), PackedFloat32Array([100.0])))
+	if generator_version >= PUBLISHED_SHARED_GENERATOR_VERSION:
+		var rock_weight := 1.0 if generator_version >= GENERATOR_VERSION else 0.22
+		_profiles.append(_make_profile(&"falling_rock", &"rock", rock_weight, FLOOR_LANE, Vector2(90.0, 90.0), Vector2i(1, 1), PackedFloat32Array([100.0])))
 	return true
 
 func get_profile_catalog(generator_version: int = GENERATOR_VERSION) -> Array[CourseHazardProfile]:
@@ -149,7 +151,7 @@ func reset(seed: int = 0) -> void:
 	else:
 		_rng.seed = seed
 	_events.clear()
-	_next_event_distance = 1400.0 if _generator_version >= GENERATOR_VERSION else 1050.0
+	_next_event_distance = 1400.0 if _generator_version >= PUBLISHED_SHARED_GENERATOR_VERSION else 1050.0
 	_next_spawn_index = 0
 
 func ensure_horizon(horizon_distance: float, _current_speed: float, _track_height: float = REFERENCE_TRACK_HEIGHT, _spawn_lead_distance: float = EVENT_SPAWN_LEAD_DISTANCE) -> void:

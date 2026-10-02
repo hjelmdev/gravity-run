@@ -2,13 +2,16 @@ extends Node
 
 const MUSIC_STREAM: AudioStream = preload("res://assets/audio/music/arcade_rush_96k.ogg")
 const MUSIC_BUS := "Music"
-const MENU_GAIN := 0.65
+const MAX_USER_GAIN := 0.35
 
 var _player: AudioStreamPlayer
 var _context_tween: Tween
 var _last_round_id := ""
-var _web_input_seen := false
 var _menu_start_pending := false
+
+static func music_gain_for_setting(value: float) -> float:
+	var normalized := clampf(value, 0.0, 1.0)
+	return MAX_USER_GAIN * normalized * normalized
 
 func _ready() -> void:
 	_player = AudioStreamPlayer.new()
@@ -21,23 +24,20 @@ func _ready() -> void:
 	add_child(_player)
 	PlayerProfile.music_volume_changed.connect(_on_user_volume_changed)
 	_apply_user_volume()
+	_start_playback_if_needed()
 	enter_menu()
 
 func enter_menu() -> void:
 	_cancel_context_fade()
 	_player.stream_paused = false
 	if not _player.playing:
-		if OS.has_feature("web") and not _web_input_seen:
-			_menu_start_pending = true
-			return
-		_player.play()
+		_start_playback_if_needed()
 	_menu_start_pending = false
-	_set_context_gain(MENU_GAIN, 0.30)
+	_set_context_gain(1.0, 0.0)
 
 func prepare_round() -> void:
 	_cancel_context_fade()
 	if _player.playing:
-		_player.volume_db = linear_to_db(MENU_GAIN)
 		_context_tween = create_tween()
 		_context_tween.tween_property(_player, "volume_db", -50.0, 0.25)
 		_context_tween.tween_callback(_player.stop)
@@ -47,11 +47,12 @@ func start_round(round_id: String) -> void:
 		return
 	_last_round_id = round_id
 	_cancel_context_fade()
-	_player.stop()
-	_player.volume_db = -50.0
-	_player.play(0.0)
 	_player.stream_paused = false
-	_set_context_gain(1.0, 0.10)
+	if not _player.playing:
+		_player.volume_db = -50.0
+		_apply_user_volume()
+		_player.play(0.0)
+		_set_context_gain(1.0, 0.10)
 
 func set_stream_paused(paused: bool) -> void:
 	if _player != null and _player.playing:
@@ -78,7 +79,7 @@ func _apply_user_volume() -> void:
 	if bus_index < 0:
 		push_warning("Music bus is missing; music volume cannot be applied.")
 		return
-	var volume := clampf(float(PlayerProfile.music_volume), 0.0, 1.0)
+	var volume := music_gain_for_setting(float(PlayerProfile.music_volume))
 	AudioServer.set_bus_mute(bus_index, volume <= 0.0)
 	AudioServer.set_bus_volume_db(bus_index, linear_to_db(maxf(volume, 0.0001)))
 
@@ -86,18 +87,27 @@ func _on_user_volume_changed(_value: float) -> void:
 	_apply_user_volume()
 
 func _input(event: InputEvent) -> void:
-	if not OS.has_feature("web") or _web_input_seen:
+	if not OS.has_feature("web"):
 		return
 	var pressed := false
 	if event is InputEventMouseButton or event is InputEventScreenTouch or event is InputEventKey:
 		pressed = event.pressed
 	if not pressed:
 		return
-	_web_input_seen = true
-	if _menu_start_pending and not _player.playing:
-		_player.play(0.0)
-		_menu_start_pending = false
-		_set_context_gain(MENU_GAIN, 0.10)
+	# Godot's Web export unlocks its AudioContext from this trusted browser
+	# gesture. Retry only when playback itself is not active; never synthesize input.
+	if not _player.playing:
+		_start_playback_if_needed()
+	_menu_start_pending = not _player.playing
+
+func _start_playback_if_needed() -> void:
+	if _player.playing:
+		return
+	_player.volume_db = 0.0
+	_apply_user_volume()
+	_player.stream_paused = false
+	_player.play(0.0)
+	_menu_start_pending = not _player.playing
 
 func _cancel_context_fade() -> void:
 	if _context_tween != null and _context_tween.is_running():
@@ -106,7 +116,7 @@ func _cancel_context_fade() -> void:
 
 func _on_stream_finished() -> void:
 	# Keep playback resilient if a reimport changes the stream's loop flag.
-	_player.play(0.0)
+	_start_playback_if_needed()
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_PREDELETE:

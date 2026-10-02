@@ -9,7 +9,8 @@ var best_distance_m := 0.0
 var flip_control := "keyboard"
 var leaderboard_name := ""
 var language := ""
-var music_volume := 0.6
+const DEFAULT_MUSIC_VOLUME := 0.25
+var music_volume := DEFAULT_MUSIC_VOLUME
 var character_stats: Resource
 var _saved_challenges: Array[Dictionary] = []
 var _music_save_timer: Timer
@@ -63,10 +64,10 @@ func _load_profile() -> void:
 	if not _is_valid_flip_control(flip_control):
 		var legacy_control := str(config.get_value("settings", "mobile_flip_control", default_control))
 		flip_control = legacy_control if DisplayServer.is_touchscreen_available() and legacy_control in ["swipe", "tap"] else default_control
-	var saved_music_volume: Variant = config.get_value("settings", "music_volume", 0.6)
+	var saved_music_volume: Variant = config.get_value("settings", "music_volume", DEFAULT_MUSIC_VOLUME)
 	music_volume = normalize_music_volume(saved_music_volume)
 
-static func normalize_music_volume(value: Variant, default_value: float = 0.6) -> float:
+static func normalize_music_volume(value: Variant, default_value: float = DEFAULT_MUSIC_VOLUME) -> float:
 	if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)):
 		return default_value
 	return clampf(float(value), 0.0, 1.0)

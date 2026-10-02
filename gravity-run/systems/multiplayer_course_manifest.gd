@@ -122,7 +122,7 @@ func validate() -> String:
 		return "The multiplayer world dimensions are invalid."
 	if events.size() > 4000:
 		return "The multiplayer manifest has too many events."
-	if manifest_version not in [2, 3] or (generator_version >= CourseGenerator.GENERATOR_VERSION and manifest_version != 3) or (generator_version <= CourseGenerator.PREVIOUS_GENERATOR_VERSION and manifest_version != 2):
+	if manifest_version not in [2, 3] or (generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and manifest_version != 3) or (generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and manifest_version != 2):
 		return "The course generator and manifest versions are incompatible."
 	var previous_x := -INF
 	for event in events:
@@ -131,7 +131,7 @@ func validate() -> String:
 		var event_x := float(event.x)
 		if not is_finite(event_x) or event_x < start_x or event_x > finish_x + 1000.0 or event_x < previous_x:
 			return "Manifest events must be finite, ordered, and inside the course bounds."
-		if str(event.kind) not in ["spikes", "block", "barrels", "gap", "step", "slope", "rock"] or (str(event.kind) == "rock" and generator_version < CourseGenerator.GENERATOR_VERSION):
+		if str(event.kind) not in ["spikes", "block", "barrels", "gap", "step", "slope", "rock"] or (str(event.kind) == "rock" and generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION):
 			return "The manifest contains an unsupported dynamic or unknown event type."
 		if str(event.kind) == "rock":
 			var width := float(event.get("width", NAN))

@@ -39,7 +39,7 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 	var source_events: Array[Dictionary] = generator.get_planned_events()
 	var manifest := ManifestScript.new() as MultiplayerCourseManifest
 	manifest.generator_version = generator_version
-	manifest.manifest_version = 3 if generator_version >= CourseGenerator.GENERATOR_VERSION else 2
+	manifest.manifest_version = 3 if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION else 2
 	manifest.course_identity = str(definition.call("get_course_identity"))
 	manifest.seed_value = seed_value
 	manifest.course_length_px = course_length_px
@@ -47,7 +47,7 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 	manifest.finish_x = PLAYER_START_X + float(course_length_px)
 	manifest.ruleset_fingerprint = str(ruleset.call("get_fingerprint"))
 	manifest.events = _resolve_events(source_events, course_length_px)
-	if manifest.manifest_version >= 3:
+	if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION:
 		manifest.collectibles = CoinPlanner.plan(seed_value, manifest.start_x, manifest.finish_x, manifest.events, FLOOR_START_Y, CEILING_START_Y, int(ruleset.get("coin_revision")), float(ruleset.get("coin_density")))
 	manifest.manifest_hash = manifest.calculate_hash()
 	var manifest_error := str(manifest.call("validate"))
@@ -59,6 +59,9 @@ func _make_multiplayer_ruleset(generator_version: int) -> Resource:
 	var ruleset := CourseRulesetScript.new() as Resource
 	ruleset.set("ruleset_id", &"multiplayer_race")
 	if generator_version >= CourseGenerator.GENERATOR_VERSION:
+		ruleset.set("revision", 3)
+		ruleset.set("event_density", 1.5)
+	elif generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION:
 		ruleset.set("revision", 2)
 		ruleset.set("event_density", 1.5)
 	elif generator_version == CourseGenerator.PREVIOUS_GENERATOR_VERSION:

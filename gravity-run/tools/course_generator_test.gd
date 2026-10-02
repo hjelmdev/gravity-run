@@ -71,7 +71,7 @@ func _test_seed_reproduces_course_events() -> void:
 func _test_barrels_are_an_additive_v4_stream() -> void:
 	var generator := CourseGeneratorScript.new() as CourseGenerator
 	var ruleset := CourseRulesetScript.new() as Resource
-	_check(generator.configure_ruleset(ruleset, CourseGenerator.GENERATOR_VERSION), "v4 standard ruleset should configure")
+	_check(generator.configure_ruleset(ruleset, CourseGenerator.PREVIOUS_GENERATOR_VERSION), "v4 standard ruleset should configure")
 	generator.reset(8252026)
 	generator.ensure_horizon(100000.0, 500.0, 540.0, 820.0)
 	var base_events := 0

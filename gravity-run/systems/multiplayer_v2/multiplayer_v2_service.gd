@@ -41,7 +41,7 @@ signal results_received(result: Dictionary)
 signal lobby_returned
 signal membership_removed(reason: String)
 
-const V2_GAME_VERSION := "2.1.20261001.1"
+const V2_GAME_VERSION := "2.1.20261002.2"
 const MAX_PLAYERS := 5
 const POSITION_RATE_HZ := 30
 
@@ -74,8 +74,10 @@ var _coin_wallet_status_user := ""
 var _coin_confirmed_awards_by_round: Dictionary = {}
 var _coin_bound_account_by_round: Dictionary = {}
 var _coin_room_generation_by_round: Dictionary = {}
+var _coin_runtime_round_by_lobby_context: Dictionary = {}
 var _coin_link_challenges: Dictionary = {}
 var _coin_link_account_contexts: Dictionary = {}
+var _coin_link_retry_requests: Dictionary = {}
 var _coin_link_requested_generation := ""
 var _coin_link_done_generation := ""
 var _coin_link_bound_generation := ""
@@ -84,6 +86,8 @@ var _coin_register_waiting_round := ""
 var _coin_register_last_attempt_usec := -1
 var _coin_register_inflight := false
 var _coin_register_inflight_round := ""
+var _coin_register_attempts_by_round: Dictionary = {}
+var _coin_register_last_error_by_round: Dictionary = {}
 var _coin_host_prepare_waiting := false
 var _signaling_transport: Node
 var _webrtc_transport: Node
@@ -198,6 +202,7 @@ func _process(delta: float) -> void:
 	if _coin_settlement_retry_elapsed >= 10.0:
 		_coin_settlement_retry_elapsed = 0.0
 		_settle_coin_wallet()
+	_process_coin_link_retries()
 	if _active:
 		diagnostics.session["phase"] = str(room_state.get("phase", ""))
 		diagnostics.session["lobby_generation"] = int(room_state.get("lobby_generation", -1))
@@ -255,6 +260,7 @@ func _create_lobby_services() -> void:
 	_coin_award_provider = CoinAwardProviderScript.new()
 	_coin_award_provider.name = "CoinAwardProvider"
 	_coin_award_provider.request_finished.connect(_on_coin_award_request_finished)
+	_coin_award_provider.request_timing.connect(_on_coin_award_request_timing)
 	add_child(_coin_award_provider)
 	var auth := get_node_or_null("/root/AuthService")
 	if auth != null and auth.has_signal("auth_state_changed"):
@@ -576,7 +582,14 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 		for peer_id in connected_peer_ids():
 			packed_peers.append(int(peer_id))
 		var peers := _typed_peer_ids_from_packed(packed_peers)
-		_round_id = Crypto.new().generate_random_bytes(16).hex_encode()
+		if _supports_shared_coins(current_manifest):
+			var coin_lobby_context := "%s|%d|%s" % [str(room_state.get("room_id", "")), int(room_state.get("lobby_generation", -1)), str(room_state.get("manifest_hash", ""))]
+			_round_id = str(_coin_runtime_round_by_lobby_context.get(coin_lobby_context, ""))
+			if _round_id.is_empty():
+				_round_id = Crypto.new().generate_random_bytes(16).hex_encode()
+				_coin_runtime_round_by_lobby_context[coin_lobby_context] = _round_id
+		else:
+			_round_id = Crypto.new().generate_random_bytes(16).hex_encode()
 		session["round_id"] = _round_id
 		diagnostics.session["round_id"] = _round_id
 		session["roster_revision"] = int(room_state.get("lobby_generation", 0))
@@ -896,7 +909,7 @@ func send_control(peer_id: int, kind: String, payload: Dictionary) -> void:
 
 func begin_round(round_id: String, roster_revision: int) -> void:
 	_round_id = round_id
-	if current_manifest != null and int(current_manifest.generator_version) == 5 and not _coin_room_generation_by_round.has(round_id):
+	if _supports_shared_coins(current_manifest) and not _coin_room_generation_by_round.has(round_id):
 		_coin_room_generation_by_round[round_id] = {"room_id": str(room_state.get("room_id", "")), "generation": int(room_state.get("lobby_generation", -1))}
 	diagnostics.terminal_frames.clear()
 	_round_roster_revision = roster_revision
@@ -1449,15 +1462,19 @@ func mark_local_prepared() -> void:
 		_round_coordinator.cancel("peer_mapping_mismatch")
 		return
 	var coin_context := _coin_link_context()
-	if current_manifest != null and int(current_manifest.generator_version) == 5 and _coin_link_done_generation != coin_context:
+	if _supports_shared_coins(current_manifest) and _coin_link_done_generation != coin_context:
 		var auth := get_node_or_null("/root/AuthService")
-		if auth != null and bool(auth.get("is_authenticated")) and not str(auth.call("get_access_token")).is_empty():
+		if auth != null and bool(auth.get("is_authenticated")):
+			if str(auth.call("get_access_token")).is_empty():
+				start_failure_changed.emit(tr("Account coin linking could not start because your sign-in token is unavailable. Sign in again and retry."))
+				_round_coordinator.cancel("coin_account_token_unavailable")
+				return
 			_coin_link_waiting_for_prepared = true
 			_request_coin_account_binding()
 			return
 		_coin_link_done_generation = coin_context
 		_coin_link_bound_generation = ""
-	if is_room_owner() and current_manifest != null and int(current_manifest.generator_version) == 5 and not _coin_round_backends.has(_round_id):
+	if is_room_owner() and _supports_shared_coins(current_manifest) and not _coin_round_backends.has(_round_id):
 		_coin_register_waiting_round = _round_id
 		_coin_host_prepare_waiting = true
 		if _all_remote_peers_prepared():
@@ -1503,7 +1520,7 @@ func _on_round_started(round_id: String, descriptor: Dictionary) -> void:
 
 func _request_coin_account_binding() -> void:
 	var auth := get_node_or_null("/root/AuthService")
-	if not has_room() or int(room_state.get("generator_version", 0)) != 5 or auth == null or str(auth.call("get_access_token")).is_empty():
+	if not has_room() or not _supports_shared_coins(current_manifest) or auth == null or str(auth.call("get_access_token")).is_empty():
 		return
 	var generation := int(room_state.get("lobby_generation", 0))
 	var context := _coin_link_context()
@@ -1511,12 +1528,57 @@ func _request_coin_account_binding() -> void:
 		return
 	_coin_link_requested_generation = context
 	_coin_link_account_contexts[context] = {"token": str(auth.call("get_access_token")), "account_user_id": str(auth.get("user_id")), "room_id": str(room_state.room_id), "round_id": _round_id, "generation": generation}
-	_coin_award_provider.call_rpc("coin_link_request", "request_multiplayer_v2_coin_account_link", {"p_room_id": str(room_state.room_id), "p_lobby_generation": generation}, _identity_adapter.token(), context)
+	_start_coin_link_rpc("coin_link_request", "request_multiplayer_v2_coin_account_link", {"p_room_id": str(room_state.room_id), "p_lobby_generation": generation}, _identity_adapter.token(), context)
+
+func _start_coin_link_rpc(action: String, rpc_name: String, payload: Dictionary, token: String, context: String) -> void:
+	var key := "%s|%s" % [action, context]
+	var retry: Dictionary = _coin_link_retry_requests.get(key, {})
+	var attempt := int(retry.get("attempt", 0)) + 1
+	_coin_link_retry_requests[key] = {"action": action, "rpc": rpc_name, "payload": payload.duplicate(true), "token": token, "context": context, "attempt": attempt, "due_usec": -1}
+	diagnostics.record_event("coin_account_link_rpc_requested", {"action": action, "round_id": _round_id, "generation": int(room_state.get("lobby_generation", -1)), "attempt_id": _start_attempt_id, "attempt": attempt})
+	_coin_award_provider.call_rpc(action, rpc_name, payload, token, context)
+
+func _process_coin_link_retries() -> void:
+	for key in _coin_link_retry_requests.keys():
+		var retry: Dictionary = _coin_link_retry_requests.get(key, {})
+		var due_usec := int(retry.get("due_usec", -1))
+		if due_usec < 0 or Time.get_ticks_usec() < due_usec:
+			continue
+		if str(retry.get("context", "")) != _coin_link_context() or _round_coordinator.state != RoundCoordinatorScript.State.PREPARING:
+			_coin_link_retry_requests.erase(key)
+			continue
+		var attempt := int(retry.get("attempt", 0))
+		if attempt >= 3:
+			_coin_link_retry_requests.erase(key)
+			start_failure_changed.emit(tr("Account coin linking failed after %d attempts. Check your connection and retry.") % attempt)
+			_round_coordinator.cancel("coin_account_link_retry_exhausted")
+			continue
+		retry["due_usec"] = -1
+		_coin_link_retry_requests[key] = retry
+		_start_coin_link_rpc(str(retry.action), str(retry.rpc), retry.payload, str(retry.token), str(retry.context))
+
+func _schedule_coin_link_retry(action: String, context: String, data: Variant, message: String) -> bool:
+	var key := "%s|%s" % [action, context]
+	var retry: Dictionary = _coin_link_retry_requests.get(key, {})
+	var status := int(data.get("http_status", 0)) if data is Dictionary else 0
+	var transient := status == 0 or status == 408 or status == 425 or status == 429 or status >= 500
+	if not transient or int(retry.get("attempt", 0)) >= 3:
+		return false
+	retry["due_usec"] = Time.get_ticks_usec() + 350_000
+	_coin_link_retry_requests[key] = retry
+	diagnostics.record_event("coin_account_link_retry_scheduled", {"action": action, "round_id": _round_id, "generation": int(room_state.get("lobby_generation", -1)), "attempt_id": _start_attempt_id, "attempt": int(retry.get("attempt", 0)), "http_status": status, "message": message})
+	return true
 
 func _coin_link_context() -> String:
 	if room_state.is_empty() or _round_id.is_empty():
 		return ""
 	return "%s|%d|%s" % [str(room_state.get("room_id", "")), int(room_state.get("lobby_generation", -1)), _round_id]
+
+static func _supports_shared_coins(manifest: Resource) -> bool:
+	return manifest != null and int(manifest.get("generator_version")) >= CourseGeneratorScript.PUBLISHED_SHARED_GENERATOR_VERSION
+
+func _on_coin_award_request_timing(action: String, context: String, queue_usec: int, http_usec: int) -> void:
+	diagnostics.record_event("coin_rpc_timing", {"action": action, "context": context, "queue_usec": queue_usec, "http_usec": http_usec, "round_id": _round_id, "generation": int(room_state.get("lobby_generation", -1))})
 
 func _register_coin_backend_round() -> void:
 	if not is_room_owner() or current_manifest == null or _round_id.is_empty() or (_coin_register_inflight and _coin_register_inflight_round == _round_id) or _coin_round_backends.has(_round_id) or not _all_remote_peers_prepared():
@@ -1530,13 +1592,23 @@ func _register_coin_backend_round() -> void:
 		_round_coordinator.cancel("world_baseline_budget_exceeded")
 		return
 	_coin_register_last_attempt_usec = Time.get_ticks_usec()
+	_coin_register_attempts_by_round[_round_id] = int(_coin_register_attempts_by_round.get(_round_id, 0)) + 1
 	_coin_register_inflight = true
 	_coin_register_inflight_round = _round_id
 	var ids: Array[String] = []
 	for collectible in current_manifest.collectibles:
 		ids.append(str(collectible.get("entity_id", "")))
 	var host_token: String = str(_identity_adapter.token())
-	_coin_round_request_contexts[_round_id] = {"room_id": str(room_state.get("room_id", "")), "generation": int(room_state.get("lobby_generation", -1)), "round_id": _round_id, "host_token": host_token, "host_user_id": identity_user_id}
+	if host_token.is_empty():
+		_coin_register_inflight = false
+		_coin_register_inflight_round = ""
+		_coin_register_waiting_round = ""
+		_coin_host_prepare_waiting = false
+		start_failure_changed.emit(tr("Shared coin registration could not start because the multiplayer identity token is unavailable. Retry the lobby start."))
+		_round_coordinator.cancel("coin_round_identity_unavailable")
+		return
+	_coin_round_request_contexts[_round_id] = {"room_id": str(room_state.get("room_id", "")), "generation": int(room_state.get("lobby_generation", -1)), "round_id": _round_id, "host_token": host_token, "host_user_id": identity_user_id, "attempt_id": _start_attempt_id}
+	diagnostics.record_event("coin_round_register_requested", {"round_id": _round_id, "attempt_id": _start_attempt_id, "attempt": int(_coin_register_attempts_by_round[_round_id]), "generation": int(room_state.get("lobby_generation", -1)), "phase": str(room_state.get("phase", "")), "coin_count": ids.size()})
 	_coin_award_provider.call_rpc("coin_round_register", "register_multiplayer_v2_coin_round", {"p_room_id": str(room_state.room_id), "p_lobby_generation": int(room_state.get("lobby_generation", 0)), "p_runtime_round_id": _round_id, "p_manifest_hash": str(current_manifest.manifest_hash), "p_coin_ids": ids}, host_token, _round_id)
 
 func world_baseline_payload_size_bytes() -> int:
@@ -1637,7 +1709,9 @@ func _on_account_auth_state_changed(is_authenticated: bool, _email: String) -> v
 
 func _on_coin_award_request_finished(action: String, success: bool, data: Variant, message: String, context: String) -> void:
 	if action == "coin_link_request":
+		var request_retry_key := "coin_link_request|%s" % context
 		if context != _coin_link_context():
+			_coin_link_retry_requests.erase(request_retry_key)
 			_coin_link_account_contexts.erase(context)
 			return
 		if not _coin_link_account_matches_current(context):
@@ -1649,12 +1723,16 @@ func _on_coin_award_request_finished(action: String, success: bool, data: Varian
 			var link_context: Dictionary = _coin_link_account_contexts.get(context, {})
 			var account_token := str(link_context.get("token", ""))
 			if not challenge_id.is_empty() and nonce.length() == 64 and not account_token.is_empty():
-				_coin_award_provider.call_rpc("coin_link_resolve", "resolve_multiplayer_v2_coin_account_link", {"p_challenge_id": challenge_id, "p_nonce": nonce}, account_token, context)
+				_coin_link_retry_requests.erase(request_retry_key)
+				_start_coin_link_rpc("coin_link_resolve", "resolve_multiplayer_v2_coin_account_link", {"p_challenge_id": challenge_id, "p_nonce": nonce}, account_token, context)
 				return
+		if not success and _schedule_coin_link_retry("coin_link_request", context, data, message):
+			return
 		if not success:
 			diagnostics.record_event("coin_account_link_unavailable", {"generation": int(room_state.get("lobby_generation", -1)), "room_id": str(room_state.get("room_id", "")), "round_id": _round_id, "message": message, "preparation_rejected_for_signed_in_account": true})
 			_finish_coin_link_barrier(context, false)
 		elif data is Dictionary and bool(data.get("bound", false)):
+			_coin_link_retry_requests.erase(request_retry_key)
 			if str(data.get("account_user_id", "")) == str(_coin_link_account_contexts.get(context, {}).get("account_user_id", "")):
 				_finish_coin_link_barrier(context, true)
 			else:
@@ -1663,16 +1741,21 @@ func _on_coin_award_request_finished(action: String, success: bool, data: Varian
 			_finish_coin_link_barrier(context, false)
 		return
 	if action == "coin_link_resolve":
+		var resolve_retry_key := "coin_link_resolve|%s" % context
 		if context != _coin_link_context():
+			_coin_link_retry_requests.erase(resolve_retry_key)
 			_coin_link_account_contexts.erase(context)
 			return
 		if not _coin_link_account_matches_current(context):
 			_cancel_coin_link_account_changed(context)
 			return
-		if not success:
+		if not success and _schedule_coin_link_retry("coin_link_resolve", context, data, message):
+			return
+		if not success or not data is Dictionary or not bool(data.get("bound", false)) or str(data.get("room_id", "")) != str(room_state.get("room_id", "")) or int(data.get("lobby_generation", -1)) != int(room_state.get("lobby_generation", -2)):
 			diagnostics.record_event("coin_account_link_rejected", {"generation": int(room_state.get("lobby_generation", -1)), "room_id": str(room_state.get("room_id", "")), "round_id": _round_id, "message": message, "preparation_rejected_for_signed_in_account": true})
 			_finish_coin_link_barrier(context, false)
 		else:
+			_coin_link_retry_requests.erase(resolve_retry_key)
 			_finish_coin_link_barrier(context, true)
 		return
 	if action == "coin_round_register":
@@ -1694,8 +1777,15 @@ func _on_coin_award_request_finished(action: String, success: bool, data: Varian
 					_coin_host_prepare_waiting = false
 					_mark_local_prepared_now()
 				return
-		if not success:
-			diagnostics.record_event("coin_round_register_retry", {"round_id": context, "message": message})
+		var response_status := int(data.get("http_status", 0)) if data is Dictionary else 0
+		var contract_error := success and (not data is Dictionary or str(data.get("coin_round_id", "")).is_empty())
+		_coin_register_last_error_by_round[context] = {"message": "The backend accepted round registration without returning its required coin_round_id." if contract_error else message, "fatal": contract_error or response_status in [400, 401, 403, 404, 409, 422]}
+		diagnostics.record_event("coin_round_register_failed", {"round_id": context, "attempt_id": str(request_context.get("attempt_id", _start_attempt_id)), "attempt": int(_coin_register_attempts_by_round.get(context, 0)), "generation": int(request_context.get("generation", -1)), "phase": str(room_state.get("phase", "")), "http_status": response_status, "fatal": bool(_coin_register_last_error_by_round[context].fatal), "message": str(_coin_register_last_error_by_round[context].message)})
+		if bool(_coin_register_last_error_by_round[context].fatal):
+			start_failure_changed.emit(tr("Shared coin registration failed: %s") % str(_coin_register_last_error_by_round[context].message))
+			_coin_register_waiting_round = ""
+			_coin_host_prepare_waiting = false
+			_round_coordinator.cancel("coin_round_registration_failed")
 		return
 	if action == "coin_awards_journal" and success:
 		_coin_journal_batches.erase(context)
