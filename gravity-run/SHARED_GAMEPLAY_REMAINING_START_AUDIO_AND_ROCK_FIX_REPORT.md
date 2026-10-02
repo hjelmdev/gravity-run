@@ -19,6 +19,12 @@ Generator 7 ger stenarna 90 varningstick (1,5 s), 42 falltick (0,7 s) och 1 800 
 - Varningstestet använde 960×540 vy, kameraförskjutning 250 px och 750 px/s. Stenen blir synlig efter 88 tick medan markören täcker hela varningen på 90 tick. Modellrutten passerade med 0,84 s kvarvarande cooldown och 200 ms reaktionstid. Detta är ett automatiserat geometri-/tidsprov, inte en mänsklig läsbarhetsbedömning.
 - Nya migrationen kompilerades i lokal PostgreSQL i rollbacktransaktion. `db push --dry-run --linked` listade endast `202610020002`; migrationen applicerades därefter och Supabase linked history visar alla 37 lokala och fjärrmigrationer matchade genom `202610020002`.
 
+## Publicering
+
+Källkoden publicerades till Azure `codex/current-prototype` i releasecommit `0a1bdbb881fb068274b0e3870f6511dca990bd95`. Web-exporten byggdes från just den committen med Godot 4.7.2. GitHub Pages `main`-commit är `e07ba28980c1c5f13efb6dd95ca307a5490055f4`; dess Pages-workflow avslutades med success ([workflow](https://github.com/hjelmdev/gravity-run/actions/runs/37005206584)). Aktivt build-ID är `start-audio-rock-fix-0a1bdbb-20261002`; loadern väljer `index.start-audio-rock-fix-0a1bdbb.pck` (2 696 156 byte, SHA-256 `111D3DA567BBC6404C4EBF0EF83E1570B531D869F99BAEAEC0A865341EE80C88`). Root, loader, JS, WASM och PCK svarade HTTP 200. Den publikt hämtade PCK:n matchade exporten byte för byte. Gammal `game-v2`-/`multiplayer-v2`-redirectstruktur lämnades kvar.
+
+Ingen separat interaktiv webbläsare fanns tillgänglig för denna agentkörning. HTTP- och Actions-kontroller verifierar publicerade filer och Pages-bygget, inte att UI:t kör, ljudet hörs eller att autoplaybeteendet fungerar i en verklig browser.
+
 ## Kvarvarande verifieringsgränser
 
 Det rapporterade timeoutfelet är fortfarande **inte bekräftat löst i en riktig inloggad browsermatch**. Klocktestet tar bort den verifierade robusthetsrisken för stabil RTT över 33 ms och diagnosfilen kan nu visa exakt vilken spärr som återstår, men vi saknar ett host-/gästexporterat timeoutspår från användarens browser eller en live 2–3-kontomatch mot GoTrue/PostgREST. Därför går det inte att hävda att den rapporterade orsaken hittats.
