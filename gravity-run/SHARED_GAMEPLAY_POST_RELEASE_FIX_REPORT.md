@@ -34,7 +34,7 @@ Tester kördes lokalt. Denna release har inte verifierats i ett inloggat GoTrue/
 
 ## Publicering
 
-- Azure source branch: `codex/current-prototype`, current commit `a0304ba` (release report), with implementation `fa57a86` and visible version metadata `b497622`.
+- Azure source branch: `codex/current-prototype`; implementation `fa57a86`, visible version metadata `b497622`, and subsequent report-only commits `a0304ba` and `b15ba8d`.
 - GitHub Pages commit `0347442` publicerade aktiv root `https://hjelmdev.github.io/gravity-run/` och bundle under `docs/game/`. Actions workflow avslutades med `success` ([workflow](https://github.com/hjelmdev/gravity-run/actions/runs/37046825559)). Root-loader och game-loader svarade HTTP 200 och pekar på build `shared-run-hud-b497622-20261002`. Publikt nedladdad PCK och Pages-repots PCK matchade byte för byte: 2 773 856 byte, SHA-256 `4ADC3189BD7EB77253292195C1748E455C8DF2B9D500FCAB7B9D9D494D13EAA4`. Den paketerade appkoden byggdes från `b497622`; `a0304ba` innehåller endast den slutliga rapporten.
 
 ## Användarprov
@@ -44,4 +44,5 @@ Tester kördes lokalt. Denna release har inte verifierats i ett inloggat GoTrue/
 3. Prova musikreglaget med hover/klick på dator och expanderareglaget på touch. Bekräfta att mute verkligen stänger av musiken.
 4. För jämförelse av sten, seed `GR8-100000000` kan användas i vanlig challenge-inmatning (seed `100000000`). Observera varning, fall och att stenen stannar som hinder efter nedslag.
 5. Om ett lopp fortfarande visar få coins, spara diagnostik för den rundan så planerade, presenterade, synliga och insamlade objekt kan skiljas åt.
+
 
