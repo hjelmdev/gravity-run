@@ -65,11 +65,18 @@ Orelaterade dirty `main.gd` capture hunks, `ui/main_menu.gd`, `tools/singleplaye
 
 ## Post-release visual follow-up — biome backdrop anchoring
 
-Uppdaterad 2026-10-03 efter rootens godkännande av GPU-fångster. Denna ändring är en ren presentationsfix efter publicerad gen9-release; generator 9, serviceversion `2.1.20261003.5`, fysik, hazardtiming och databasekontrakt är oförändrade. Synlig projektetikett för den nya exporten är `2026.10.03-biome-backdrop-anchor`.
+Uppdaterad 2026-10-03 efter rootens godkännande av GPU-fångster. Denna ändring är en ren presentationsfix efter publicerad gen9-release; generator 9, serviceversion `2.1.20261003.5`, fysik, hazardtiming och databasekontrakt är oförändrade. Synlig projektetikett för den nya exporten är `2026.10.03-gen9-biome-backdrop-anchor`.
 
 - Bakgrundslager repeteras nu i en fast course-/parallaxkoordinat och beskärs med UV-regioner inom varje biomefragment. Texturer behåller fast skala oavsett fragmentbredd. Klassiska stjärnor, grottkristaller och ruiner får samma stabila deterministiska gitter; grottans ridgepolygon beräknar exakta fragmentändpunkter och kan inte måla ut i angränsande tema.
 - Haunted-resursen använder utbytbara SVG-lager för avlägsna ruiner och dämpad dimma via `BiomeDefinition.background_layers`, med konfigurerad storlek, vertikal placering och parallax. Måne/halo och SVG-lager använder en gemensam 540 px logisk bakgrundshöjd för SP och MP, vilket håller dem synliga i den normala spelkorridoren även i portrait och vid SP-zoom.
 - Riktad regression `tools/biome_backdrop_anchor_test.gd` PASS för temaavstånden 4800/14400, 20 px gränsfönster och parallaxfaktorer 0.055/0.12/0.22, med jämförelse mellan hel viewport och uppdelade fragment i 1280- och 540-px layouter. `tools/biome_tile_swap_test.gd` PASS; editor/headless parse PASS. Godots lokala Windows-certifikatstore gav en miljövarning; inga GDScript-/parsefel rapporterades.
 - Aktuella GPU-fångster för SP `main.tscn` och MP `RaceCoursePresentation` finns i `.codex-overnight-review/`: `sp-v9-live-demo-distance-09700.png` är en normal, oförflyttad demo vid 9700 utan omstart och visar måne/ruiner/dimma över den tidigare höga takytan. Övriga SP seam-bilder (`sp-v9-distance-*`, `sp-v9-portrait-distance-*`) är seek-fixturebilder från riktiga main-scenen. MP har landscape- och portrait-seamserier (`mp-v9-distance-*`, `mp-v9-portrait-distance-*`) vid 4790/4800/4810, 9590/9600/9610 och 14390/14400/14410; capturekameran använder kursrelativ camera origin som matchruntime.
 - Root visuellt godkände MP landscape/portrait och normal SP live-demo-bilden vid 9700. Den aktuella visuella uppföljningen är godkänd för scoped release; inga migrationer eller protokolländringar behövs.
+
+### Slutlig publicering
+
+- Source-commit `91170fa9973b1f2f90e102bc2192dc9d3b7ddbba` är pushad till Azure `codex/current-prototype`. En separat statusuppdatering efter publicering dokumenterar Pagesresultatet.
+- Ren Godot 4.7.2-export byggdes från exakt commit `91170fa` i `.codex-clean-biome-91170fa`; `index.pck` är 2,924,696 byte och SHA-256 `65BB84BBCA9B64C3C2DCDD013914608EC1A40C96F543491C7D179FB24D5DEDC3`.
+- Pages-commit `6e9c9fb52a52e4f84879bf583b77f21f911ea3cb` publicerar bunten i `docs/game` och uppdaterar rotloaderns build-ID till `shared-biome-backdrop-gen9-91170fa-20261003`. GitHub Pages-workflow körning `37103205304` slutfördes med `success`.
+- Live root och game loader svarade HTTP 200 och innehöll rätt build-ID respektive `mainPack`. Den publika PCK-hämtningen var exakt 2,924,696 byte med samma SHA-256 som den rena exporten. Ingen ny live-databasmigration behövdes.
 
