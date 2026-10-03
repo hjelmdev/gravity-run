@@ -1,10 +1,10 @@
 # Nattuppdrag: status för gemensamma scener, biomer, såg och täthet
 
-Uppdaterad: 2026-10-03, efter scoped source-push och avslag på live-migrationsbegäran.
+Uppdaterad: 2026-10-03, efter live-migration och verifierad Pages-publicering.
 
 ## Fas
 
-`BLOCKED_ON_USER_APPROVAL` — root har accepterat releasen efter slutreview. Featurecommit `6384278e32f870ba6adf15d4679f682a2fe4a726` och parsefix `9114cb8b3e0ba20136be214d0c2e7391d4b3338c` är pushade till Azure `codex/current-prototype`. Clean export har byggts från `9114cb8` och Pages-payload förberetts lokalt. Live-migration `202610030001` och Pages-publicering är inte gjorda. Supabase `db push --linked` avslogs av auto-review med skälet att den inte fann betrodd användarauktorisation för den specifika live-DB-mutationen. Root har frågat användaren om godkännande. Återförsök inte migrationen innan ett nytt uttryckligt svar kommer; gör ingen indirekt push/publicering före migrationen.
+`PUBLISHED` — user-authorized release is live. Supabase migration `202610030001_generator9_saw_blade_release.sql` was applied and linked history now matches through that version. Azure gameplay commit `6384278` plus clean-build fix `9114cb8` are pushed to `codex/current-prototype` (source branch then advanced with status-only documentation commits). Pages commit `e504354a987981ea8fbb1956a7c5c8aceb519200` publishes the exact clean `9114cb8` export. The Pages workflow completed successfully; the public root and game loader serve the new build ID and the downloaded PCK SHA-256 matches the export.
 
 ## Levererat
 
@@ -12,7 +12,7 @@ Uppdaterad: 2026-10-03, efter scoped source-push och avslag på live-migrationsb
 - TileSet-atlasen byts via resursfält; stödytorna UV-beskärs till verkliga golv-/takintervall och lämnar hål tomma. Steg delas vid gräns och ytan följer slopeprovet. Takets orientering hanteras av resursflaggan. Guide finns i `BIOME_ASSET_GUIDE.md`.
 - Slutliga renderjusteringar efter roots inspektion: cave-dekor hålls dämpad; haunted-ruinerna ligger i den synliga bakgrundskorridoren i både SP och MP; atlasens lutningswedge-celler används inte eftersom deras vinkel ser ut som spikar. Neutral ytcell används tills korrekt tilekonst tillkommer.
 - Gemensamma sten- och sågscener finns. Sågen använder en deterministisk 60 Hz-modell och samma scen i SP/MP; ceiling gap leder till fall, golvlandning fortsätter rörelsen och stödbrist i golv tar bort klingan. Ny v9 generatorprofil innehåller måttligt justerade frekvenser och såg; tidigare v8 och äldre versioner är frysta.
-- Generatorn bygger v9/manifest v4 och matchande synlig build `2026.10.03-shared-biomes-saw-gen9`; serviceversion är `2.1.20261003.5`. Migration `supabase/migrations/202610030001_generator9_saw_blade_release.sql` flyttar aktuella create- och coin-register-grindar till versionen. Lokal kedja/RPC verifierades av root. Live dry-run listade bara denna migration; live-tillämpningen väntar nu på användarens svar efter auto-reviewavslag.
+- Generatorn bygger v9/manifest v4 och matchande synlig build `2026.10.03-shared-biomes-saw-gen9`; serviceversion är `2.1.20261003.5`. Migration `supabase/migrations/202610030001_generator9_saw_blade_release.sql` flyttar aktuella create- och coin-register-grindar till versionen. Root verifierade lokal ren migrationskedja/RPC; live-migrationen är applicerad och linked history verifierad.
 - Showcase-fixture finns i `tools/biome_saw_showcase.tscn`; den visar atlasbyte, terrängkanter, slope/step, icke-rutnätsjusterat gap, tak, runner, mynt, spik, varning och såg i stående/liggande vy. Den är inte publik menyväg.
 
 ## Verifiering
@@ -38,12 +38,13 @@ Fångster ligger i `E:/Utveckling/Gravity Run/.codex-overnight-review/`: `sp-v9-
 - Root har godkänt staging/review. Lokal ren migrationskedja och authenticated RPC verifierades separat av root. Live history visade 39 synkade migrations och endast `202610030001` pending; CLI dry-run visade exakt den migrationen. Ingen live-mutation gjordes efter auto-reviewavslaget.
 - Commits `6384278e32f870ba6adf15d4679f682a2fe4a726` (scoped gameplay) och `9114cb8b3e0ba20136be214d0c2e7391d4b3338c` (clean-build tab-fix) är pushade till Azure. Den senare clean archive:n klarade `--headless --editor --quit` utan parse-/scriptfel och `saw_blade_singleplayer_runtime_test.gd` PASS i faktisk `main.tscn`.
 - Export från exakt `9114cb8` finns i `E:/Utveckling/Gravity Run/.codex-release-9114cb8-v9/out`; PCK `index.pck` är 2,893,748 byte, SHA-256 `A7BE80FE04F5CABD16173CA7AB4F8BB85A1ADCC4F6C99D7749851FE01198454A`. Pages-payload är isolerad i `E:/Utveckling/Gravity Run/.codex-pages-stage-9114cb8`, med mainPack/root build label `shared-biomes-saw-gen9-9114cb8-20261003`. Den är inte kopierad till Pages-repot och inte publicerad.
+- Pages commit `e504354a987981ea8fbb1956a7c5c8aceb519200` publicerade bundle och root wrapper. GitHub Actions `pages build and deployment` rapporterade `success` för just den committen. Live root `https://hjelmdev.github.io/gravity-run/` och `/game/index.html?build=shared-biomes-saw-gen9-9114cb8-20261003` svarade HTTP 200 och innehåller det nya build-ID/mainPack. PCK hämtad från den publika URL:en är 2,893,748 byte med SHA-256 `A7BE80FE04F5CABD16173CA7AB4F8BB85A1ADCC4F6C99D7749851FE01198454A`, exakt samma som clean exporten.
 - Saw route safety är nu riktat provad på vanlig generated v9 seed 1: mätning använde `RunnerMotion`, `surface_at()` från hela resolved manifest och samma distance-trigger/+12 tick activation. Stationär floor-lane kontakter vid 250/500 px/s låg på offsets +592/+775 och täcktes av det accepterade floor threat intervallet +560..+1100. Ingen stationär-lane-kontakt uppstod vid 750 i detta fixture; det rapporteras inte som generellt fri passage. Separat tidsstyrd RunnerMotion-sökning fann grounded floor→ceiling→floor rutt utan kontakt vid 250/500/750, med första flip 300 px före trigger och återgång knuten till roof gap. Det är en riktad route-fixture, inte ett fullständigt bevis för alla seeds, utrustning/cooldowns eller live MP.
 - MP historisk `player_contact_at()` verifierar hit vid sparad saw-pose och miss i cirkelns AABB-hörn; `player_contact()` verifierar också aktuell pose. Den riktiga SP `main.tscn` resolver testar hit och AABB-hörnmiss via shared SawBlade-scenen.
 - Sen sceninstansiering jämförs med MP-world replay efter 4,501 ticks. Root körde dessutom en oberoende korrektionsrepro som matchade en sent skapad SP-scen mot MP efter takgap/landning, samt ett miljon-tick dormant skip på 6 µs; se rootens logg i `.codex-overnight-review/`.
 - Biome-canvascoordinates normaliseras nu via en gemensam absolute-world-x→course-distance-funktion: SP omvandlar sin course-relative camera left till absolute world-x med `PLAYER_X`; MP använder `manifest.start_x`. Tile-grid offset följer samma 180 px origin i båda. Gränsprovet täcker absolut world-x 4790/4800/4810 och 9590/9600/9610.
 - v9 frekvensen mättes endast på tre seedkörningar här. Det finns ingen påstådd garanterad kortare max-gap; högsta svansrisk kräver bredare seedmaterial om root vill ha det efter review.
-- Rendering av löpande vyer verifierades i lokala Godot GPU-fångster. En lokal browserkontroll av första `6384278`-exporten hittade den felaktiga bokstavliga `\t`-indentationen; den exporterades inte. Fixen `9114cb8` reparsades och SP-runtime-testades från ren archive och byggdes om. Root verifierade sedan den korrigerade exporten lokalt på `127.0.0.1:8770/index.html?build=9114cb8`: meny och demo-runner startade visuellt och den nya byggenheten gav inga fel/varningar. Detta är inte publik Pages- eller live-multiplayerverifiering.
+- Rendering av löpande vyer verifierades i lokala Godot GPU-fångster. En lokal browserkontroll av första `6384278`-exporten hittade den felaktiga bokstavliga `\t`-indentationen; den exporterades inte. Fixen `9114cb8` reparsades och SP-runtime-testades från ren archive och byggdes om. Root verifierade korrigerad export lokalt; efter publicering verifierades Pages-workflow, offentligt build-ID/loader och exakt publik PCK-hash. Ingen separat inloggad live-match med två riktiga användarkonton kördes i denna releasekontroll.
 
 ## Sista riktade körningar
 
@@ -58,7 +59,7 @@ Orelaterade dirty `main.gd` capture hunks, `ui/main_menu.gd`, `tools/singleplaye
 
 ## Nästa steg efter root-review
 
-1. Wait for the explicit user response to root's migration-authorization question. Do not retry `db push` before it.
-2. If approved, apply only `202610030001`, verify linked history, then publish the prepared exact export to Pages `docs/game` with the scoped wrapper/build update.
-3. Verify the Pages workflow, live loader/build ID, and published package hash; update this status and report known limits.
+1. Open the public build at `https://hjelmdev.github.io/gravity-run/` and try a v9 singleplayer run using challenge code `GR9-100000014`.
+2. Try a multiplayer room after the v9 database gate is live; compare visible biome transitions and a saw encounter with another player when available.
+3. Report failures with the diagnostics export; generator frequency measurements cover only three representative seeds and do not guarantee shorter worst-case gaps.
 
