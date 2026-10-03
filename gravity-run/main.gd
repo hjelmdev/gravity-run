@@ -141,7 +141,7 @@ func _start_run() -> void:
 	_rock_warning_pulse.call("reset")
 	_rock_warning_accessibility_button.visible = false
 	_render_diagnostic_tick = 0
-\t_render_diagnostic_frames.clear()
+	_render_diagnostic_frames.clear()
 	run_end_panel.visible = false
 	if not demo_mode:
 		AchievementService.begin_run()
@@ -261,7 +261,7 @@ func _process(delta: float) -> void:
 	if not is_instance_valid(player):
 		return
 	var callback_started_usec := Time.get_ticks_usec()
-\tif render_diagnostics_enabled and not _render_diagnostic_frames.is_empty():
+	if render_diagnostics_enabled and not _render_diagnostic_frames.is_empty():
 		var previous_frame: Dictionary = _render_diagnostic_frames.back()
 		previous_frame["next_callback_begin_usec"] = callback_started_usec
 		_render_diagnostic_frames[_render_diagnostic_frames.size() - 1] = previous_frame
