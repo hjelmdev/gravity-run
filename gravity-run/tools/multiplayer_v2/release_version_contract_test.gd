@@ -9,7 +9,7 @@ func _run() -> void:
 	var service_source := _read("res://systems/multiplayer_v2/multiplayer_v2_service.gd")
 	var generator_source := _read("res://systems/course_generator.gd")
 	var config_source := _read("res://project.godot")
-	var migration_path := "res://supabase/migrations/202610020003_generator8_rock_warning_audio.sql"
+	var migration_path := "res://supabase/migrations/202610030001_generator9_saw_blade_release.sql"
 	var migration_source := _read(migration_path)
 	var game_values := _capture(service_source, 'const V2_GAME_VERSION := "([^"]+)"', "service multiplayer version")
 	var generator_values := _capture(generator_source, "const GENERATOR_VERSION := ([0-9]+)", "current generator version")
@@ -27,7 +27,7 @@ func _run() -> void:
 	var config_values := _capture(config_source, 'config/version="([^"]+)"', "visible project build version")
 	var config_version: String = config_values[0] if not config_values.is_empty() else ""
 	_check(not config_version.is_empty() and config_version != "2026.10.02-start-audio-rock-fix1", "project build identifier no longer advertises the stale release")
-	_check(config_version.contains("v8"), "project build identifier names generator v8")
+	_check(config_version.contains("gen9"), "project build identifier names generator v9")
 	if failures == 0:
 		print("Release version contract passed: source v%s/generator %s matches both latest SQL gates and project build %s." % [game_version, generator_version, config_version])
 	quit(1 if failures > 0 else 0)

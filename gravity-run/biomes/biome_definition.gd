@@ -9,6 +9,8 @@ extends Resource
 @export var display_name: String
 @export var tile_set: TileSet
 @export var atlas_source_id: int = 0
+@export var tile_world_size: Vector2i = Vector2i(64, 64)
+@export var flip_ceiling_tiles := true
 @export var palette_row: int = 0
 @export var floor_surface_tiles: Array[Vector2i] = []
 @export var ceiling_surface_tiles: Array[Vector2i] = []
@@ -16,4 +18,14 @@ extends Resource
 @export var slope_down_tiles: Array[Vector2i] = []
 @export var ledge_edge_tiles: Array[Vector2i] = []
 @export var decoration_tiles: Array[Vector2i] = []
+## Optional full-viewport background layers. When present, these replace the
+## renderer's vector fallback motifs and can be swapped without code changes.
+@export var background_layers: Array[Texture2D] = []
+@export var background_layer_tints: Array[Color] = []
 @export var background_color: Color = Color("101827")
+@export var accent_color: Color = Color("42d6c5")
+@export var surface_tint: Color = Color.WHITE
+@export var surface_overlay_color: Color = Color(0.0, 0.0, 0.0, 0.0)
+@export var terrain_fill_color: Color = Color("202d40")
+@export var terrain_edge_color: Color = Color("42d6c5")
+@export var layer_colors: Array[Color] = [Color("26364b"), Color("1d2d42"), Color("19263a")]

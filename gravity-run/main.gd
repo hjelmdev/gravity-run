@@ -25,8 +25,11 @@ const COIN_SCENE := preload("res://collectibles/coin.tscn")
 const LOOT_PICKUP_SCENE := preload("res://collectibles/loot_pickup.tscn")
 const LOOT_PLANNER_SCRIPT := preload("res://systems/loot_spawn_planner.gd")
 const SHARED_COIN_PLANNER_SCRIPT := preload("res://systems/shared_coin_planner.gd")
-const FALLING_ROCK_SCRIPT := preload("res://hazards/falling_rock.gd")
+const FALLING_ROCK_SCENE := preload("res://hazards/falling_rock.tscn")
 const FALLING_ROCK_MODEL := preload("res://systems/falling_rock_model.gd")
+const SAW_BLADE_SCENE := preload("res://hazards/saw_blade.tscn")
+const SAW_BLADE_MODEL := preload("res://systems/saw_blade_model.gd")
+const COURSE_SURFACE_INDEX_SCRIPT := preload("res://systems/course_surface_index.gd")
 const ROCK_WARNING_ICON_SCRIPT := preload("res://systems/rock_warning_icon.gd")
 const ROCK_WARNING_PULSE_SCRIPT := preload("res://systems/rock_warning_pulse.gd")
 const MANIFEST_BUILDER_SCRIPT := preload("res://systems/course_manifest_builder.gd")
@@ -37,6 +40,7 @@ const COURSE_RULESET_SCRIPT := preload("res://systems/course_generation_ruleset.
 const COURSE_RUN_DEFINITION_SCRIPT := preload("res://systems/course_run_definition.gd")
 const TRACK_GAP_SCRIPT := preload("res://terrain/track_gap.gd")
 const COURSE_SURFACE_RENDERER := preload("res://systems/course_surface_renderer.gd")
+const BIOME_RENDERER_SCRIPT := preload("res://biomes/biome_renderer.gd")
 const CoursePresentation := preload("res://systems/race_course_presentation.gd")
 
 @onready var player: Node2D = $Player
@@ -67,6 +71,9 @@ var _singleplayer_simulation_tick := 0
 var _rock_warning_pulse: RefCounted = ROCK_WARNING_PULSE_SCRIPT.new()
 var _rock_warning_accessibility_button: Button
 var _spawned_early_rock_ids: Dictionary = {}
+var _spawned_early_saw_ids: Dictionary = {}
+var _singleplayer_saw_activation_ticks: Dictionary = {}
+var _singleplayer_saw_surface_indexes: Dictionary = {}
 var _step_start_barrel_centers: Dictionary = {}
 var _manifest_builder: RefCounted
 var floor_level_y := screen_height - 80.0
@@ -130,12 +137,11 @@ func _ready() -> void:
 		hud.visible = false
 		$PauseMenu.visible = false
 	_start_run()
-
 func _start_run() -> void:
 	_rock_warning_pulse.call("reset")
 	_rock_warning_accessibility_button.visible = false
 	_render_diagnostic_tick = 0
-	_render_diagnostic_frames.clear()
+\t_render_diagnostic_frames.clear()
 	run_end_panel.visible = false
 	if not demo_mode:
 		AchievementService.begin_run()
@@ -165,6 +171,9 @@ func _start_run() -> void:
 	coin_distance = 0.0
 	_spawned_shared_coin_ids.clear()
 	_spawned_early_rock_ids.clear()
+	_spawned_early_saw_ids.clear()
+	_singleplayer_saw_activation_ticks.clear()
+	_singleplayer_saw_surface_indexes.clear()
 	_pending_shared_coins.clear()
 	_shared_coin_planned_until = PLAYER_X + SHARED_COIN_PLANNER_SCRIPT.COURSE_START_OFFSET
 	_shared_coin_planner = SHARED_COIN_PLANNER_SCRIPT.new()
@@ -252,7 +261,7 @@ func _process(delta: float) -> void:
 	if not is_instance_valid(player):
 		return
 	var callback_started_usec := Time.get_ticks_usec()
-	if render_diagnostics_enabled and not _render_diagnostic_frames.is_empty():
+\tif render_diagnostics_enabled and not _render_diagnostic_frames.is_empty():
 		var previous_frame: Dictionary = _render_diagnostic_frames.back()
 		previous_frame["next_callback_begin_usec"] = callback_started_usec
 		_render_diagnostic_frames[_render_diagnostic_frames.size() - 1] = previous_frame
@@ -260,7 +269,7 @@ func _process(delta: float) -> void:
 	_render_callback_begin_usec = callback_started_usec
 	_render_interpolation_fraction = Engine.get_physics_interpolation_fraction()
 	for obstacle in obstacles:
-		if is_instance_valid(obstacle) and obstacle.is_in_group("falling_rocks") and obstacle.has_method("set_render_fraction"):
+		if is_instance_valid(obstacle) and obstacle.has_method("set_render_fraction") and (obstacle.is_in_group("falling_rocks") or obstacle.is_in_group("saw_blades")):
 			obstacle.call("set_render_fraction", _render_interpolation_fraction)
 	_render_presentation_sample_usec = Time.get_ticks_usec()
 	_render_player_position = _presentation.sample(_render_interpolation_fraction)
@@ -391,19 +400,32 @@ func _physics_process(delta: float) -> void:
 		var spawn_line := course_distance + event_spawn_lead
 		if _active_seed_version >= COURSE_GENERATOR_SCRIPT.PUBLISHED_SHARED_GENERATOR_VERSION:
 			var rock_spawn_line := course_distance + FALLING_ROCK_MODEL.TRIGGER_LEAD + 300.0
+			var saw_spawn_line := course_distance + SAW_BLADE_MODEL.SPAWN_LEAD
 			for planned_event in course_generator.get_planned_events():
-				if str(planned_event.get("kind", "")) != "rock" or float(planned_event.get("course_distance", INF)) > rock_spawn_line:
-					continue
-				var rock_id := _singleplayer_rock_key(planned_event)
-				if not _spawned_early_rock_ids.has(rock_id):
-					_spawned_early_rock_ids[rock_id] = true
-					_spawn_course_event(planned_event)
+				var planned_kind := str(planned_event.get("kind", ""))
+				var event_distance := float(planned_event.get("course_distance", INF))
+				if planned_kind == "rock" and event_distance <= rock_spawn_line:
+					var rock_id := _singleplayer_rock_key(planned_event)
+					if not _spawned_early_rock_ids.has(rock_id):
+						_spawned_early_rock_ids[rock_id] = true
+						_spawn_course_event(planned_event)
+				elif planned_kind == "saw" and event_distance <= saw_spawn_line:
+					var saw_id := _singleplayer_saw_key(planned_event)
+					if not _spawned_early_saw_ids.has(saw_id):
+						_spawned_early_saw_ids[saw_id] = true
+						_spawn_course_event(planned_event)
 		for event in course_generator.pop_events_until(spawn_line):
-			if str(event.get("kind", "")) == "rock":
+			var event_kind := str(event.get("kind", ""))
+			if event_kind == "rock":
 				var event_id := _singleplayer_rock_key(event)
 				if _spawned_early_rock_ids.has(event_id):
 					continue
 				_spawned_early_rock_ids[event_id] = true
+			elif event_kind == "saw":
+				var event_id := _singleplayer_saw_key(event)
+				if _spawned_early_saw_ids.has(event_id):
+					continue
+				_spawned_early_saw_ids[event_id] = true
 			_spawn_course_event(event)
 		if RUN_LOOT_ENABLED:
 			for loot_event in loot_spawn_planner.pop_events_until(spawn_line):
@@ -429,6 +451,7 @@ func _physics_process(delta: float) -> void:
 		_update_demo_ai(delta)
 	player.call("advance", delta, _floor_surface_y(float(player.get("world_x"))), _ceiling_surface_y(float(player.get("world_x"))), _surface_is_solid_at_x(float(player.get("world_x")), false), _surface_is_solid_at_x(float(player.get("world_x")), true))
 	_update_falling_rocks(previous_world_x, float(player.get("world_x")))
+	_update_saw_blades(previous_world_x, float(player.get("world_x")))
 	_presentation.push(player.position)
 	var run_end_requested := player.position.y < -64.0 or player.position.y > WORLD_HEIGHT + 64.0
 
@@ -444,6 +467,8 @@ func _physics_process(delta: float) -> void:
 			var barrel_size: Vector2 = obstacle.get("size")
 			var barrel_center: Vector2 = HAZARD_RULES_SCRIPT.barrel_center(obstacle.global_position, barrel_size.x, barrel_size.y, bool(obstacle.get("from_ceiling")))
 			impact = HAZARD_RULES_SCRIPT.player_impact(player_rect, "barrel", Rect2(), [], barrel_center, HAZARD_RULES_SCRIPT.barrel_radius(barrel_size.x, barrel_size.y))
+		elif obstacle.is_in_group("saw_blades"):
+			impact = _saw_endpoint_impact(player_rect, obstacle)
 		else:
 			var kind := "edge" if obstacle.is_in_group("blocking_edges") else "rect"
 			impact = HAZARD_RULES_SCRIPT.player_impact(player_rect, kind, obstacle.call("get_hitbox_rect"))
@@ -712,13 +737,36 @@ func _spawn_course_event(event: Dictionary) -> void:
 					near_terrain = true
 					break
 			if not near_terrain and _floor_surface_y(event_x) - _ceiling_surface_y(event_x) >= 260.0:
-				var rock := FALLING_ROCK_SCRIPT.new() as Node2D
+				var rock := FALLING_ROCK_SCENE.instantiate() as Node2D
 				var rock_event_id := _singleplayer_rock_key(event)
 				var rock_event := {"event_id": rock_event_id, "kind": "rock", "x": event_x, "width": width, "height": height, "floor_y": _floor_surface_y(event_x), "ceiling_y": _ceiling_surface_y(event_x), "trigger_lead": float(event.get("trigger_lead", FALLING_ROCK_MODEL.TRIGGER_LEAD)), "warning_ticks": int(event.get("warning_ticks", FALLING_ROCK_MODEL.WARNING_TICKS)), "fall_ticks": int(event.get("fall_ticks", FALLING_ROCK_MODEL.FALL_TICKS)), "burial_depth": float(event.get("burial_depth", FALLING_ROCK_MODEL.BURIAL_DEPTH))}
 				rock.call("configure", rock_event)
 				rock.name = "FallingRock_%s" % rock_event_id
 				add_child(rock)
 				obstacles.append(rock)
+		&"saw":
+			var saw_event := _resolve_singleplayer_saw_event(event)
+			if saw_event.is_empty():
+				return
+			var saw_event_id := str(saw_event.get("event_id", _singleplayer_saw_key(event)))
+			if bool(saw_event.get("from_ceiling", false)):
+				var gap := TRACK_GAP_SCRIPT.new() as TrackGap
+				gap.position = Vector2(float(saw_event.get("roof_gap_x", event_x + SAW_BLADE_MODEL.ROOF_GAP_OFFSET)), 0.0)
+				gap.configure(float(saw_event.get("roof_gap_width", SAW_BLADE_MODEL.ROOF_GAP_WIDTH)), true)
+				gap.name = "SawRoofGap_%s" % saw_event_id
+				add_child(gap)
+				gaps.append(gap)
+			var saw := SAW_BLADE_SCENE.instantiate() as Node2D
+			var saw_key := str(saw_event.get("source_saw_key", _singleplayer_saw_key(event)))
+			var saw_surface_index: RefCounted = _singleplayer_saw_surface_indexes.get(saw_key)
+			var surface_callable := Callable(saw_surface_index, "surface_at") if saw_surface_index != null else Callable(self, "_saw_surface_at")
+			saw.call("configure", saw_event, surface_callable, PLAYER_X, 0)
+			saw.name = "SawBlade_%s" % saw_event_id
+			add_child(saw)
+			obstacles.append(saw)
+			if _singleplayer_saw_activation_ticks.has(saw_key):
+				saw.call("set_activation_tick", int(_singleplayer_saw_activation_ticks[saw_key]))
+				saw.call("set_simulation_tick", _singleplayer_simulation_tick)
 		_:
 			_spawn_custom_course_event(event, event_x)
 
@@ -756,6 +804,47 @@ func _singleplayer_rock_key(event: Dictionary) -> String:
 	# Pair with its deterministic course position so early-spawn and normal
 	# event-pop paths deduplicate the same rock without suppressing later rocks.
 	return "%s:%.3f" % [str(event.get("id", "rock")), float(event.get("course_distance", -1.0))]
+
+func _singleplayer_saw_key(event: Dictionary) -> String:
+	return "%s:%.3f" % [str(event.get("id", "saw")), float(event.get("course_distance", -1.0))]
+
+func _resolve_singleplayer_saw_event(source_event: Dictionary) -> Dictionary:
+	if course_generator == null or _manifest_builder == null:
+		return {}
+	var source_distance := float(source_event.get("course_distance", 0.0))
+	var support_horizon := source_distance + SAW_BLADE_MODEL.START_OFFSET + 3000.0
+	course_generator.ensure_horizon(support_horizon, _run_speed(), screen_height, COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE)
+	var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", course_generator.get_planned_events(), ceili(support_horizon))
+	var target_x := PLAYER_X + source_distance
+	for resolved_event in resolved_events:
+		if str(resolved_event.get("kind", "")) == "saw" and absf(float(resolved_event.get("x", INF)) - target_x) < 0.5:
+			var result := resolved_event.duplicate(true)
+			result["source_saw_key"] = _singleplayer_saw_key(source_event)
+			var surface_index: RefCounted = COURSE_SURFACE_INDEX_SCRIPT.new()
+			surface_index.call("configure", resolved_events, WORLD_HEIGHT - 80.0, 80.0)
+			_singleplayer_saw_surface_indexes[_singleplayer_saw_key(source_event)] = surface_index
+			return result
+	return {}
+
+func _saw_surface_at(x: float, ceiling: bool) -> Dictionary:
+	return {"y": _ceiling_surface_y(x) if ceiling else _floor_surface_y(x), "supported": _surface_is_solid_at_x(x, ceiling)}
+
+func _update_saw_blades(previous_world_x: float = -1.0, current_world_x: float = -1.0) -> void:
+	if current_world_x >= 0.0 and is_finite(current_world_x):
+		for planned_event in course_generator.get_planned_events():
+			if str(planned_event.get("kind", "")) != "saw":
+				continue
+			var saw_key := _singleplayer_saw_key(planned_event)
+			var trigger_x := PLAYER_X + float(planned_event.get("course_distance", 0.0)) + SAW_BLADE_MODEL.START_OFFSET - SAW_BLADE_MODEL.SPAWN_LEAD
+			if not _singleplayer_saw_activation_ticks.has(saw_key) and current_world_x >= trigger_x:
+				_singleplayer_saw_activation_ticks[saw_key] = _singleplayer_simulation_tick + SAW_BLADE_MODEL.ACTIVATION_DELAY_TICKS
+	for obstacle in obstacles:
+		if is_instance_valid(obstacle) and obstacle.is_in_group("saw_blades"):
+			var event: Dictionary = obstacle.get("event")
+			var saw_key := str(event.get("source_saw_key", _singleplayer_saw_key(event)))
+			if _singleplayer_saw_activation_ticks.has(saw_key) and int(obstacle.get("state").get("activation_tick", -1)) != int(_singleplayer_saw_activation_ticks[saw_key]):
+				obstacle.call("set_activation_tick", int(_singleplayer_saw_activation_ticks[saw_key]))
+			obstacle.call("set_simulation_tick", _singleplayer_simulation_tick)
 
 func _update_falling_rocks(previous_x: float, current_x: float) -> void:
 	for obstacle in obstacles:
@@ -1002,7 +1091,7 @@ func _earliest_lethal_contact_fraction(start_rect: Rect2, finish_rect: Rect2) ->
 			continue
 		var kind := "edge" if obstacle.is_in_group("blocking_edges") else "rect"
 		var fraction := -1.0
-		if obstacle.is_in_group("falling_rocks"):
+		if obstacle.is_in_group("falling_rocks") or obstacle.is_in_group("saw_blades"):
 			fraction = float(obstacle.call("swept_contact_fraction", start_rect, finish_rect, maxi(_singleplayer_simulation_tick - 1, 0), _singleplayer_simulation_tick, Vector2(34.0, 44.0)))
 		elif obstacle.is_in_group("spikes") and obstacle.has_method("get_world_triangles"):
 			if immune:
@@ -1033,6 +1122,15 @@ func _earliest_lethal_contact_fraction(start_rect: Rect2, finish_rect: Rect2) ->
 				if candidate >= 0.0:
 					earliest = minf(earliest, candidate)
 	return earliest
+
+func _saw_endpoint_impact(player_rect: Rect2, obstacle: Node2D) -> int:
+	if not is_instance_valid(obstacle) or not obstacle.is_in_group("saw_blades"):
+		return HAZARD_RULES_SCRIPT.PlayerImpact.NONE
+	var saw_state: Dictionary = obstacle.get("state")
+	if not bool(saw_state.get("active", false)) or bool(saw_state.get("removed", false)):
+		return HAZARD_RULES_SCRIPT.PlayerImpact.NONE
+	var center := Vector2(float(saw_state.get("x", 0.0)), float(saw_state.get("y", 0.0)))
+	return HAZARD_RULES_SCRIPT.PlayerImpact.LETHAL if HAZARD_RULES_SCRIPT.circle_intersects_rect(center, SAW_BLADE_MODEL.RADIUS, player_rect) else HAZARD_RULES_SCRIPT.PlayerImpact.NONE
 
 func _draw() -> void:
 	var draw_started_usec := Time.get_ticks_usec() if render_diagnostics_enabled else -1
@@ -1137,12 +1235,10 @@ func _draw_seed_finish_markers() -> void:
 
 func _draw_background() -> void:
 	var view_left := _render_course_distance
-	draw_rect(Rect2(Vector2(view_left, 0.0), Vector2(screen_width, screen_height)), Color("101827"))
-	# Use the continuous course coordinate: integer meter rounding made the
-	# stars drift gently while course objects remain at fixed world coordinates.
-	for i in range(18):
-		var x := view_left + fposmod(float(i * 83) + _render_course_distance * 0.12, screen_width)
-		draw_circle(Vector2(x, 58.0 + float((i * 47) % 390)), 1.5, Color("26364b"))
+	# The same distance-addressed backdrop renderer is used by MP presentation.
+	# SP world coordinates begin at PLAYER_X, matching manifest.start_x in MP.
+	# Normalize backdrop phase by that same origin so absolute world points match.
+	BIOME_RENDERER_SCRIPT.draw_backdrop(self, view_left, Vector2(screen_width, screen_height), BIOME_RENDERER_SCRIPT.course_distance_at_world_x(view_left + PLAYER_X, PLAYER_X))
 
 func _draw_track() -> void:
 	var surface_gaps: Array[Dictionary] = []
@@ -1157,4 +1253,4 @@ func _draw_track() -> void:
 		terrain_boundaries.append(float(terrain.call("get_end_x")))
 		if terrain.has_method("is_terrain_step") and bool(terrain.call("is_terrain_step")):
 			step_positions.append(float(terrain.call("get_start_x")))
-	COURSE_SURFACE_RENDERER.draw_track(self, _render_course_distance, Vector2(screen_width, screen_height), surface_gaps, terrain_boundaries, step_positions, Callable(self, "_surface_y_at"), 0.0)
+	COURSE_SURFACE_RENDERER.draw_track(self, _render_course_distance, Vector2(screen_width, screen_height), surface_gaps, terrain_boundaries, step_positions, Callable(self, "_surface_y_at"), 0.0, null, BIOME_RENDERER_SCRIPT.course_distance_at_world_x(PLAYER_X, 0.0))

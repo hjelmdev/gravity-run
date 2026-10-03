@@ -113,6 +113,14 @@ func build_threat_intervals(event: Dictionary) -> Array[Dictionary]:
 		var half_width := float(event.get("width", 90.0)) * 0.5 + 60.0
 		intervals.append({"start": forecast_center - half_width, "end": forecast_center + half_width, "blocked_lanes": FLOOR_LANE})
 		return intervals
+	if StringName(event.get("kind", "")) == &"saw":
+		# Saw activation is distance-triggered, then the blade moves at its own
+		# fixed speed. The supported runner speed range changes where it meets
+		# the blade. Reserve the conservative floor corridor for either origin;
+		# a ceiling blade can fall through its authored roof gap and then becomes
+		# a floor hazard. The ceiling remains the planner's escape lane.
+		intervals.append({"start": forecast_center + 560.0, "end": forecast_center + 1100.0, "blocked_lanes": FLOOR_LANE})
+		return intervals
 	if not threat_windows.is_empty():
 		for window in threat_windows:
 			var mask := int(round(window.z))

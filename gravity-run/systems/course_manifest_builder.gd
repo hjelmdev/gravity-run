@@ -7,6 +7,7 @@ const CourseRulesetScript := preload("res://systems/course_generation_ruleset.gd
 const CourseRunDefinitionScript := preload("res://systems/course_run_definition.gd")
 const ManifestScript := preload("res://systems/multiplayer_course_manifest.gd")
 const CoinPlanner := preload("res://systems/shared_coin_planner.gd")
+const SawBladeModel := preload("res://systems/saw_blade_model.gd")
 
 const PLAYER_START_X := 180.0
 const WORLD_WIDTH := 960.0
@@ -39,7 +40,7 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 	var source_events: Array[Dictionary] = generator.get_planned_events()
 	var manifest := ManifestScript.new() as MultiplayerCourseManifest
 	manifest.generator_version = generator_version
-	manifest.manifest_version = 3 if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION else 2
+	manifest.manifest_version = 4 if generator_version >= CourseGenerator.GENERATOR_VERSION else (3 if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION else 2)
 	manifest.course_identity = str(definition.call("get_course_identity"))
 	manifest.seed_value = seed_value
 	manifest.course_length_px = course_length_px
@@ -59,6 +60,9 @@ func _make_multiplayer_ruleset(generator_version: int) -> Resource:
 	var ruleset := CourseRulesetScript.new() as Resource
 	ruleset.set("ruleset_id", &"multiplayer_race")
 	if generator_version >= CourseGenerator.GENERATOR_VERSION:
+		ruleset.set("revision", 6)
+		ruleset.set("event_density", 1.55)
+	elif generator_version >= CourseGenerator.PREVIOUS_CURRENT_GENERATOR_VERSION:
 		ruleset.set("revision", 5)
 		ruleset.set("event_density", 1.5)
 	elif generator_version >= CourseGenerator.ROCK_SAFE_GENERATOR_VERSION:
@@ -245,6 +249,34 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int) ->
 					"burial_depth": float(source.get("burial_depth", 24.0)),
 					"from_ceiling": true,
 				})
+			"saw":
+				var from_ceiling_saw := bool(source.get("from_ceiling", false))
+				var saw_floor_y := _surface_y_at(resolved, event_x, false)
+				var saw_ceiling_y := _surface_y_at(resolved, event_x, true)
+				if saw_floor_y - saw_ceiling_y < 260.0:
+					event_index += 1
+					continue
+				var start_offset := SawBladeModel.START_OFFSET
+				var gap_offset := SawBladeModel.ROOF_GAP_OFFSET
+				var gap_width := SawBladeModel.ROOF_GAP_WIDTH
+				var saw_x := event_x + start_offset
+				var saw_record := {
+					"event_id": event_prefix,
+					"kind": "saw",
+					"x": event_x,
+					"spawn_x": saw_x,
+					"spawn_lead": SawBladeModel.SPAWN_LEAD,
+					"start_offset": start_offset,
+					"floor_y": saw_floor_y,
+					"ceiling_y": saw_ceiling_y,
+					"from_ceiling": from_ceiling_saw,
+				}
+				if from_ceiling_saw:
+					var roof_gap_x := event_x + gap_offset
+					resolved.append({"event_id": event_prefix + "_roof_gap", "kind": "gap", "x": roof_gap_x, "width": gap_width, "from_ceiling": true})
+					saw_record["roof_gap_x"] = roof_gap_x
+					saw_record["roof_gap_width"] = gap_width
+				resolved.append(saw_record)
 			_:
 				push_error("Unsupported multiplayer course event kind '%s'." % kind)
 		event_index += 1

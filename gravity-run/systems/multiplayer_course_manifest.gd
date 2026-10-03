@@ -60,7 +60,7 @@ func calculate_hash() -> String:
 
 func load_canonical_dictionary(data: Dictionary, expected_wire_hash := "", wire_payload := PackedByteArray()) -> bool:
 	manifest_version = int(data.get("manifest_version", -1))
-	if manifest_version not in [2, 3] or not data.get("world", {}) is Dictionary:
+	if manifest_version not in [2, 3, 4] or not data.get("world", {}) is Dictionary:
 		return false
 	if not expected_wire_hash.is_empty():
 		if expected_wire_hash.length() != 64 or wire_payload.is_empty():
@@ -122,7 +122,7 @@ func validate() -> String:
 		return "The multiplayer world dimensions are invalid."
 	if events.size() > 4000:
 		return "The multiplayer manifest has too many events."
-	if manifest_version not in [2, 3] or (generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and manifest_version != 3) or (generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and manifest_version != 2):
+	if manifest_version not in [2, 3, 4] or (generator_version >= CourseGenerator.GENERATOR_VERSION and manifest_version != 4) or (generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and generator_version < CourseGenerator.GENERATOR_VERSION and manifest_version != 3) or (generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and manifest_version != 2):
 		return "The course generator and manifest versions are incompatible."
 	var previous_x := -INF
 	for event in events:
@@ -131,7 +131,7 @@ func validate() -> String:
 		var event_x := float(event.x)
 		if not is_finite(event_x) or event_x < start_x or event_x > finish_x + 1000.0 or event_x < previous_x:
 			return "Manifest events must be finite, ordered, and inside the course bounds."
-		if str(event.kind) not in ["spikes", "block", "barrels", "gap", "step", "slope", "rock"] or (str(event.kind) == "rock" and generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION):
+		if str(event.kind) not in ["spikes", "block", "barrels", "gap", "step", "slope", "rock", "saw"] or (str(event.kind) == "rock" and generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION) or (str(event.kind) == "saw" and generator_version < CourseGenerator.GENERATOR_VERSION):
 			return "The manifest contains an unsupported dynamic or unknown event type."
 		if str(event.kind) == "rock":
 			var width := float(event.get("width", NAN))
@@ -141,6 +141,19 @@ func validate() -> String:
 			var max_warning_ticks := 120 if generator_version >= 8 else 90
 			if not is_finite(width) or not is_finite(height) or width < 60.0 or width > 140.0 or height < 60.0 or height > 150.0 or warning < 20 or warning > max_warning_ticks or fall < 8 or fall > 45 or not is_finite(float(event.get("floor_y", NAN))) or not is_finite(float(event.get("ceiling_y", NAN))):
 				return "The falling rock has invalid versioned geometry or timing."
+		if str(event.kind) == "saw":
+			var spawn_x := float(event.get("spawn_x", NAN))
+			var floor_y := float(event.get("floor_y", NAN))
+			var ceiling_y := float(event.get("ceiling_y", NAN))
+			var spawn_lead := float(event.get("spawn_lead", NAN))
+			if not is_finite(spawn_x) or not is_finite(floor_y) or not is_finite(ceiling_y) or not is_finite(spawn_lead) or spawn_lead < 1200.0 or spawn_lead > 2000.0 or absf(spawn_x - float(event.x)) < 1000.0 or floor_y - ceiling_y < 260.0:
+				return "The saw blade has invalid versioned geometry."
+			if bool(event.get("from_ceiling", false)):
+				var gap_x := float(event.get("roof_gap_x", NAN))
+				var gap_width := float(event.get("roof_gap_width", NAN))
+				var gap_offset := gap_x - float(event.x)
+				if not is_finite(gap_x) or not is_finite(gap_width) or gap_offset < 600.0 or gap_offset > 1300.0 or gap_x >= spawn_x or gap_width < 80.0 or gap_width > 120.0:
+					return "The ceiling-origin saw is missing its safe roof-gap route."
 		previous_x = event_x
 	var seen_collectibles: Dictionary = {}
 	if collectibles.size() > CoinPlanner.MAX_PLANNED_COINS or (manifest_version == 2 and not collectibles.is_empty()):

@@ -7,6 +7,7 @@ const CourseGeneratorScript := preload("res://systems/course_generator.gd")
 const LedgerScript := preload("res://systems/multiplayer_v2/v2_world_event_ledger.gd")
 const SurfaceIndexScript := preload("res://systems/course_surface_index.gd")
 const FallingRockModel := preload("res://systems/falling_rock_model.gd")
+const SawBladeModel := preload("res://systems/saw_blade_model.gd")
 
 const TICK_RATE := 60.0
 const FIXED_DELTA := 1.0 / TICK_RATE
@@ -18,6 +19,9 @@ var elapsed := 0.0
 var barrels: Array[Dictionary] = []
 var coins: Array[Dictionary] = []
 var rocks: Array[Dictionary] = []
+var saws: Array[Dictionary] = []
+var _previous_saw_states: Dictionary = {}
+var _saw_history: Dictionary = {}
 var entity_ledger: MultiplayerV2WorldEventLedger = LedgerScript.new()
 var _entity_by_event: Dictionary = {}
 var _barrel_history: Dictionary = {}
@@ -37,6 +41,9 @@ func configure(course_manifest: Resource) -> String:
 	barrels.clear()
 	coins.clear()
 	rocks.clear()
+	saws.clear()
+	_previous_saw_states.clear()
+	_saw_history.clear()
 	_previous_render_barrels.clear()
 	_barrel_history.clear()
 	_entity_by_event.clear()
@@ -59,11 +66,13 @@ func configure(course_manifest: Resource) -> String:
 				barrels.append(barrel)
 				entities.append({"entity_id": entity_id, "incarnation": 1, "kind": "barrel", "health": 1})
 				_entity_by_event[entity_id] = {"kind": "barrel", "event_id": event_id}
-		elif kind in ["block", "step", "rock"]:
+		elif kind in ["block", "step", "rock", "saw"]:
 			entities.append({"entity_id": event_id, "incarnation": 1, "kind": kind, "health": 1})
 			_entity_by_event[event_id] = {"kind": kind, "event_id": event_id}
 			if kind == "rock":
 				rocks.append(event.duplicate(true))
+			elif kind == "saw":
+				saws.append({"event_id": event_id, "event": event.duplicate(true), "state": SawBladeModel.initial_state(event, float(manifest.start_x), 0)})
 	for collectible in manifest.collectibles:
 		var coin: Dictionary = collectible.duplicate(true)
 		coin["incarnation"] = 1
@@ -71,12 +80,17 @@ func configure(course_manifest: Resource) -> String:
 		entities.append({"entity_id": str(coin.entity_id), "incarnation": 1, "kind": "coin", "health": 0})
 	entity_ledger.reset(entities)
 	_barrel_history[0] = barrels.duplicate(true)
+	_record_saw_history(0)
 	return ""
 
 func step_to(next_tick: int) -> bool:
 	if manifest == null or next_tick != tick + 1:
 		return false
 	_previous_render_barrels.clear()
+	_previous_saw_states.clear()
+	for saw in saws:
+		var saw_id := str(saw.get("event_id", ""))
+		_previous_saw_states[saw_id] = (saw.get("state", {}) as Dictionary).duplicate(true)
 	for barrel in barrels:
 		_previous_render_barrels[str(barrel.get("entity_id", ""))] = barrel.duplicate(true)
 	tick = next_tick
@@ -93,6 +107,10 @@ func step_to(next_tick: int) -> bool:
 		var floor_info := surface_at(projected_x, false)
 		HazardRules.advance_barrel(barrel, FIXED_DELTA, movement, float(floor_info.y), _surface_angle_at(projected_x, false), bool(floor_info.supported))
 		_resolve_barrel_interactions(barrel)
+	for saw in saws:
+		var saw_event: Dictionary = saw.get("event", {})
+		saw["state"] = SawBladeModel.advance(saw_event, saw.get("state", {}), tick, Callable(self, "surface_at"))
+	_record_saw_history(tick)
 	_barrel_history[tick] = barrels.duplicate(true)
 	while _barrel_history.size() > 121:
 		var oldest: int = int(_barrel_history.keys().min())
@@ -114,7 +132,16 @@ func render_state(fraction: float) -> Dictionary:
 		var render_tick := float(tick - 1) + clampf(fraction, 0.0, 1.0)
 		var center := FallingRockModel.center_at(event, activation_tick, render_tick)
 		rendered_rocks.append({"event_id": entity_id, "activation_tick": activation_tick, "tick": render_tick, "phase": FallingRockModel.phase_at(event, activation_tick, floori(render_tick)), "x": center.x, "y": center.y, "rect": FallingRockModel.hitbox_at(event, activation_tick, render_tick), "event": event})
-	return {"barrels": rendered, "coins": coins, "rocks": rendered_rocks, "entities": entity_ledger.entities}
+	var rendered_saws: Array[Dictionary] = []
+	for saw in saws:
+		var saw_id := str(saw.get("event_id", ""))
+		var current_state: Dictionary = saw.get("state", {}).duplicate(true)
+		var previous_state: Dictionary = _previous_saw_states.get(saw_id, current_state)
+		if bool(current_state.get("active", false)) and bool(previous_state.get("active", false)):
+			for key in ["x", "y", "roll_angle"]:
+				current_state[key] = lerpf(float(previous_state.get(key, current_state.get(key, 0.0))), float(current_state.get(key, 0.0)), clampf(fraction, 0.0, 1.0))
+		rendered_saws.append({"event_id": saw_id, "state": current_state, "event": saw.get("event", {})})
+	return {"barrels": rendered, "coins": coins, "rocks": rendered_rocks, "saws": rendered_saws, "entities": entity_ledger.entities}
 
 func barrel_presentation_probe(entity_id: String, presentation_tick: float, fraction: float) -> Dictionary:
 	var current: Dictionary = {}
@@ -168,7 +195,7 @@ func player_contact(player_state: Dictionary) -> Dictionary:
 	return _player_contact_against(player_state, barrels, tick)
 
 func player_contact_at(player_state: Dictionary, simulation_tick: int) -> Dictionary:
-	if not _barrel_history.has(simulation_tick):
+	if not _barrel_history.has(simulation_tick) or not _saw_history.has(simulation_tick):
 		return {"kind": "history_missing"}
 	return _player_contact_against(player_state, _barrel_history[simulation_tick], simulation_tick)
 
@@ -229,6 +256,11 @@ func _player_contact_against(player_state: Dictionary, barrel_state: Array, simu
 			if rock_rect.size != Vector2.ZERO and HazardRules.player_impact(rect, "block", rock_rect) == HazardRules.PlayerImpact.LETHAL:
 				return {"kind": "terminal", "reason": "falling_rock", "entity_id": event_id, "event_id": event_id}
 			continue
+		if kind == "saw":
+			var saw_state := _saw_state_for_event(event_id, simulation_tick)
+			if bool(saw_state.get("active", false)) and not bool(saw_state.get("removed", false)) and HazardRules.circle_intersects_rect(Vector2(float(saw_state.get("x", 0.0)), float(saw_state.get("y", 0.0))), SawBladeModel.RADIUS, rect):
+				return {"kind": "terminal", "reason": "saw_blade", "entity_id": event_id, "event_id": event_id}
+			continue
 		if kind == "spikes":
 			var triangles := HazardRules.spike_group_triangles(float(event.get("start_x", event.get("x", 0.0))), float(event.get("y", 0.0)), int(event.get("count", 1)), float(event.get("spacing", CourseGeneratorScript.SPIKE_GROUP_SPACING)), CourseGeneratorScript.SPIKE_WIDTH, CourseGeneratorScript.SPIKE_HEIGHT, bool(event.get("from_ceiling", false)))
 			if HazardRules.player_impact(rect, "spikes", Rect2(), triangles) == HazardRules.PlayerImpact.LETHAL:
@@ -278,6 +310,20 @@ func first_static_terminal_contact(previous: Dictionary, proposed: Dictionary) -
 				var rock_pose := start.lerp(end, rock_fraction)
 				best = {"kind": "terminal", "reason": "falling_rock", "entity_id": entity_id, "event_id": entity_id, "fraction": rock_fraction, "world_x": rock_pose.x, "y": rock_pose.y}
 			continue
+		if kind == "saw":
+			var previous_saw := _saw_state_for_event(entity_id, maxi(tick - 1, 0))
+			var current_saw := _saw_state_for_event(entity_id, tick)
+			if bool(current_saw.get("active", false)) and not bool(current_saw.get("removed", false)):
+				var current_center := Vector2(float(current_saw.get("x", 0.0)), float(current_saw.get("y", 0.0)))
+				var previous_center := current_center
+				if bool(previous_saw.get("active", false)) and not bool(previous_saw.get("removed", false)):
+					previous_center = Vector2(float(previous_saw.get("x", current_center.x)), float(previous_saw.get("y", current_center.y)))
+				var fraction := HazardRules.swept_rect_circle_fraction(rect, end - start - (current_center - previous_center), previous_center, SawBladeModel.RADIUS)
+				if fraction >= 0.0 and fraction < first_fraction:
+					first_fraction = fraction
+					var saw_pose := start.lerp(end, fraction)
+					best = {"kind": "terminal", "reason": "saw_blade", "entity_id": entity_id, "event_id": entity_id, "fraction": fraction, "world_x": saw_pose.x, "y": saw_pose.y}
+			continue
 		if kind in ["block", "step"] and not entity_ledger.is_active(entity_id):
 			continue
 		# Cull distant events before constructing their polygon groups.
@@ -322,6 +368,8 @@ func apply_world_commit(commit: Dictionary) -> String:
 	if result not in ["applied", "duplicate"]:
 		return result
 	var entity_id := str(commit.get("entity_id", ""))
+	if result == "applied" and str(commit.get("action", "")) == "activate_saw":
+		_rebuild_saw_history_for_event(entity_id)
 	if str(entity_ledger.entities.get(entity_id, {}).get("state", "")) == "destroyed":
 		for barrel in barrels:
 			if str(barrel.get("entity_id", "")) == entity_id:
@@ -332,6 +380,7 @@ func apply_world_commit(commit: Dictionary) -> String:
 func apply_baseline(value: Dictionary) -> bool:
 	if not entity_ledger.restore_baseline(value):
 		return false
+	_rebuild_saw_history()
 	for barrel in barrels:
 		var entity: Dictionary = entity_ledger.entities.get(str(barrel.entity_id), {})
 		barrel.destroyed = str(entity.get("state", "active")) != "active"
@@ -344,7 +393,7 @@ func apply_deterministic_destruction(entity_id: String, simulation_tick: int) ->
 	return apply_world_commit(commit)
 
 func state_snapshot() -> Dictionary:
-	return {"tick": tick, "elapsed": elapsed, "revision": entity_ledger.revision, "barrels": barrels.duplicate(true), "entities": entity_ledger.entities.duplicate(true)}
+	return {"tick": tick, "elapsed": elapsed, "revision": entity_ledger.revision, "barrels": barrels.duplicate(true), "saws": saws.duplicate(true), "entities": entity_ledger.entities.duplicate(true)}
 
 func state_hash() -> String:
 	var entities := entity_ledger.entities.keys()
@@ -352,13 +401,17 @@ func state_hash() -> String:
 	var normalized := []
 	for entity_id in entities:
 		var state: Dictionary = entity_ledger.entities[entity_id]
-		normalized.append({"id": str(entity_id), "incarnation": int(state.incarnation), "kind": str(state.kind), "state": str(state.state), "hp": int(state.shared_health), "winner_peer_id": int(state.get("winner_peer_id", 0)), "award_value": int(state.get("award_value", 0)), "rock_activation_tick": int(state.get("rock_activation_tick", -1))})
+		normalized.append({"id": str(entity_id), "incarnation": int(state.incarnation), "kind": str(state.kind), "state": str(state.state), "hp": int(state.shared_health), "winner_peer_id": int(state.get("winner_peer_id", 0)), "award_value": int(state.get("award_value", 0)), "rock_activation_tick": int(state.get("rock_activation_tick", -1)), "saw_activation_tick": int(state.get("saw_activation_tick", -1))})
 	var barrel_state := []
 	for barrel in barrels:
 		barrel_state.append({"id": str(barrel.entity_id), "x": int(round(float(barrel.x) * 16.0)), "y": int(round(float(barrel.y) * 16.0)), "spawned": bool(barrel.spawned), "falling": bool(barrel.falling), "destroyed": bool(barrel.destroyed)})
+	var saw_state := []
+	for saw in saws:
+		var state: Dictionary = saw.get("state", {})
+		saw_state.append({"id": str(saw.get("event_id", "")), "x": int(round(float(state.get("x", 0.0)) * 16.0)), "y": int(round(float(state.get("y", 0.0)) * 16.0)), "active": bool(state.get("active", false)), "falling": bool(state.get("falling", false)), "removed": bool(state.get("removed", false)), "ceiling_lane": bool(state.get("ceiling_lane", false))})
 	var context := HashingContext.new()
 	context.start(HashingContext.HASH_SHA256)
-	context.update(JSON.stringify({"tick": tick, "revision": entity_ledger.revision, "entities": normalized, "barrels": barrel_state}).to_utf8_buffer())
+	context.update(JSON.stringify({"tick": tick, "revision": entity_ledger.revision, "entities": normalized, "barrels": barrel_state, "saws": saw_state}).to_utf8_buffer())
 	return context.finish().hex_encode()
 
 func _surface_angle_at(x: float, ceiling: bool) -> float:
@@ -370,6 +423,83 @@ func _surface_angle_at(x: float, ceiling: bool) -> float:
 		if x >= start_x and x <= end_x and end_x > start_x:
 			return atan2(float(event.get("end_y", 0.0)) - float(event.get("start_y", 0.0)), end_x - start_x)
 	return 0.0
+
+func _saw_state_for_event(event_id: String, at_tick: int = -1) -> Dictionary:
+	if at_tick >= 0 and _saw_history.has(at_tick):
+		var historical: Dictionary = _saw_history[at_tick]
+		if historical.has(event_id):
+			return historical[event_id]
+	for saw in saws:
+		if str(saw.get("event_id", "")) == event_id:
+			return saw.get("state", {})
+	return {}
+
+func _record_saw_history(at_tick: int) -> void:
+	var snapshot: Dictionary = {}
+	for saw in saws:
+		snapshot[str(saw.get("event_id", ""))] = (saw.get("state", {}) as Dictionary).duplicate(true)
+	_saw_history[at_tick] = snapshot
+	while _saw_history.size() > 121:
+		var oldest: int = int(_saw_history.keys().min())
+		_saw_history.erase(oldest)
+
+func _rebuild_saw_history() -> void:
+	_saw_history.clear()
+	var states: Dictionary = {}
+	var saw_by_id: Dictionary = {}
+	var first_kept_tick := maxi(tick - 120, 0)
+	for saw in saws:
+		var saw_id := str(saw.get("event_id", ""))
+		var event: Dictionary = saw.get("event", {})
+		var activation_tick := int(entity_ledger.entities.get(saw_id, {}).get("saw_activation_tick", -1))
+		var initial: Dictionary = SawBladeModel.initial_state(event, float(manifest.start_x), 0, activation_tick)
+		states[saw_id] = SawBladeModel.advance(event, initial, maxi(first_kept_tick - 1, 0), Callable(self, "surface_at"))
+		saw_by_id[saw_id] = saw
+	if tick == 0:
+		for saw in saws:
+			saw["state"] = states[str(saw.get("event_id", ""))]
+		_record_saw_history(0)
+		return
+	for current_tick in range(first_kept_tick, tick + 1):
+		for saw_id_value in states.keys():
+			var saw_id := str(saw_id_value)
+			var saw: Dictionary = saw_by_id[saw_id]
+			states[saw_id] = SawBladeModel.advance(saw.get("event", {}), states[saw_id], current_tick, Callable(self, "surface_at"))
+		for saw in saws:
+			saw["state"] = states[str(saw.get("event_id", ""))]
+		_record_saw_history(current_tick)
+	for saw in saws:
+		saw["state"] = states[str(saw.get("event_id", ""))]
+
+func _rebuild_saw_history_for_event(event_id: String) -> void:
+	var target: Dictionary = {}
+	for saw in saws:
+		if str(saw.get("event_id", "")) == event_id:
+			target = saw
+			break
+	if target.is_empty():
+		return
+	var event: Dictionary = target.get("event", {})
+	var activation_tick := int(entity_ledger.entities.get(event_id, {}).get("saw_activation_tick", -1))
+	var state: Dictionary = SawBladeModel.initial_state(event, float(manifest.start_x), 0, activation_tick)
+	var first_kept_tick := maxi(tick - 120, 0)
+	state = SawBladeModel.advance(event, state, maxi(first_kept_tick - 1, 0), Callable(self, "surface_at"))
+	if first_kept_tick == 0:
+		var initial_snapshot: Dictionary = _saw_history.get(0, {}).duplicate(true)
+		initial_snapshot[event_id] = state.duplicate(true)
+		_saw_history[0] = initial_snapshot
+	for current_tick in range(maxi(first_kept_tick, 1), tick + 1):
+		state = SawBladeModel.advance(event, state, current_tick, Callable(self, "surface_at"))
+		var snapshot: Dictionary = _saw_history.get(current_tick, {}).duplicate(true)
+		snapshot[event_id] = state.duplicate(true)
+		_saw_history[current_tick] = snapshot
+	if tick == 0:
+		var snapshot_zero: Dictionary = _saw_history.get(0, {}).duplicate(true)
+		snapshot_zero[event_id] = state.duplicate(true)
+		_saw_history[0] = snapshot_zero
+	target["state"] = state
+	while _saw_history.size() > 121:
+		_saw_history.erase(int(_saw_history.keys().min()))
 
 func _resolve_barrel_interactions(barrel: Dictionary) -> void:
 	var radius := HazardRules.barrel_radius(float(barrel.width), float(barrel.height))

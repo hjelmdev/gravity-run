@@ -41,7 +41,8 @@ func _test_many_seeded_courses() -> void:
 		generator.ensure_horizon(test_horizon, 750.0, height, 820.0)
 		var events := generator.get_planned_events()
 		_check(events.size() >= 50, "seed %d should produce a long course" % seed_value)
-		_check(generator.is_plan_solvable(events, generator.get_switch_clearance_distance(750.0, CourseGenerator.REFERENCE_TRACK_HEIGHT)), "seed %d generated an unsolvable course" % seed_value)
+		_check(generator.is_plan_solvable(events, generator.get_switch_clearance_distance(500.0, height)), "seed %d should keep a route at 500 px/s" % seed_value)
+		_check(generator.is_plan_solvable(events, generator.get_switch_clearance_distance(750.0, height)), "seed %d should keep a route at 750 px/s" % seed_value)
 		for event in events:
 			if event["kind"] == &"gap":
 				found_ceiling_gap = found_ceiling_gap or bool(event["from_ceiling"])

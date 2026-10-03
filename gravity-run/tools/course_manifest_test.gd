@@ -67,8 +67,13 @@ func _run() -> void:
 		var current: Resource = current_result.manifest
 		var repeated: Resource = current_repeat.manifest
 		var coins: Array = current.get("collectibles")
-		_check(int(current.get("manifest_version")) == 3, "current generator should use manifest version 3")
+		_check(int(current.get("manifest_version")) == 4, "current generator should use saw-compatible manifest version 4")
 		_check(not coins.is_empty(), "current manifest should contain shared coins")
+		var saw_count := 0
+		for event in current.get("events"):
+			if str(event.get("kind", "")) == "saw":
+				saw_count += 1
+		_check(saw_count > 0, "current manifest should include the shared saw profile for this seed")
 		_check(coins == repeated.get("collectibles"), "coin placement should repeat exactly for a seed")
 		_check(str(current.call("validate")).is_empty(), "current collectible manifest should validate")
 	if failures == 0:

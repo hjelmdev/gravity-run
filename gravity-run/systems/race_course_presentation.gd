@@ -5,7 +5,8 @@ const SpikeScene := preload("res://hazards/spikes.tscn")
 const BlockScene := preload("res://hazards/block.tscn")
 const BarrelScene := preload("res://hazards/barrel.tscn")
 const CoinScene := preload("res://collectibles/coin.tscn")
-const FallingRockScript := preload("res://hazards/falling_rock.gd")
+const FallingRockScene := preload("res://hazards/falling_rock.tscn")
+const SawBladeScene := preload("res://hazards/saw_blade.tscn")
 const LedgeScene := preload("res://terrain/ledge.tscn")
 const SlopeScene := preload("res://terrain/slope.tscn")
 const TrackGapScript := preload("res://terrain/track_gap.gd")
@@ -16,6 +17,7 @@ const SurfaceIndexScript := preload("res://systems/course_surface_index.gd")
 const FallingRockModel := preload("res://systems/falling_rock_model.gd")
 const RockWarningIcon := preload("res://systems/rock_warning_icon.gd")
 const RockWarningPulseScript := preload("res://systems/rock_warning_pulse.gd")
+const BiomeRendererScript := preload("res://biomes/biome_renderer.gd")
 
 var manifest: Resource
 var event_nodes: Dictionary = {}
@@ -163,12 +165,19 @@ func load_manifest(course_manifest: Resource) -> String:
 				if from_ceiling: ceiling_y = end_y
 				else: floor_y = end_y
 			"rock":
-				var rock := FallingRockScript.new() as Node2D
+				var rock := FallingRockScene.instantiate() as Node2D
 				rock.call("configure", event)
 				rock.name = "FallingRock_%s" % event_id
 				_tag_presentation_target(rock, event_id, kind, false)
 				add_child(rock)
 				event_nodes[event_id] = rock
+			"saw":
+				var saw := SawBladeScene.instantiate() as Node2D
+				saw.call("configure", event, Callable(self, "_saw_surface_at"), float(manifest.start_x), 0)
+				saw.name = "SawBlade_%s" % event_id
+				_tag_presentation_target(saw, event_id, kind, true)
+				add_child(saw)
+				event_nodes[event_id] = saw
 	for collectible in manifest.collectibles:
 		var coin := CoinScene.instantiate() as Node2D
 		var entity_id := str(collectible.get("entity_id", ""))
@@ -203,7 +212,7 @@ func _tag_presentation_target(node: Node2D, stable_id: String, kind: String, mov
 	node.set_meta("presentation_target_id", stable_id)
 	node.set_meta("presentation_target_kind", kind)
 	node.set_meta("presentation_target_moving", moving)
-	node.set_meta("presentation_target_obstacle", kind in ["block", "spikes", "barrel", "rock"])
+	node.set_meta("presentation_target_obstacle", kind in ["block", "spikes", "barrel", "rock", "saw"])
 
 func set_camera_left(camera_left: float) -> void:
 	_camera_left = maxf(camera_left, 0.0)
@@ -223,6 +232,14 @@ func take_start_draw_profile() -> Dictionary:
 	return result
 
 func set_world_state(world_state: Dictionary) -> void:
+	var saws: Variant = world_state.get("saws", [])
+	if saws is Array:
+		for saw_state in saws:
+			if not saw_state is Dictionary:
+				continue
+			var saw_node: Variant = event_nodes.get(str(saw_state.get("event_id", "")))
+			if is_instance_valid(saw_node) and saw_node.has_method("apply_world_state"):
+				saw_node.call("apply_world_state", saw_state)
 	var rocks: Variant = world_state.get("rocks", [])
 	_rock_warning_states.clear()
 	if rocks is Array:
@@ -404,7 +421,9 @@ func _draw() -> void:
 	if manifest == null:
 		return
 	var draw_started_usec := Time.get_ticks_usec() if _render_profile_enabled else 0
-	CourseSurfaceRenderer.draw_track_cached(self, _camera_left, get_viewport_rect().size, _render_ceiling_gaps, _render_floor_gaps, _render_terrain_boundaries, _render_step_positions, Callable(self, "_surface_y_at"), 0.0)
+	var course_start_x := float(manifest.start_x)
+	BiomeRendererScript.draw_backdrop(self, _camera_left, get_viewport_rect().size, BiomeRendererScript.course_distance_at_world_x(_camera_left + course_start_x, course_start_x))
+	CourseSurfaceRenderer.draw_track_cached(self, _camera_left, get_viewport_rect().size, _render_ceiling_gaps, _render_floor_gaps, _render_terrain_boundaries, _render_step_positions, Callable(self, "_surface_y_at"), 0.0, null, BiomeRendererScript.course_distance_at_world_x(course_start_x, 0.0))
 	_draw_rock_warning_markers()
 	_draw_rock_hud_warning()
 	var finish_screen_x := float(manifest.finish_x) - _camera_left
@@ -491,3 +510,6 @@ func _surface_y_at(x: float, ceiling: bool) -> float:
 				elif x > end_x:
 					y = float(event.get("end_y", y))
 	return y
+
+func _saw_surface_at(x: float, ceiling: bool) -> Dictionary:
+	return _surface_index.surface_at(x, ceiling) if _surface_index != null else {"y": _world_height - 80.0 if not ceiling else 80.0, "supported": true}

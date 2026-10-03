@@ -29,11 +29,11 @@ const PLAN_RETRY_SPACING := 48.0
 const BARREL_SPEED_MULTIPLIER := 1.4
 const V7_MIN_ROCK_DISTANCE := 2000.0
 const ROCK_SAFE_GENERATOR_VERSION := 7
-const GENERATOR_VERSION := 8
+const PREVIOUS_CURRENT_GENERATOR_VERSION := 8
+const GENERATOR_VERSION := 9
 const PUBLISHED_SHARED_GENERATOR_VERSION := 5
 const LEGACY_GENERATOR_VERSION := 3
 const PREVIOUS_GENERATOR_VERSION := 4
-const PREVIOUS_CURRENT_GENERATOR_VERSION := 7
 const GENERATOR_VERSION_6 := 6
 const CourseHazardProfileScript = preload("res://systems/course_hazard_profile.gd")
 const CourseDifficultyProfileScript = preload("res://systems/course_difficulty_profile.gd")
@@ -116,15 +116,16 @@ func set_difficulty_profile(profile: Resource) -> void:
 func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> bool:
 	_configuration_failed = false
 	_generator_version = generator_version
-	if generator_version not in [GENERATOR_VERSION, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
+	if generator_version not in [GENERATOR_VERSION, PREVIOUS_CURRENT_GENERATOR_VERSION, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
 		push_error("Unsupported course generator version: %d" % generator_version)
 		return false
 	_profiles.clear()
 	_barrel_profile = null
 	_difficulty = null
-	_profiles.append(_make_profile(&"spike_group", &"spikes", 3.0, BOTH_LANES, Vector2(124.0, 188.0), Vector2i(4, 6), PackedFloat32Array([32.0])))
+	var spikes_weight := 3.35 if generator_version >= GENERATOR_VERSION else 3.0
+	_profiles.append(_make_profile(&"spike_group", &"spikes", spikes_weight, BOTH_LANES, Vector2(124.0, 188.0), Vector2i(4, 6), PackedFloat32Array([32.0])))
 	_profiles.append(_make_profile(&"block", &"block", 2.3, BOTH_LANES, Vector2(44.0, 64.0), Vector2i(1, 1), PackedFloat32Array([82.0, 132.0, 168.0])))
-	var barrel_weight := 1.7 if generator_version == LEGACY_GENERATOR_VERSION else 12.0
+	var barrel_weight := 1.7 if generator_version == LEGACY_GENERATOR_VERSION else (13.0 if generator_version >= GENERATOR_VERSION else 12.0)
 	var barrel_profile := _make_profile(&"barrel_chain", &"barrels", barrel_weight, FLOOR_LANE, Vector2(HazardRules.BARREL_WIDTH, 194.0), Vector2i(1, 3), PackedFloat32Array([HazardRules.BARREL_WIDTH, 76.0]))
 	barrel_profile.motion_speed_min = BARREL_SPEED_MULTIPLIER
 	barrel_profile.motion_speed_max = BARREL_SPEED_MULTIPLIER
@@ -135,8 +136,10 @@ func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> b
 	_profiles.append(_make_profile(&"terrain_step", &"step", 1.8, BOTH_LANES, Vector2(36.0, 240.0), Vector2i(1, 1), PackedFloat32Array([72.0, 108.0, 148.0, 184.0])))
 	_profiles.append(_make_profile(&"terrain_slope", &"slope", 1.5, BOTH_LANES, Vector2(440.0, 440.0), Vector2i(1, 1), PackedFloat32Array([64.0, 100.0, 140.0, 176.0])))
 	if generator_version >= PUBLISHED_SHARED_GENERATOR_VERSION:
-		var rock_weight := 1.6 if generator_version >= ROCK_SAFE_GENERATOR_VERSION else (1.0 if generator_version >= GENERATOR_VERSION_6 else 0.22)
+		var rock_weight := 1.8 if generator_version >= GENERATOR_VERSION else (1.6 if generator_version >= ROCK_SAFE_GENERATOR_VERSION else (1.0 if generator_version >= GENERATOR_VERSION_6 else 0.22))
 		_profiles.append(_make_profile(&"falling_rock", &"rock", rock_weight, FLOOR_LANE, Vector2(90.0, 90.0), Vector2i(1, 1), PackedFloat32Array([100.0])))
+		if generator_version >= GENERATOR_VERSION:
+			_profiles.append(_make_profile(&"saw_blade", &"saw", 0.65, BOTH_LANES, Vector2(64.0, 64.0), Vector2i(1, 1), PackedFloat32Array([60.0])))
 	return true
 
 func get_profile_catalog(generator_version: int = GENERATOR_VERSION) -> Array[CourseHazardProfile]:
@@ -308,7 +311,7 @@ func _apply_generator_timing(event: Dictionary) -> void:
 		event["trigger_lead"] = 1800.0
 		event["warning_ticks"] = 90
 		event["fall_ticks"] = 42
-		if _generator_version >= GENERATOR_VERSION:
+		if _generator_version >= PREVIOUS_CURRENT_GENERATOR_VERSION:
 			event["trigger_lead"] = 1600.0
 			event["warning_ticks"] = 104
 

@@ -17,6 +17,7 @@ const DestructibleRulesScript := preload("res://systems/multiplayer_v2/v2_destru
 const RaceResults := preload("res://systems/race_results.gd")
 const Motion := preload("res://systems/runner_motion.gd")
 const FallingRockModel := preload("res://systems/falling_rock_model.gd")
+const SawBladeModel := preload("res://systems/saw_blade_model.gd")
 const WORLD_BASELINE_APPLICATION_BUDGET_BYTES := 48 * 1024
 
 signal session_changed(session: Dictionary)
@@ -44,7 +45,7 @@ signal results_received(result: Dictionary)
 signal lobby_returned
 signal membership_removed(reason: String)
 
-const V2_GAME_VERSION := "2.1.20261002.4"
+const V2_GAME_VERSION := "2.1.20261003.5"
 const MAX_PLAYERS := 5
 const POSITION_RATE_HZ := 30
 
@@ -1075,12 +1076,43 @@ func _record_validated_motion_sample(peer_id: int, sample: Dictionary) -> void:
 	_validated_motion_history[peer_id] = history
 	if str(session.get("role", "")) == "host" and not previous.is_empty():
 		_maybe_activate_falling_rocks(peer_id, previous, sample)
+		_maybe_activate_saws(peer_id, previous, sample)
 
 func observe_local_world_progress(previous: Dictionary, proposed: Dictionary) -> void:
 	var local_peer := int(session.get("local_peer_id", 1))
 	if str(session.get("role", "")) != "host" or not _active or terminal_status.has(local_peer):
 		return
 	_maybe_activate_falling_rocks(local_peer, previous, proposed)
+	_maybe_activate_saws(local_peer, previous, proposed)
+
+func _maybe_activate_saws(peer_id: int, _previous: Dictionary, proposed: Dictionary) -> void:
+	if world_simulation == null or current_manifest == null or terminal_status.has(peer_id):
+		return
+	# A first validated sample may already be beyond the trigger (for example
+	# after reconnect). Activation is monotonic and distance-based, so the first
+	# authoritative position at or beyond the threshold must activate it too.
+	var current_x := float(proposed.get("world_x", 0.0))
+	if not is_finite(current_x):
+		return
+	for event in current_manifest.events:
+		if str(event.get("kind", "")) != "saw":
+			continue
+		var entity_id := str(event.get("event_id", ""))
+		var entity: Dictionary = world_simulation.entity_ledger.entities.get(entity_id, {})
+		if entity.is_empty() or int(entity.get("saw_activation_tick", -1)) >= 0:
+			continue
+		var trigger_x := float(event.get("spawn_x", float(event.get("x", 0.0)) + SawBladeModel.START_OFFSET)) - SawBladeModel.SPAWN_LEAD
+		if current_x < trigger_x:
+			continue
+		var activation_tick: int = int(world_simulation.tick) + SawBladeModel.ACTIVATION_DELAY_TICKS
+		var commit := {"world_revision": world_simulation.entity_ledger.revision + 1, "commit_id": "saw-%s-%d" % [entity_id, activation_tick], "entity_id": entity_id, "incarnation": 1, "action": "activate_saw", "effective_tick": activation_tick, "saw_activation_tick": activation_tick, "trigger_peer_id": peer_id, "trigger_tick": int(proposed.get("simulation_tick", world_simulation.tick)), "state_before": "active", "state_after": "active"}
+		var result := str(world_simulation.apply_world_commit(commit))
+		diagnostics.record_event("saw_trigger", {"event_id": entity_id, "peer_id": peer_id, "trigger_tick": int(commit.trigger_tick), "activation_tick": activation_tick, "result": result})
+		if result != "applied":
+			continue
+		world_event_committed.emit(commit.duplicate(true))
+		for target in connected_peer_ids():
+			send_control(int(target), "WORLD_COMMIT", commit)
 
 func request_rock_warning_recovery(event_id: String, activation_tick: int) -> void:
 	if str(session.get("role", "")) != "guest" or not _active or _round_id.is_empty():
