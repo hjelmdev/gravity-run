@@ -258,7 +258,7 @@ func _player_contact_against(player_state: Dictionary, barrel_state: Array, simu
 			continue
 		if kind == "saw":
 			var saw_state := _saw_state_for_event(event_id, simulation_tick)
-			if bool(saw_state.get("active", false)) and not bool(saw_state.get("removed", false)) and HazardRules.circle_intersects_rect(Vector2(float(saw_state.get("x", 0.0)), float(saw_state.get("y", 0.0))), SawBladeModel.RADIUS, rect):
+			if bool(saw_state.get("active", false)) and not bool(saw_state.get("removed", false)) and HazardRules.circle_intersects_rect(Vector2(float(saw_state.get("x", 0.0)), float(saw_state.get("y", 0.0))), SawBladeModel.radius_for_state(saw_state), rect):
 				return {"kind": "terminal", "reason": "saw_blade", "entity_id": event_id, "event_id": event_id}
 			continue
 		if kind == "spikes":
@@ -318,7 +318,7 @@ func first_static_terminal_contact(previous: Dictionary, proposed: Dictionary) -
 				var previous_center := current_center
 				if bool(previous_saw.get("active", false)) and not bool(previous_saw.get("removed", false)):
 					previous_center = Vector2(float(previous_saw.get("x", current_center.x)), float(previous_saw.get("y", current_center.y)))
-				var fraction := HazardRules.swept_rect_circle_fraction(rect, end - start - (current_center - previous_center), previous_center, SawBladeModel.RADIUS)
+				var fraction := HazardRules.swept_rect_circle_fraction(rect, end - start - (current_center - previous_center), previous_center, SawBladeModel.radius_for_state(current_saw))
 				if fraction >= 0.0 and fraction < first_fraction:
 					first_fraction = fraction
 					var saw_pose := start.lerp(end, fraction)

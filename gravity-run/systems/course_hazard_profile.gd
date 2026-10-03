@@ -114,12 +114,19 @@ func build_threat_intervals(event: Dictionary) -> Array[Dictionary]:
 		intervals.append({"start": forecast_center - half_width, "end": forecast_center + half_width, "blocked_lanes": FLOOR_LANE})
 		return intervals
 	if StringName(event.get("kind", "")) == &"saw":
-		# Saw activation is distance-triggered, then the blade moves at its own
-		# fixed speed. The supported runner speed range changes where it meets
-		# the blade. Reserve the conservative floor corridor for either origin;
-		# a ceiling blade can fall through its authored roof gap and then becomes
-		# a floor hazard. The ceiling remains the planner's escape lane.
-		intervals.append({"start": forecast_center + 560.0, "end": forecast_center + 1100.0, "blocked_lanes": FLOOR_LANE})
+		# v9 blades all eventually occupy the floor and retain their frozen
+		# forecast. v10 ceiling rollers reserve the ceiling lane; only the rare
+		# authored gap-drop reserves a later floor window as well.
+		var variant := str(event.get("saw_variant", "legacy_floor_then_drop"))
+		if variant == "ceiling_embedded":
+			intervals.append({"start": forecast_center + 520.0, "end": forecast_center + 1160.0, "blocked_lanes": CEILING_LANE})
+		elif variant == "ceiling_gap_drop":
+			# The gen10 drop gap is close enough to the spawn point that the saw
+			# reaches the floor before supported runners meet it. The ceiling route
+			# remains the escape lane throughout.
+			intervals.append({"start": forecast_center + 560.0, "end": forecast_center + 1350.0, "blocked_lanes": FLOOR_LANE})
+		else:
+			intervals.append({"start": forecast_center + 560.0, "end": forecast_center + 1100.0, "blocked_lanes": FLOOR_LANE})
 		return intervals
 	if not threat_windows.is_empty():
 		for window in threat_windows:

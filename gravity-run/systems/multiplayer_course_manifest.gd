@@ -3,6 +3,7 @@ class_name MultiplayerCourseManifest
 
 const CourseGenerator := preload("res://systems/course_generator.gd")
 const CoinPlanner := preload("res://systems/shared_coin_planner.gd")
+const SawModel := preload("res://systems/saw_blade_model.gd")
 
 @export var protocol_version := 2
 @export var generator_version := 0
@@ -60,7 +61,7 @@ func calculate_hash() -> String:
 
 func load_canonical_dictionary(data: Dictionary, expected_wire_hash := "", wire_payload := PackedByteArray()) -> bool:
 	manifest_version = int(data.get("manifest_version", -1))
-	if manifest_version not in [2, 3, 4] or not data.get("world", {}) is Dictionary:
+	if manifest_version not in [2, 3, 4, 5] or not data.get("world", {}) is Dictionary:
 		return false
 	if not expected_wire_hash.is_empty():
 		if expected_wire_hash.length() != 64 or wire_payload.is_empty():
@@ -122,7 +123,7 @@ func validate() -> String:
 		return "The multiplayer world dimensions are invalid."
 	if events.size() > 4000:
 		return "The multiplayer manifest has too many events."
-	if manifest_version not in [2, 3, 4] or (generator_version >= CourseGenerator.GENERATOR_VERSION and manifest_version != 4) or (generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and generator_version < CourseGenerator.GENERATOR_VERSION and manifest_version != 3) or (generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and manifest_version != 2):
+	if manifest_version not in [2, 3, 4, 5] or (generator_version >= CourseGenerator.GENERATOR_VERSION and manifest_version != 5) or (generator_version >= CourseGenerator.GENERATOR_VERSION_9 and generator_version < CourseGenerator.GENERATOR_VERSION and manifest_version != 4) or (generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and generator_version < CourseGenerator.GENERATOR_VERSION_9 and manifest_version != 3) or (generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and manifest_version != 2):
 		return "The course generator and manifest versions are incompatible."
 	var previous_x := -INF
 	for event in events:
@@ -131,7 +132,7 @@ func validate() -> String:
 		var event_x := float(event.x)
 		if not is_finite(event_x) or event_x < start_x or event_x > finish_x + 1000.0 or event_x < previous_x:
 			return "Manifest events must be finite, ordered, and inside the course bounds."
-		if str(event.kind) not in ["spikes", "block", "barrels", "gap", "step", "slope", "rock", "saw"] or (str(event.kind) == "rock" and generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION) or (str(event.kind) == "saw" and generator_version < CourseGenerator.GENERATOR_VERSION):
+		if str(event.kind) not in ["spikes", "block", "barrels", "gap", "step", "slope", "rock", "saw"] or (str(event.kind) == "rock" and generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION) or (str(event.kind) == "saw" and generator_version < CourseGenerator.GENERATOR_VERSION_9):
 			return "The manifest contains an unsupported dynamic or unknown event type."
 		if str(event.kind) == "rock":
 			var width := float(event.get("width", NAN))
@@ -148,7 +149,17 @@ func validate() -> String:
 			var spawn_lead := float(event.get("spawn_lead", NAN))
 			if not is_finite(spawn_x) or not is_finite(floor_y) or not is_finite(ceiling_y) or not is_finite(spawn_lead) or spawn_lead < 1200.0 or spawn_lead > 2000.0 or absf(spawn_x - float(event.x)) < 1000.0 or floor_y - ceiling_y < 260.0:
 				return "The saw blade has invalid versioned geometry."
-			if bool(event.get("from_ceiling", false)):
+			if generator_version >= CourseGenerator.GENERATOR_VERSION:
+				var variant := str(event.get("saw_variant", ""))
+				var radius := float(event.get("saw_radius", NAN))
+				if variant not in ["floor_embedded", "ceiling_embedded", "ceiling_gap_drop"] or not is_finite(radius) or not is_equal_approx(radius, 34.0) or (variant == "floor_embedded" and bool(event.get("from_ceiling", false))) or (variant != "floor_embedded" and not bool(event.get("from_ceiling", false))):
+					return "The v10 saw is missing its explicit supported variant or collision radius."
+				var has_gap := event.has("roof_gap_x") and event.has("roof_gap_width")
+				if (variant == "ceiling_gap_drop") != has_gap:
+					return "Only the v10 ceiling-drop saw may include an authored roof gap."
+				if variant == "ceiling_gap_drop" and (not is_equal_approx(float(event.get("roof_gap_x", 0.0)), float(event.get("x", 0.0)) + SawModel.V10_DROP_ROOF_GAP_OFFSET) or not is_equal_approx(float(event.get("roof_gap_width", 0.0)), SawModel.V10_DROP_ROOF_GAP_WIDTH)):
+					return "The v10 ceiling-drop saw has invalid gap placement."
+			if bool(event.get("from_ceiling", false)) and (generator_version < CourseGenerator.GENERATOR_VERSION or str(event.get("saw_variant", "")) == "ceiling_gap_drop"):
 				var gap_x := float(event.get("roof_gap_x", NAN))
 				var gap_width := float(event.get("roof_gap_width", NAN))
 				var gap_offset := gap_x - float(event.x)

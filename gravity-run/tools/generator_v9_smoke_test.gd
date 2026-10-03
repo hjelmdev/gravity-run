@@ -9,12 +9,12 @@ func _initialize() -> void:
 func _run() -> void:
 	var builder := Builder.new()
 	for seed_value in [1, 42, 100000014]:
-		var result: Dictionary = builder.build(seed_value, 45000, Generator.GENERATOR_VERSION)
+		var result: Dictionary = builder.build(seed_value, 45000, Generator.GENERATOR_VERSION_9)
 		var manifest: Resource = result.get("manifest")
 		print("V9 seed=%d error=%s hash=%s" % [seed_value, str(result.get("error", "")), str(manifest.get("manifest_hash")) if manifest != null else "missing"])
 		if manifest == null:
 			var generator := Generator.new()
-			generator.configure_ruleset(builder._make_multiplayer_ruleset(Generator.GENERATOR_VERSION), Generator.GENERATOR_VERSION)
+			generator.configure_ruleset(builder._make_multiplayer_ruleset(Generator.GENERATOR_VERSION_9), Generator.GENERATOR_VERSION_9)
 			generator.reset(seed_value)
 			generator.ensure_horizon(45000.0, 500.0)
 			var resolved: Array[Dictionary] = builder._resolve_events(generator.get_planned_events(), 45000)

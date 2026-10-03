@@ -43,14 +43,14 @@ func _run() -> void:
 			_check(str(built.get("error", "")).is_empty() and manifest != null, "v%d seed %s still builds" % [version, str(seed)])
 			if manifest != null:
 				_check(str(manifest.get("manifest_hash")) == str(FIXTURES[version][seed]), "v%d seed %s retains its pre-v8 manifest hash" % [version, str(seed)])
-	_check(challenge._supports_generator_version(Generator.PREVIOUS_CURRENT_GENERATOR_VERSION), "challenge flow retains frozen v8")
-	var first: Dictionary = builder.build(100000014, 45000, Generator.PREVIOUS_CURRENT_GENERATOR_VERSION)
-	var second: Dictionary = builder.build(100000014, 45000, Generator.PREVIOUS_CURRENT_GENERATOR_VERSION)
+	_check(challenge._supports_generator_version(Generator.GENERATOR_VERSION_8), "challenge flow retains frozen v8")
+	var first: Dictionary = builder.build(100000014, 45000, Generator.GENERATOR_VERSION_8)
+	var second: Dictionary = builder.build(100000014, 45000, Generator.GENERATOR_VERSION_8)
 	var first_manifest: Resource = first.get("manifest")
 	var second_manifest: Resource = second.get("manifest")
 	_check(first_manifest != null and second_manifest != null and str(first_manifest.get("manifest_hash")) == str(second_manifest.get("manifest_hash")), "v8 manifest remains deterministic: %s / %s / %s / %s" % [str(first.get("error", "")), str(second.get("error", "")), str(first_manifest.get("manifest_hash")) if first_manifest != null else "missing", str(second_manifest.get("manifest_hash")) if second_manifest != null else "missing"])
 	if first_manifest != null:
-		_check(int(first_manifest.get("generator_version")) == Generator.PREVIOUS_CURRENT_GENERATOR_VERSION, "the frozen schedule is stored with the v8 manifest version")
+		_check(int(first_manifest.get("generator_version")) == Generator.GENERATOR_VERSION_8, "the frozen schedule is stored with the v8 manifest version")
 		var rocks := 0
 		for event in first_manifest.get("events"):
 			if str(event.get("kind", "")) != "rock":
@@ -59,21 +59,28 @@ func _run() -> void:
 			_check(int(event.get("warning_ticks", 0)) == 104 and int(event.get("fall_ticks", 0)) == 42 and is_equal_approx(float(event.get("trigger_lead", 0.0)), 1600.0), "v8 uses the later visible-drop schedule")
 		_check(rocks > 0, "ordinary test seed includes a v8 rock")
 	var v9_seed := 100000014
-	var v9_a: Dictionary = builder.build(v9_seed, 45000, Generator.GENERATOR_VERSION)
-	var v9_b: Dictionary = builder.build(v9_seed, 45000, Generator.GENERATOR_VERSION)
+	var v9_a: Dictionary = builder.build(v9_seed, 45000, Generator.GENERATOR_VERSION_9)
+	var v9_b: Dictionary = builder.build(v9_seed, 45000, Generator.GENERATOR_VERSION_9)
 	var v9_manifest: Resource = v9_a.get("manifest")
 	var v9_other: Resource = v9_b.get("manifest")
 	_check(v9_manifest != null and v9_other != null and str(v9_manifest.get("manifest_hash")) == str(v9_other.get("manifest_hash")), "v9 manifest builds deterministically: %s" % str(v9_a.get("error", "")))
 	if v9_manifest != null:
-		_check(int(v9_manifest.get("generator_version")) == Generator.GENERATOR_VERSION and int(v9_manifest.get("manifest_version")) == 4, "v9 uses manifest format 4")
+		_check(int(v9_manifest.get("generator_version")) == Generator.GENERATOR_VERSION_9 and int(v9_manifest.get("manifest_version")) == 4, "v9 uses frozen manifest format 4")
 		var saw_count := 0
 		for event in v9_manifest.get("events"):
 			if str(event.get("kind", "")) == "saw":
 				saw_count += 1
 				_check(is_finite(float(event.get("spawn_x", NAN))) and event.has("floor_y") and event.has("ceiling_y"), "v9 saw serializes spawn and support geometry")
 		_check(saw_count > 0, "representative v9 seed includes saw content")
+	var v10_result: Dictionary = builder.build(v9_seed, 45000, Generator.GENERATOR_VERSION)
+	var v10_manifest: Resource = v10_result.get("manifest")
+	_check(v10_manifest != null and int(v10_manifest.get("generator_version")) == 10 and int(v10_manifest.get("manifest_version")) == 5, "v10 uses the new manifest format 5")
+	if v10_manifest != null:
+		for event in v10_manifest.get("events"):
+			if str(event.get("kind", "")) == "saw":
+				_check(event.has("saw_variant") and is_equal_approx(float(event.get("saw_radius", 0.0)), 34.0), "v10 saws serialize their variant and radius")
 	if failures == 0:
-		print("Generator compatibility passed: frozen v6/v7/v8 manifest hashes unchanged; v9 uses deterministic manifest v4 saw content.")
+		print("Generator compatibility passed: frozen v6/v7/v8 hashes unchanged; v9 stays manifest v4; v10 uses explicit saw variant/radius in manifest v5.")
 	quit(1 if failures > 0 else 0)
 
 func _check(condition: bool, message: String) -> void:

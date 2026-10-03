@@ -10,10 +10,23 @@ const GRAVITY := 1500.0
 const START_OFFSET := 1100.0
 const ROOF_GAP_OFFSET := 900.0
 const ROOF_GAP_WIDTH := 96.0
+const V10_DROP_ROOF_GAP_OFFSET := 1000.0
+const V10_DROP_ROOF_GAP_WIDTH := 80.0
 const SPAWN_LEAD := 1200.0
 const ACTIVATION_DELAY_TICKS := 12
 const TICK_RATE := 60.0
 const WORLD_HEIGHT := 540.0
+
+static func radius_for_event(event: Dictionary) -> float:
+	# Radius is part of v10's immutable manifest event. Older manifests omit
+	# it and therefore keep their original 30 px collision contract.
+	return float(event.get("saw_radius", 34.0)) if is_embedded_variant(event) else RADIUS
+
+static func radius_for_state(state: Dictionary) -> float:
+	return maxf(1.0, float(state.get("radius", RADIUS)))
+
+static func is_embedded_variant(event: Dictionary) -> bool:
+	return str(event.get("saw_variant", "")) in ["floor_embedded", "ceiling_embedded", "ceiling_gap_drop"]
 
 static func spawn_tick(event: Dictionary, course_start_x: float) -> int:
 	# Kept as a compatibility accessor for diagnostics; activation is now
@@ -22,9 +35,11 @@ static func spawn_tick(event: Dictionary, course_start_x: float) -> int:
 
 static func initial_state(event: Dictionary, _course_start_x: float, tick := 0, activation_tick := -1) -> Dictionary:
 	var ceiling := bool(event.get("from_ceiling", false))
+	var radius := radius_for_event(event)
 	var x := float(event.get("spawn_x", float(event.get("x", 0.0)) + START_OFFSET))
 	var surface_y := float(event.get("ceiling_y", 80.0)) if ceiling else float(event.get("floor_y", 460.0))
-	return {"tick": tick, "activation_tick": activation_tick, "active": false, "removed": false, "x": x, "y": surface_y + RADIUS if ceiling else surface_y - RADIUS, "fall_velocity": 0.0, "falling": false, "ceiling_lane": ceiling, "roll_angle": 0.0}
+	var initial_y := surface_y if is_embedded_variant(event) else (surface_y + radius if ceiling else surface_y - radius)
+	return {"tick": tick, "activation_tick": activation_tick, "active": false, "removed": false, "x": x, "y": initial_y, "radius": radius, "saw_variant": str(event.get("saw_variant", "")), "fall_velocity": 0.0, "falling": false, "ceiling_lane": ceiling, "roll_angle": 0.0}
 
 static func advance(event: Dictionary, from_state: Dictionary, target_tick: int, surface_query: Callable) -> Dictionary:
 	var state := from_state.duplicate(true)
@@ -59,21 +74,22 @@ static func advance(event: Dictionary, from_state: Dictionary, target_tick: int,
 		var delta := 1.0 / TICK_RATE
 		var x := float(state.get("x", 0.0)) - HORIZONTAL_SPEED * delta
 		state["x"] = x
-		state["roll_angle"] = float(state.get("roll_angle", 0.0)) - HORIZONTAL_SPEED / RADIUS * delta
+		var radius := radius_for_state(state)
+		state["roll_angle"] = float(state.get("roll_angle", 0.0)) - HORIZONTAL_SPEED / radius * delta
 		if bool(state.get("falling", false)):
-			var old_bottom := float(state.get("y", 0.0)) + RADIUS
+			var old_bottom := float(state.get("y", 0.0)) + radius
 			var velocity := float(state.get("fall_velocity", 0.0)) + GRAVITY * delta
 			var y := float(state.get("y", 0.0)) + velocity * delta
 			state["fall_velocity"] = velocity
 			state["y"] = y
 			var floor_info: Dictionary = surface_query.call(x, false)
 			var floor_y := float(floor_info.get("y", WORLD_HEIGHT - 80.0))
-			if bool(floor_info.get("supported", false)) and old_bottom <= floor_y and y + RADIUS >= floor_y:
-				state["y"] = floor_y - RADIUS
+			if bool(floor_info.get("supported", false)) and old_bottom <= floor_y and y + radius >= floor_y:
+				state["y"] = floor_y - radius if not is_embedded_variant(event) else floor_y
 				state["fall_velocity"] = 0.0
 				state["falling"] = false
 				state["ceiling_lane"] = false
-			elif y - RADIUS > WORLD_HEIGHT + RADIUS:
+			elif y - radius > WORLD_HEIGHT + radius:
 				state["removed"] = true
 		else:
 			_align_to_surface(state, x, surface_query)
@@ -87,7 +103,7 @@ static func _align_to_surface(state: Dictionary, x: float, surface_query: Callab
 	var surface: Dictionary = surface_query.call(x, ceiling)
 	if bool(surface.get("supported", false)):
 		var y := float(surface.get("y", 0.0))
-		state["y"] = y + RADIUS if ceiling else y - RADIUS
+		state["y"] = y if is_embedded_variant(state) else (y + radius_for_state(state) if ceiling else y - radius_for_state(state))
 		return
 	state["falling"] = true
 	state["fall_velocity"] = 0.0
@@ -95,7 +111,8 @@ static func _align_to_surface(state: Dictionary, x: float, surface_query: Callab
 static func hitbox(state: Dictionary) -> Rect2:
 	if not bool(state.get("active", false)) or bool(state.get("removed", false)):
 		return Rect2()
-	return Rect2(Vector2(float(state.get("x", 0.0)), float(state.get("y", 0.0))) - Vector2.ONE * RADIUS, Vector2.ONE * (RADIUS * 2.0))
+	var radius := radius_for_state(state)
+	return Rect2(Vector2(float(state.get("x", 0.0)), float(state.get("y", 0.0))) - Vector2.ONE * radius, Vector2.ONE * (radius * 2.0))
 
 static func phase(state: Dictionary) -> String:
 	if bool(state.get("removed", false)):

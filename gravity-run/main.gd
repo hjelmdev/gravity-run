@@ -749,7 +749,7 @@ func _spawn_course_event(event: Dictionary) -> void:
 			if saw_event.is_empty():
 				return
 			var saw_event_id := str(saw_event.get("event_id", _singleplayer_saw_key(event)))
-			if bool(saw_event.get("from_ceiling", false)):
+			if bool(saw_event.get("from_ceiling", false)) and str(saw_event.get("saw_variant", "legacy_floor_then_drop")) in ["legacy_floor_then_drop", "ceiling_gap_drop"]:
 				var gap := TRACK_GAP_SCRIPT.new() as TrackGap
 				gap.position = Vector2(float(saw_event.get("roof_gap_x", event_x + SAW_BLADE_MODEL.ROOF_GAP_OFFSET)), 0.0)
 				gap.configure(float(saw_event.get("roof_gap_width", SAW_BLADE_MODEL.ROOF_GAP_WIDTH)), true)
@@ -1130,7 +1130,7 @@ func _saw_endpoint_impact(player_rect: Rect2, obstacle: Node2D) -> int:
 	if not bool(saw_state.get("active", false)) or bool(saw_state.get("removed", false)):
 		return HAZARD_RULES_SCRIPT.PlayerImpact.NONE
 	var center := Vector2(float(saw_state.get("x", 0.0)), float(saw_state.get("y", 0.0)))
-	return HAZARD_RULES_SCRIPT.PlayerImpact.LETHAL if HAZARD_RULES_SCRIPT.circle_intersects_rect(center, SAW_BLADE_MODEL.RADIUS, player_rect) else HAZARD_RULES_SCRIPT.PlayerImpact.NONE
+	return HAZARD_RULES_SCRIPT.PlayerImpact.LETHAL if HAZARD_RULES_SCRIPT.circle_intersects_rect(center, SAW_BLADE_MODEL.radius_for_state(saw_state), player_rect) else HAZARD_RULES_SCRIPT.PlayerImpact.NONE
 
 func _draw() -> void:
 	var draw_started_usec := Time.get_ticks_usec() if render_diagnostics_enabled else -1
