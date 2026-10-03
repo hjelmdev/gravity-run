@@ -2,6 +2,8 @@ extends Node
 
 signal music_volume_changed(value: float)
 signal music_enabled_changed(enabled: bool)
+signal sfx_volume_changed(value: float)
+signal sfx_enabled_changed(enabled: bool)
 
 const DEFAULT_CHARACTER_STATS := preload("res://characters/runner_stats.tres")
 const SAVE_PATH := "user://gravity_run_profile.cfg"
@@ -11,8 +13,11 @@ var flip_control := "keyboard"
 var leaderboard_name := ""
 var language := ""
 const DEFAULT_MUSIC_VOLUME := 0.25
+const DEFAULT_SFX_VOLUME := 0.25
 var music_volume := DEFAULT_MUSIC_VOLUME
 var music_enabled := true
+var sfx_volume := DEFAULT_SFX_VOLUME
+var sfx_enabled := true
 var character_stats: Resource
 var _saved_challenges: Array[Dictionary] = []
 var _music_save_timer: Timer
@@ -69,6 +74,8 @@ func _load_profile() -> void:
 	var saved_music_volume: Variant = config.get_value("settings", "music_volume", DEFAULT_MUSIC_VOLUME)
 	music_volume = normalize_music_volume(saved_music_volume)
 	music_enabled = bool(config.get_value("settings", "music_enabled", true))
+	sfx_volume = normalize_music_volume(config.get_value("settings", "sfx_volume", DEFAULT_SFX_VOLUME), DEFAULT_SFX_VOLUME)
+	sfx_enabled = bool(config.get_value("settings", "sfx_enabled", true))
 
 static func normalize_music_volume(value: Variant, default_value: float = DEFAULT_MUSIC_VOLUME) -> float:
 	if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)):
@@ -108,6 +115,26 @@ func set_music_enabled(enabled: bool) -> void:
 	music_enabled_changed.emit(music_enabled)
 	_save_profile()
 
+func set_sfx_volume(value: float) -> void:
+	if not is_finite(value):
+		return
+	var normalized := clampf(value, 0.0, 1.0)
+	if is_equal_approx(sfx_volume, normalized):
+		return
+	sfx_volume = normalized
+	sfx_volume_changed.emit(sfx_volume)
+	if is_instance_valid(_music_save_timer):
+		_music_save_timer.start()
+	else:
+		_save_profile()
+
+func set_sfx_enabled(enabled: bool) -> void:
+	if sfx_enabled == enabled:
+		return
+	sfx_enabled = enabled
+	sfx_enabled_changed.emit(sfx_enabled)
+	_save_profile()
+
 func flush_settings() -> void:
 	if is_instance_valid(_music_save_timer):
 		_music_save_timer.stop()
@@ -127,6 +154,8 @@ func _save_profile() -> void:
 	config.set_value("settings", "language", language)
 	config.set_value("settings", "music_volume", music_volume)
 	config.set_value("settings", "music_enabled", music_enabled)
+	config.set_value("settings", "sfx_volume", sfx_volume)
+	config.set_value("settings", "sfx_enabled", sfx_enabled)
 	var error := config.save(SAVE_PATH)
 	if error != OK:
 		push_warning("Could not save Gravity Run profile (error %s)." % error)
@@ -190,5 +219,5 @@ func forget_seed_challenge(challenge_code: String) -> void:
 
 func _is_valid_challenge_code(code: String) -> bool:
 	var pattern := RegEx.new()
-	pattern.compile("^(GC-[A-F0-9]{12}|GR[3-7]-[0-9]{10})$")
+	pattern.compile("^(GC-[A-F0-9]{12}|GR(3|4|5|6|7|8|9|10|11)-[0-9]{10})$")
 	return pattern.search(code) != null

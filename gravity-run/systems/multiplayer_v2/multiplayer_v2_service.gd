@@ -18,6 +18,7 @@ const RaceResults := preload("res://systems/race_results.gd")
 const Motion := preload("res://systems/runner_motion.gd")
 const FallingRockModel := preload("res://systems/falling_rock_model.gd")
 const SawBladeModel := preload("res://systems/saw_blade_model.gd")
+const GhostHazardModel := preload("res://systems/ghost_hazard_model.gd")
 const WORLD_BASELINE_APPLICATION_BUDGET_BYTES := 48 * 1024
 
 signal session_changed(session: Dictionary)
@@ -45,7 +46,7 @@ signal results_received(result: Dictionary)
 signal lobby_returned
 signal membership_removed(reason: String)
 
-const V2_GAME_VERSION := "2.1.20261003.6"
+const V2_GAME_VERSION := "2.1.20261003.7"
 const MAX_PLAYERS := 5
 const POSITION_RATE_HZ := 30
 
@@ -1077,6 +1078,8 @@ func _record_validated_motion_sample(peer_id: int, sample: Dictionary) -> void:
 	if str(session.get("role", "")) == "host" and not previous.is_empty():
 		_maybe_activate_falling_rocks(peer_id, previous, sample)
 		_maybe_activate_saws(peer_id, previous, sample)
+	if str(session.get("role", "")) == "host":
+		_maybe_activate_ghosts(peer_id, sample)
 
 func observe_local_world_progress(previous: Dictionary, proposed: Dictionary) -> void:
 	var local_peer := int(session.get("local_peer_id", 1))
@@ -1084,6 +1087,30 @@ func observe_local_world_progress(previous: Dictionary, proposed: Dictionary) ->
 		return
 	_maybe_activate_falling_rocks(local_peer, previous, proposed)
 	_maybe_activate_saws(local_peer, previous, proposed)
+	_maybe_activate_ghosts(local_peer, proposed)
+
+func _maybe_activate_ghosts(peer_id: int, proposed: Dictionary) -> void:
+	if world_simulation == null or current_manifest == null or terminal_status.has(peer_id):
+		return
+	var current_x := float(proposed.get("world_x", NAN))
+	if not is_finite(current_x):
+		return
+	for event in current_manifest.events:
+		if str(event.get("kind", "")) != "ghost":
+			continue
+		var entity_id := str(event.get("event_id", ""))
+		var entity: Dictionary = world_simulation.entity_ledger.entities.get(entity_id, {})
+		if entity.is_empty() or int(entity.get("ghost_activation_tick", -1)) >= 0 or current_x < GhostHazardModel.trigger_x(event):
+			continue
+		var activation_tick := int(world_simulation.tick)
+		var commit := {"world_revision": world_simulation.entity_ledger.revision + 1, "commit_id": "ghost-%s-%d" % [entity_id, activation_tick], "entity_id": entity_id, "incarnation": 1, "action": "activate_ghost", "effective_tick": activation_tick, "ghost_activation_tick": activation_tick, "trigger_peer_id": peer_id, "trigger_tick": int(proposed.get("simulation_tick", world_simulation.tick)), "state_before": "active", "state_after": "active"}
+		var result := str(world_simulation.apply_world_commit(commit))
+		diagnostics.record_event("ghost_trigger", {"event_id": entity_id, "peer_id": peer_id, "trigger_tick": int(commit.trigger_tick), "activation_tick": activation_tick, "result": result})
+		if result != "applied":
+			continue
+		world_event_committed.emit(commit.duplicate(true))
+		for target in connected_peer_ids():
+			send_control(int(target), "WORLD_COMMIT", commit)
 
 func _maybe_activate_saws(peer_id: int, _previous: Dictionary, proposed: Dictionary) -> void:
 	if world_simulation == null or current_manifest == null or terminal_status.has(peer_id):
@@ -1917,6 +1944,8 @@ func _on_coin_award_request_finished(action: String, success: bool, data: Varian
 		var account_progress := get_node_or_null("/root/AccountProgress")
 		if account_progress != null and auth_now != null and str(auth_now.get("user_id")) == context:
 			account_progress.call("apply_authoritative_wallet_balance", int(data.get("wallet_coins", 0)))
+			if account_progress.has_method("apply_multiplayer_achievement_response"):
+				account_progress.call("apply_multiplayer_achievement_response", data, context)
 			_record_coin_settlements(data, context)
 			if context == _coin_wallet_status_user:
 				_coin_wallet_status = "pending"

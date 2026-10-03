@@ -2,6 +2,7 @@ extends RefCounted
 class_name CourseGenerator
 
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
+const BiomeRenderer := preload("res://biomes/biome_renderer.gd")
 ## Deterministic, data-driven encounter planning with a route-feasibility check.
 ## New hazard profiles register their own blocked-lane forecasts; the planner
 ## rejects overlapping/no-exit patterns and spaces lane changes conservatively.
@@ -31,8 +32,9 @@ const V7_MIN_ROCK_DISTANCE := 2000.0
 const ROCK_SAFE_GENERATOR_VERSION := 7
 const GENERATOR_VERSION_8 := 8
 const GENERATOR_VERSION_9 := 9
-const PREVIOUS_CURRENT_GENERATOR_VERSION := GENERATOR_VERSION_9
-const GENERATOR_VERSION := 10
+const GENERATOR_VERSION_10 := 10
+const PREVIOUS_CURRENT_GENERATOR_VERSION := GENERATOR_VERSION_10
+const GENERATOR_VERSION := 11
 const PUBLISHED_SHARED_GENERATOR_VERSION := 5
 const LEGACY_GENERATOR_VERSION := 3
 const PREVIOUS_GENERATOR_VERSION := 4
@@ -118,7 +120,7 @@ func set_difficulty_profile(profile: Resource) -> void:
 func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> bool:
 	_configuration_failed = false
 	_generator_version = generator_version
-	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
+	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_10, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
 		push_error("Unsupported course generator version: %d" % generator_version)
 		return false
 	_profiles.clear()
@@ -142,6 +144,8 @@ func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> b
 		_profiles.append(_make_profile(&"falling_rock", &"rock", rock_weight, FLOOR_LANE, Vector2(90.0, 90.0), Vector2i(1, 1), PackedFloat32Array([100.0])))
 		if generator_version >= GENERATOR_VERSION_9:
 			_profiles.append(_make_profile(&"saw_blade", &"saw", 0.65, BOTH_LANES, Vector2(64.0, 64.0), Vector2i(1, 1), PackedFloat32Array([60.0])))
+		if generator_version >= GENERATOR_VERSION:
+			_profiles.append(_make_profile(&"haunted_ghost", &"ghost", 0.85, BOTH_LANES, Vector2(72.0, 96.0), Vector2i(1, 1), PackedFloat32Array([96.0])))
 	return true
 
 func get_profile_catalog(generator_version: int = GENERATOR_VERSION) -> Array[CourseHazardProfile]:
@@ -263,6 +267,10 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 			break
 		var candidate := profile.create_event(_rng, _next_event_distance, _difficulty, _preferred_lane())
 		_apply_generator_timing(candidate)
+		if str(candidate.get("kind", "")) == "ghost" and BiomeRenderer.biome_id_at(float(candidate.get("course_distance", 0.0))) != "haunted":
+			_next_event_distance += PLAN_RETRY_SPACING
+			spacing += PLAN_RETRY_SPACING
+			continue
 		var candidate_is_rock := str(candidate.get("kind", "")) == "rock"
 		if candidate_is_rock and _generator_version >= ROCK_SAFE_GENERATOR_VERSION:
 			_next_event_distance = maxf(_next_event_distance, V7_MIN_ROCK_DISTANCE)
@@ -309,7 +317,7 @@ func _apply_rock_switch_clearance(event: Dictionary, required_distance: float) -
 			threat_value["switch_clearance"] = required_distance
 
 func _apply_generator_timing(event: Dictionary) -> void:
-	if str(event.get("kind", "")) == "saw" and _generator_version >= GENERATOR_VERSION:
+	if str(event.get("kind", "")) == "saw" and _generator_version >= GENERATOR_VERSION_10:
 		var variant_roll := _rng.randf()
 		var variant := "floor_embedded"
 		if variant_roll >= 0.55 and variant_roll < 0.90:

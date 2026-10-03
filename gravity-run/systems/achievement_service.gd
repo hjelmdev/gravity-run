@@ -19,6 +19,7 @@ var _toast_description: Label
 var _toast_badge: Control
 var _toast_heading: Label
 var _toast_queue: Array[Dictionary] = []
+var _pending_confirmed_unlocks: Array[Dictionary] = []
 var _toast_timer: Timer
 
 func _ready() -> void:
@@ -117,12 +118,15 @@ func _on_auth_state_changed(authenticated: bool, _email: String) -> void:
 	if next_user == _user_id:
 		return
 	_user_id = next_user
+	_run_active = false
+	_presented_this_run.clear()
 	unlocked.clear()
 	_catalog_loaded = false
 	metrics = {"total_distance_m": 0, "best_run_distance_m": 0, "total_coins_earned": 0, "total_gravity_flips": 0}
 	hazard_stats.clear()
 	definitions.clear()
 	recent_run_unlocks.clear()
+	_pending_confirmed_unlocks.clear()
 	_toast_queue.clear()
 	_hide_toast()
 	state_changed.emit()
@@ -161,6 +165,21 @@ func _on_achievements_loaded(data: Dictionary) -> void:
 				unlocked[_key(str(entry.get("achievement_id", "")), int(entry.get("tier", 0)))] = entry
 	if data.has("catalog"):
 		_catalog_loaded = not definitions.is_empty()
+	if _catalog_loaded and not _pending_confirmed_unlocks.is_empty():
+		for entry in _pending_confirmed_unlocks:
+			var key := _key(str(entry.get("achievement_id", "")), int(entry.get("tier", 0)))
+			var definition := _find_definition(str(entry.get("achievement_id", "")), int(entry.get("tier", 0)))
+			if definition.is_empty():
+				continue
+			unlocked[key] = entry
+			recent_run_unlocks.append(definition)
+			if _run_active and not _presented_this_run.has(key):
+				_presented_this_run[key] = true
+				_toast_queue.append({"definition": definition, "provisional": false})
+		_pending_confirmed_unlocks.clear()
+		if not recent_run_unlocks.is_empty():
+			run_unlocks_changed.emit(recent_run_unlocks.duplicate(true))
+			_show_next_toast()
 	state_changed.emit()
 	_check_live_unlocks()
 
@@ -174,20 +193,28 @@ func _on_progress_changed(_wallet: int, total_distance: int, best_distance: int)
 func _on_achievements_unlocked(entries: Array) -> void:
 	if not AuthService.is_authenticated:
 		return
-	recent_run_unlocks.clear()
+	if not _catalog_loaded:
+		for entry in entries:
+			if entry is Dictionary:
+				_pending_confirmed_unlocks.append(entry.duplicate(true))
+		return
+	var newly_added: Array[Dictionary] = []
 	for raw_entry in entries:
 		if not raw_entry is Dictionary:
 			continue
 		var key := _key(str(raw_entry.get("achievement_id", "")), int(raw_entry.get("tier", 0)))
+		if unlocked.has(key):
+			continue
 		var definition := _find_definition(str(raw_entry.get("achievement_id", "")), int(raw_entry.get("tier", 0)))
 		if definition.is_empty():
 			continue
 		unlocked[key] = raw_entry
 		recent_run_unlocks.append(definition)
+		newly_added.append(definition)
 		if _run_active and not _presented_this_run.has(key):
 			_toast_queue.append({"definition": definition, "provisional": false})
-	if not entries.is_empty():
-		run_unlocks_changed.emit(recent_run_unlocks.duplicate(true))
+	if not newly_added.is_empty():
+		run_unlocks_changed.emit(newly_added.duplicate(true))
 		state_changed.emit()
 		_show_next_toast()
 

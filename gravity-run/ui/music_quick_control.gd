@@ -13,6 +13,9 @@ var _speaker_icon: Control
 var _panel: PanelContainer
 var _slider: HSlider
 var _value_label: Label
+var _sfx_slider: HSlider
+var _sfx_value_label: Label
+var _sfx_enabled_button: CheckButton
 var _close_timer: Timer
 var _touch_pinned := false
 var _profile: Node
@@ -34,10 +37,14 @@ func _ready() -> void:
 	if is_instance_valid(_profile):
 		_profile.connect("music_enabled_changed", _sync_enabled)
 		_profile.connect("music_volume_changed", _sync_volume)
+		_profile.connect("sfx_enabled_changed", _sync_sfx_enabled)
+		_profile.connect("sfx_volume_changed", _sync_sfx_volume)
 	get_viewport().size_changed.connect(_layout)
 	if is_instance_valid(_profile):
 		_sync_enabled(bool(_profile.get("music_enabled")))
 		_sync_volume(float(_profile.get("music_volume")))
+		_sync_sfx_enabled(bool(_profile.get("sfx_enabled")))
+		_sync_sfx_volume(float(_profile.get("sfx_volume")))
 
 func _build_ui() -> void:
 	_button = Button.new()
@@ -80,7 +87,7 @@ func _build_ui() -> void:
 	_panel = PanelContainer.new()
 	_panel.name = "MusicVolumePopover"
 	_panel.visible = false
-	_panel.custom_minimum_size = Vector2(230.0, 72.0)
+	_panel.custom_minimum_size = Vector2(230.0, 158.0)
 	_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	_panel.mouse_entered.connect(_on_volume_panel_mouse_entered)
 	_panel.mouse_exited.connect(_on_control_mouse_exited)
@@ -117,6 +124,38 @@ func _build_ui() -> void:
 	_slider.focus_entered.connect(_on_volume_panel_mouse_entered)
 	_slider.focus_exited.connect(_on_control_focus_exited)
 	column.add_child(_slider)
+	var sfx_row := HBoxContainer.new()
+	sfx_row.add_theme_constant_override("separation", 4)
+	column.add_child(sfx_row)
+	_sfx_enabled_button = CheckButton.new()
+	_sfx_enabled_button.name = "SfxEnabled"
+	_sfx_enabled_button.text = tr("Sound effects")
+	_sfx_enabled_button.focus_mode = Control.FOCUS_ALL
+	_sfx_enabled_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_sfx_enabled_button.toggled.connect(_on_sfx_enabled_toggled)
+	sfx_row.add_child(_sfx_enabled_button)
+	_sfx_value_label = Label.new()
+	_sfx_value_label.name = "SfxVolumeValue"
+	_sfx_value_label.custom_minimum_size.x = 42.0
+	_sfx_value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	sfx_row.add_child(_sfx_value_label)
+	_sfx_slider = HSlider.new()
+	_sfx_slider.name = "SfxVolumeSlider"
+	_sfx_slider.min_value = 0.0
+	_sfx_slider.max_value = 100.0
+	_sfx_slider.step = 1.0
+	_sfx_slider.focus_mode = Control.FOCUS_ALL
+	_sfx_slider.custom_minimum_size = Vector2(202.0, 24.0)
+	_sfx_slider.accessibility_name = tr("Sound effects volume")
+	_sfx_slider.tooltip_text = tr("Sound effects volume")
+	_sfx_slider.value_changed.connect(_on_sfx_volume_changed)
+	_sfx_slider.drag_ended.connect(func(_changed: bool) -> void:
+		if is_instance_valid(_profile):
+			_profile.call("flush_settings")
+	)
+	_sfx_slider.focus_entered.connect(_on_volume_panel_mouse_entered)
+	_sfx_slider.focus_exited.connect(_on_control_focus_exited)
+	column.add_child(_sfx_slider)
 
 func _layout() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -136,7 +175,7 @@ func _layout() -> void:
 	_panel.offset_left = right_offset - 226.0
 	_panel.offset_right = right_offset + 4.0
 	_panel.offset_top = top_offset + 44.0
-	_panel.offset_bottom = top_offset + 120.0
+	_panel.offset_bottom = top_offset + 206.0
 
 func set_right_offset(value: float) -> void:
 	right_offset = value
@@ -166,6 +205,15 @@ func _on_volume_changed(value: float) -> void:
 	if is_instance_valid(_profile):
 		_profile.call("set_music_volume", value / 100.0)
 
+func _on_sfx_volume_changed(value: float) -> void:
+	if is_instance_valid(_profile):
+		_profile.call("set_sfx_volume", value / 100.0)
+
+func _on_sfx_enabled_toggled(value: bool) -> void:
+	if is_instance_valid(_profile):
+		_profile.call("set_sfx_enabled", value)
+		_profile.call("flush_settings")
+
 func _sync_enabled(value: bool) -> void:
 	if is_instance_valid(_speaker_icon):
 		_speaker_icon.set("music_enabled", value)
@@ -179,6 +227,16 @@ func _sync_volume(value: float) -> void:
 		_slider.set_value_no_signal(value * 100.0)
 	if is_instance_valid(_value_label):
 		_value_label.text = "%d%%" % roundi(value * 100.0)
+
+func _sync_sfx_enabled(value: bool) -> void:
+	if is_instance_valid(_sfx_enabled_button):
+		_sfx_enabled_button.set_pressed_no_signal(value)
+
+func _sync_sfx_volume(value: float) -> void:
+	if is_instance_valid(_sfx_slider):
+		_sfx_slider.set_value_no_signal(value * 100.0)
+	if is_instance_valid(_sfx_value_label):
+		_sfx_value_label.text = "%d%%" % roundi(value * 100.0)
 
 func _on_expand_mouse_entered() -> void:
 	_close_timer.stop()
@@ -211,7 +269,7 @@ func _on_close_timeout() -> void:
 
 func _has_control_focus() -> bool:
 	var focused := get_viewport().gui_get_focus_owner()
-	return focused == _button or focused == _expand_button or focused == _slider
+	return focused == _button or focused == _expand_button or focused == _slider or focused == _sfx_slider or focused == _sfx_enabled_button
 
 func _pointer_over_controls() -> bool:
 	var point := get_global_mouse_position()

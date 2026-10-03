@@ -7,6 +7,7 @@ const BarrelScene := preload("res://hazards/barrel.tscn")
 const CoinScene := preload("res://collectibles/coin.tscn")
 const FallingRockScene := preload("res://hazards/falling_rock.tscn")
 const SawBladeScene := preload("res://hazards/saw_blade.tscn")
+const GhostHazardScene := preload("res://hazards/ghost_hazard.tscn")
 const LedgeScene := preload("res://terrain/ledge.tscn")
 const SlopeScene := preload("res://terrain/slope.tscn")
 const TrackGapScript := preload("res://terrain/track_gap.gd")
@@ -17,9 +18,11 @@ const SurfaceIndexScript := preload("res://systems/course_surface_index.gd")
 const FallingRockModel := preload("res://systems/falling_rock_model.gd")
 const RockWarningIcon := preload("res://systems/rock_warning_icon.gd")
 const RockWarningPulseScript := preload("res://systems/rock_warning_pulse.gd")
+const GhostWarningPulseScript := preload("res://systems/ghost_warning_pulse.gd")
 const BiomeRendererScript := preload("res://biomes/biome_renderer.gd")
 
 var manifest: Resource
+var _audio_round_id := ""
 var event_nodes: Dictionary = {}
 var _confirmed_coin_bursts: Dictionary = {}
 var _coin_visual_predictions: Dictionary = {}
@@ -41,6 +44,7 @@ var _first_start_draw_profile: Dictionary = {}
 var _surface_index
 var _rock_warning_states: Array[Dictionary] = []
 var _rock_warning_pulse: RefCounted = RockWarningPulseScript.new()
+var _ghost_warning_pulse: RefCounted = GhostWarningPulseScript.new()
 var _rock_warning_accessibility_button: Button
 
 func _ready() -> void:
@@ -62,6 +66,8 @@ func _process(delta: float) -> void:
 	if bool(_rock_warning_pulse.call("advance", delta)):
 		queue_redraw()
 		_update_rock_warning_accessibility_marker()
+	if bool(_ghost_warning_pulse.call("advance", delta)):
+		queue_redraw()
 
 static func create_hazard(scene: PackedScene, at_position: Vector2, size: Vector2, from_ceiling: bool, surface_rotation: float = 0.0) -> Node2D:
 	var hazard := scene.instantiate() as Node2D
@@ -128,6 +134,7 @@ func load_manifest(course_manifest: Resource) -> String:
 					var barrel_id := "%s_%d" % [event_id, index]
 					var barrel := create_hazard(BarrelScene, Vector2(x + spawn_offset - chain_width * 0.5 + float(index) * spacing, float(event.get("y", floor_y))), Vector2(HazardRules.BARREL_WIDTH, float(event.get("height", HazardRules.BARREL_WIDTH))), false)
 					barrel.call("set_motion_speed_multiplier", speed_multiplier)
+					barrel.connect("destruction_started", Callable(self, "_on_barrel_destruction_started"))
 					barrel.name = "Barrel_%s" % barrel_id
 					_tag_presentation_target(barrel, barrel_id, "barrel", true)
 					add_child(barrel)
@@ -167,6 +174,7 @@ func load_manifest(course_manifest: Resource) -> String:
 			"rock":
 				var rock := FallingRockScene.instantiate() as Node2D
 				rock.call("configure", event)
+				rock.connect("impact_started", Callable(self, "_on_rock_impact_started"))
 				rock.name = "FallingRock_%s" % event_id
 				_tag_presentation_target(rock, event_id, kind, false)
 				add_child(rock)
@@ -178,11 +186,20 @@ func load_manifest(course_manifest: Resource) -> String:
 				_tag_presentation_target(saw, event_id, kind, true)
 				add_child(saw)
 				event_nodes[event_id] = saw
+			"ghost":
+				var ghost := GhostHazardScene.instantiate() as Node2D
+				ghost.call("configure", event)
+				ghost.connect("phase_changed", Callable(self, "_on_ghost_phase_changed"))
+				ghost.name = "Ghost_%s" % event_id
+				_tag_presentation_target(ghost, event_id, kind, false)
+				add_child(ghost)
+				event_nodes[event_id] = ghost
 	for collectible in manifest.collectibles:
 		var coin := CoinScene.instantiate() as Node2D
 		var entity_id := str(collectible.get("entity_id", ""))
 		coin.position = Vector2(float(collectible.get("world_x", 0.0)), float(collectible.get("world_y", 0.0)))
 		coin.name = "Coin_%s" % entity_id
+		_connect_coin_audio(coin, entity_id)
 		_tag_presentation_target(coin, entity_id, "coin", false)
 		add_child(coin)
 		event_nodes[entity_id] = coin
@@ -205,6 +222,49 @@ func load_manifest(course_manifest: Resource) -> String:
 	_render_step_positions.sort()
 	return ""
 
+func set_audio_round_id(round_id: String) -> void:
+	if round_id != _audio_round_id:
+		_ghost_warning_pulse.call("reset")
+	_audio_round_id = round_id
+	if not _audio_round_id.is_empty():
+		SfxController.begin_round(_audio_round_id)
+
+func _connect_coin_audio(coin: Node, entity_id: String) -> void:
+	var event_key := "%s|coin|%s" % [_audio_round_id, entity_id]
+	coin.connect("visual_collection_started", Callable(self, "_on_coin_visual_collection_started").bind(entity_id, event_key))
+	coin.connect("visual_collection_cancelled", Callable(SfxController, "clear_event_key").bind(event_key))
+
+func _on_coin_visual_collection_started(entity_id: String, event_key: String) -> void:
+	var coin: Variant = event_nodes.get(entity_id)
+	if not is_instance_valid(coin) or not coin is Node2D:
+		return
+	var coin_x := float(coin.position.x)
+	var view_width := get_viewport_rect().size.x
+	var audible := coin_x >= _camera_left - 64.0 and coin_x <= _camera_left + view_width + 64.0
+	SfxController.play_event("coin", event_key, audible)
+
+func _on_barrel_destruction_started(barrel: Node2D) -> void:
+	var audible := barrel.position.x >= _camera_left - 64.0 and barrel.position.x <= _camera_left + get_viewport_rect().size.x + 64.0
+	SfxController.play_event("barrel_destroy", "%s|barrel|%s" % [_audio_round_id, str(barrel.get_meta("presentation_target_id", barrel.name))], audible)
+
+func _on_rock_impact_started(event_id: String) -> void:
+	var rock: Variant = event_nodes.get(event_id)
+	var audible := is_instance_valid(rock) and float(rock.position.x) >= _camera_left - 64.0 and float(rock.position.x) <= _camera_left + get_viewport_rect().size.x + 64.0
+	SfxController.play_event("rock_impact", "%s|rock|%s" % [_audio_round_id, event_id], audible)
+
+func _on_ghost_phase_changed(event_id: String, phase: String) -> void:
+	if phase != "warning":
+		return
+	var ghost: Variant = event_nodes.get(event_id)
+	if not is_instance_valid(ghost):
+		return
+	var event: Dictionary = ghost.get("event")
+	_ghost_warning_pulse.call("observe_warning", event_id, bool(event.get("from_ceiling", false)))
+	queue_redraw()
+	var event_x := float(event.get("x", 0.0))
+	var audible := event_x >= _camera_left - 64.0 and event_x <= _camera_left + get_viewport_rect().size.x + 64.0
+	SfxController.play_event("ghost_warning", "%s|ghost_warning|%s" % [_audio_round_id, event_id], audible)
+
 func _tag_presentation_target(node: Node2D, stable_id: String, kind: String, moving: bool) -> void:
 	# One metadata contract lets diagnostics include existing and future course
 	# entities without adding a probe for every hazard type.
@@ -212,7 +272,7 @@ func _tag_presentation_target(node: Node2D, stable_id: String, kind: String, mov
 	node.set_meta("presentation_target_id", stable_id)
 	node.set_meta("presentation_target_kind", kind)
 	node.set_meta("presentation_target_moving", moving)
-	node.set_meta("presentation_target_obstacle", kind in ["block", "spikes", "barrel", "rock", "saw"])
+	node.set_meta("presentation_target_obstacle", kind in ["block", "spikes", "barrel", "rock", "saw", "ghost"])
 
 func set_camera_left(camera_left: float) -> void:
 	_camera_left = maxf(camera_left, 0.0)
@@ -240,6 +300,14 @@ func set_world_state(world_state: Dictionary) -> void:
 			var saw_node: Variant = event_nodes.get(str(saw_state.get("event_id", "")))
 			if is_instance_valid(saw_node) and saw_node.has_method("apply_world_state"):
 				saw_node.call("apply_world_state", saw_state)
+	var ghosts: Variant = world_state.get("ghosts", [])
+	if ghosts is Array:
+		for ghost_state in ghosts:
+			if not ghost_state is Dictionary:
+				continue
+			var ghost_node: Variant = event_nodes.get(str(ghost_state.get("event_id", "")))
+			if is_instance_valid(ghost_node) and ghost_node.has_method("apply_world_state"):
+				ghost_node.call("apply_world_state", ghost_state)
 	var rocks: Variant = world_state.get("rocks", [])
 	_rock_warning_states.clear()
 	if rocks is Array:
@@ -426,6 +494,7 @@ func _draw() -> void:
 	CourseSurfaceRenderer.draw_track_cached(self, _camera_left, get_viewport_rect().size, _render_ceiling_gaps, _render_floor_gaps, _render_terrain_boundaries, _render_step_positions, Callable(self, "_surface_y_at"), 0.0, null, BiomeRendererScript.course_distance_at_world_x(course_start_x, 0.0))
 	_draw_rock_warning_markers()
 	_draw_rock_hud_warning()
+	_draw_ghost_hud_warning()
 	var finish_screen_x := float(manifest.finish_x) - _camera_left
 	if finish_screen_x >= 0.0 and finish_screen_x <= get_viewport_rect().size.x:
 		draw_line(Vector2(float(manifest.finish_x), 0.0), Vector2(float(manifest.finish_x), _world_height), Color("f5d45e"), 4.0)
@@ -456,6 +525,13 @@ func _draw_rock_hud_warning() -> void:
 	var center := rock_warning_hud_center(_camera_left, viewport_size)
 	var pulse_scale := float(_rock_warning_pulse.call("scale"))
 	RockWarningIcon.draw(self, center, 56.0 * pulse_scale, Color("ff814f"), float(_rock_warning_pulse.call("alpha")))
+
+func _draw_ghost_hud_warning() -> void:
+	if not bool(_ghost_warning_pulse.call("is_active")):
+		return
+	var viewport_size := get_viewport_rect().size
+	var center := Vector2(_camera_left + viewport_size.x * 0.5, viewport_size.y * 0.5)
+	_ghost_warning_pulse.call("draw", self, center)
 
 func _update_rock_warning_accessibility_marker() -> void:
 	if not is_instance_valid(_rock_warning_accessibility_button):

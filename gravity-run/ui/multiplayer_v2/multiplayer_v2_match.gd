@@ -14,6 +14,7 @@ const RoundCoordinatorScript := preload("res://systems/multiplayer_v2/v2_round_c
 const HudLayout := preload("res://ui/multiplayer_v2/v2_hud_layout.gd")
 const SharedRunHudScene := preload("res://ui/shared_run_hud.tscn")
 const ConfirmedCoinPresentationScript := preload("res://systems/confirmed_coin_presentation.gd")
+const MpAchievementResultSectionScript := preload("res://ui/multiplayer_v2/mp_achievement_result_section.gd")
 
 const FIXED_DELTA := 1.0 / 60.0
 const CAMERA_PLAYER_X := 250.0
@@ -60,6 +61,7 @@ var _result: Dictionary = {}
 var _status_label: Label
 var _result_panel: PanelContainer
 var _result_text: RichTextLabel
+var _mp_achievement_result_section: VBoxContainer
 var _results_view: ScrollContainer
 var _coin_commit_presentation = ConfirmedCoinPresentationScript.new()
 var _return_lobby_button: Button
@@ -119,6 +121,9 @@ var _flow_trace_browser_start_index := 0
 var _flow_trace_camera_instance_id := 0
 var _flow_trace_viewport_size := Vector2.ZERO
 var _start_profile_recorded: Dictionary = {}
+var _mp_achievement_context: Dictionary = {}
+var _mp_achievement_flips := 0
+var _mp_achievement_hazards: Dictionary = {}
 
 func _ready() -> void:
 	set_process_unhandled_input(true)
@@ -148,6 +153,7 @@ func _ready() -> void:
 	_course_presentation.name = "RaceCoursePresentation"
 	_course_root.add_child(_course_presentation)
 	_course_presentation.call("set_render_profile_enabled", _profiling_enabled)
+	_course_presentation.call("set_audio_round_id", _round_id)
 	var presentation_error := str(_course_presentation.call("load_manifest", _manifest))
 	if not presentation_error.is_empty():
 		_show_failure(tr("The shared race presentation failed: %s") % presentation_error)
@@ -278,6 +284,9 @@ func _build_overlay() -> void:
 	_result_text.scroll_active = false
 	_result_text.custom_minimum_size.y = 30
 	result_layout.add_child(_result_text)
+	_mp_achievement_result_section = MpAchievementResultSectionScript.new()
+	_mp_achievement_result_section.name = "MultiplayerAchievementResults"
+	result_layout.add_child(_mp_achievement_result_section)
 	_results_view = ResultsView.new()
 	result_layout.add_child(_results_view)
 	_results_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -563,6 +572,10 @@ func _step_local_round_impl() -> void:
 	var state: Dictionary = _runner.player_state
 	var previous_state: Dictionary = state.duplicate(true)
 	var candidate_x := minf(float(state.get("world_x", 0.0)) + Motion.distance_for_delta(FIXED_DELTA, _runner.run_speed_multiplier), float(_manifest.finish_x))
+	_record_mp_encounters(float(state.get("world_x", 0.0)), candidate_x)
+	if not _mp_achievement_context.is_empty():
+		AchievementService.update_run_distance(candidate_x - float(_manifest.start_x))
+		AchievementService.update_run_metrics(0, _mp_achievement_flips, _mp_achievement_hazards.keys())
 	var candidate := state.duplicate(true)
 	candidate["world_x"] = candidate_x
 	var contact: Dictionary = _world.player_contact(candidate)
@@ -583,6 +596,10 @@ func _step_local_round_impl() -> void:
 	if int(_runner.input_sequence) > sequence_before:
 		var audit := {"round_id": _round_id, "owner_peer_id": int(MultiplayerV2Service.session.get("local_peer_id", 1)), "input_seq": _runner.input_sequence, "simulation_tick": _runner.simulation_tick, "kind": "gravity_flip", "requested_direction": flip, "accepted": int(_runner.player_state.get("gravity_direction", gravity_before)) != gravity_before, "gravity_direction": int(_runner.player_state.get("gravity_direction", gravity_before))}
 		MultiplayerV2Service.report_input_audit(audit)
+		if bool(audit.accepted):
+			_mp_achievement_flips += 1
+			AchievementService.update_run_metrics(0, _mp_achievement_flips, _mp_achievement_hazards.keys())
+			SfxController.play_event("gravity_flip", "%s|flip|%d" % [_round_id, _runner.input_sequence])
 	var proposed_state: Dictionary = _runner.player_state.duplicate(true)
 	var swept: Dictionary = _world.first_static_terminal_contact(previous_state, proposed_state)
 	contact = _world.player_contact(_runner.player_state)
@@ -809,6 +826,7 @@ func _on_interaction_resolved(request_id: String, accepted: bool, reason: String
 	queue_redraw()
 
 func _on_results_received(result: Dictionary) -> void:
+	_finish_mp_achievement_run(result)
 	MusicController.enter_menu()
 	_result = result.duplicate(true)
 	_close_flow_trace("results_received")
@@ -817,6 +835,7 @@ func _on_results_received(result: Dictionary) -> void:
 	_status_label.visible = false
 	_result_text.clear()
 	_result_text.append_text("[center][b]%s[/b][/center]" % tr("Round complete"))
+	_mp_achievement_result_section.call("show_terminal_result", _round_id, int(MultiplayerV2Service.session.get("local_peer_id", -1)))
 	_results_view.show_rows(result.get("placements", []))
 	_update_coin_count_indicator()
 
@@ -835,6 +854,10 @@ static func spectator_display_name(peer_id: int, roster: Array, fallback: String
 	return fallback
 
 func _on_round_failed(reason: String) -> void:
+	if not _mp_achievement_context.is_empty():
+		AccountProgress.abandon_multiplayer_achievement_run(_mp_achievement_context)
+		AchievementService.finish_run()
+	_mp_achievement_context.clear()
 	MusicController.enter_menu()
 	_round_aborted = true
 	_round_started = false
@@ -853,6 +876,10 @@ func _on_room_changed_for_abort(room: Dictionary) -> void:
 		_status_label.text = tr("The round was aborted. Return to the lobby when you are ready.")
 
 func _on_membership_removed(reason: String) -> void:
+	if not _mp_achievement_context.is_empty():
+		AccountProgress.abandon_multiplayer_achievement_run(_mp_achievement_context)
+		AchievementService.finish_run()
+		_mp_achievement_context.clear()
 	MusicController.enter_menu()
 	_round_started = false
 	_result_panel.visible = true
@@ -868,8 +895,14 @@ func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 		return
 	var callback_started_usec := Time.get_ticks_usec()
 	_round_started = true
+	_mp_achievement_result_section.call("begin_round", round_id, int(MultiplayerV2Service.session.get("local_peer_id", -1)))
+	_mp_achievement_context = AccountProgress.begin_multiplayer_achievement_run(round_id, int(MultiplayerV2Service.session.get("local_peer_id", -1)))
+	_mp_achievement_flips = 0
+	_mp_achievement_hazards.clear()
+	AchievementService.begin_run()
 	_pending_coin_claims.clear()
 	MusicController.start_round(round_id)
+	SfxController.begin_round(round_id)
 	_world_tick = 0
 	_local_start_deadline_usec = int(MultiplayerV2Service._round_coordinator.clock.started_at_usec)
 	_first_physics_step_usec = -1
@@ -899,6 +932,52 @@ func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 	_update_start_countdown()
 	if _profiling_enabled:
 		_record_start_stage("round_started_callback", callback_started_usec, {"callback_duration_usec": Time.get_ticks_usec() - callback_started_usec, "callback_lateness_usec": maxi(callback_started_usec - _local_start_deadline_usec, 0)})
+
+func _record_mp_encounters(previous_x: float, current_x: float) -> void:
+	if _mp_achievement_context.is_empty() or _manifest == null or current_x <= previous_x:
+		return
+	for event in _manifest.events:
+		if not event is Dictionary:
+			continue
+		var event_x := float(event.get("x", 0.0))
+		if event_x < previous_x or event_x > current_x:
+			continue
+		var kind := str(event.get("kind", ""))
+		var hazard_id := ""
+		match kind:
+			"spikes": hazard_id = "spike_group"
+			"block": hazard_id = "block"
+			"barrels": hazard_id = "barrel_chain"
+			"gap": hazard_id = "ceiling_gap" if bool(event.get("from_ceiling", false)) else "floor_gap"
+			"step": hazard_id = "terrain_step"
+			"slope": hazard_id = "terrain_slope"
+			"rock": hazard_id = "falling_rock"
+			"saw": hazard_id = "saw_blade"
+			"ghost": hazard_id = "ghost"
+		if not hazard_id.is_empty():
+			_mp_achievement_hazards[hazard_id] = true
+	AchievementService.update_run_metrics(0, _mp_achievement_flips, _mp_achievement_hazards.keys())
+
+func _finish_mp_achievement_run(result: Dictionary) -> void:
+	if _mp_achievement_context.is_empty():
+		AchievementService.finish_run()
+		return
+	var local_peer := int(MultiplayerV2Service.session.get("local_peer_id", -1))
+	for placement in result.get("placements", []):
+		if not placement is Dictionary or int(placement.get("owner_peer_id", -1)) != local_peer:
+			continue
+		var state := str(placement.get("state", ""))
+		if state in ["dead", "finished"]:
+			var distance_m := int(float(placement.get("distance", 0.0)) / 10.0)
+			AccountProgress.complete_multiplayer_achievement_run(_mp_achievement_context, state, distance_m, _mp_achievement_flips, _mp_achievement_hazards.keys())
+		else:
+			AccountProgress.abandon_multiplayer_achievement_run(_mp_achievement_context)
+		AchievementService.finish_run()
+		_mp_achievement_context.clear()
+		return
+	AccountProgress.abandon_multiplayer_achievement_run(_mp_achievement_context)
+	AchievementService.finish_run()
+	_mp_achievement_context.clear()
 
 func _update_spectator_camera() -> void:
 	if str(_runner.player_state.get("state", "running")) == "running" or str(_runner.player_state.get("state", "")) == "pending_barrel":
@@ -1653,12 +1732,20 @@ func _toggle_debug_panel() -> void:
 	_pending_flip_direction = 0
 
 func _leave_v2() -> void:
+	if not _mp_achievement_context.is_empty():
+		AccountProgress.abandon_multiplayer_achievement_run(_mp_achievement_context)
+		AchievementService.finish_run()
+		_mp_achievement_context.clear()
 	MultiplayerV2Service.leave_room()
 	AppNavigation.request_game_hub()
 	get_tree().change_scene_to_file("res://ui/main_menu.tscn")
 
 func _show_failure(message: String) -> void:
 	MusicController.enter_menu()
+	if not _mp_achievement_context.is_empty():
+		AccountProgress.abandon_multiplayer_achievement_run(_mp_achievement_context)
+		AchievementService.finish_run()
+		_mp_achievement_context.clear()
 	if _round_started or MultiplayerV2Service._round_coordinator.state in [RoundCoordinatorScript.State.PREPARING, RoundCoordinatorScript.State.COMMITTING]:
 		_round_aborted = true
 		MultiplayerV2Service.report_local_prepare_failure(message, "match_scene_ready")

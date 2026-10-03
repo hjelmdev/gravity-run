@@ -29,9 +29,12 @@ const FALLING_ROCK_SCENE := preload("res://hazards/falling_rock.tscn")
 const FALLING_ROCK_MODEL := preload("res://systems/falling_rock_model.gd")
 const SAW_BLADE_SCENE := preload("res://hazards/saw_blade.tscn")
 const SAW_BLADE_MODEL := preload("res://systems/saw_blade_model.gd")
+const GHOST_HAZARD_SCENE := preload("res://hazards/ghost_hazard.tscn")
+const GHOST_HAZARD_MODEL := preload("res://systems/ghost_hazard_model.gd")
 const COURSE_SURFACE_INDEX_SCRIPT := preload("res://systems/course_surface_index.gd")
 const ROCK_WARNING_ICON_SCRIPT := preload("res://systems/rock_warning_icon.gd")
 const ROCK_WARNING_PULSE_SCRIPT := preload("res://systems/rock_warning_pulse.gd")
+const GHOST_WARNING_PULSE_SCRIPT := preload("res://systems/ghost_warning_pulse.gd")
 const MANIFEST_BUILDER_SCRIPT := preload("res://systems/course_manifest_builder.gd")
 const RUN_LOOT_ENABLED := false
 const SLOPE_SCENE := preload("res://terrain/slope.tscn")
@@ -68,11 +71,15 @@ var _pending_shared_coins: Array[Dictionary] = []
 var _shared_coin_planner: RefCounted
 var _shared_coin_planned_until := -INF
 var _singleplayer_simulation_tick := 0
+var _singleplayer_audio_round_id := ""
 var _rock_warning_pulse: RefCounted = ROCK_WARNING_PULSE_SCRIPT.new()
+var _ghost_warning_pulse: RefCounted = GHOST_WARNING_PULSE_SCRIPT.new()
 var _rock_warning_accessibility_button: Button
 var _spawned_early_rock_ids: Dictionary = {}
 var _spawned_early_saw_ids: Dictionary = {}
+var _spawned_early_ghost_ids: Dictionary = {}
 var _singleplayer_saw_activation_ticks: Dictionary = {}
+var _singleplayer_ghost_activation_ticks: Dictionary = {}
 var _singleplayer_saw_surface_indexes: Dictionary = {}
 var _step_start_barrel_centers: Dictionary = {}
 var _manifest_builder: RefCounted
@@ -131,6 +138,7 @@ func _ready() -> void:
 	run_state.connect("run_started", Callable(hud, "hide_game_over"))
 	run_state.connect("run_finished", Callable(hud, "show_game_over"))
 	player.connect("gravity_flipped", Callable(run_state, "record_gravity_flip"))
+	player.connect("gravity_flipped", Callable(self, "_on_singleplayer_gravity_flipped"))
 	player.connect("status_changed", Callable(hud, "update_player_status"))
 	ChallengeService.leaderboard_received.connect(_on_seed_leaderboard_received)
 	if demo_mode:
@@ -139,13 +147,16 @@ func _ready() -> void:
 	_start_run()
 func _start_run() -> void:
 	_rock_warning_pulse.call("reset")
+	_ghost_warning_pulse.call("reset")
 	_rock_warning_accessibility_button.visible = false
 	_render_diagnostic_tick = 0
 	_render_diagnostic_frames.clear()
 	run_end_panel.visible = false
 	if not demo_mode:
 		AchievementService.begin_run()
-		MusicController.start_round("singleplayer:%d" % Time.get_ticks_usec())
+		_singleplayer_audio_round_id = "singleplayer:%d" % Time.get_ticks_usec()
+		MusicController.start_round(_singleplayer_audio_round_id)
+		SfxController.begin_round(_singleplayer_audio_round_id)
 	player.call("reset_to_floor", WORLD_HEIGHT - 80.0)
 	var loadout_snapshot: Resource = InventoryService.create_run_loadout_snapshot(PlayerProfile.get_character_stats())
 	run_state.call("set_loadout_snapshot", loadout_snapshot)
@@ -172,7 +183,9 @@ func _start_run() -> void:
 	_spawned_shared_coin_ids.clear()
 	_spawned_early_rock_ids.clear()
 	_spawned_early_saw_ids.clear()
+	_spawned_early_ghost_ids.clear()
 	_singleplayer_saw_activation_ticks.clear()
+	_singleplayer_ghost_activation_ticks.clear()
 	_singleplayer_saw_surface_indexes.clear()
 	_pending_shared_coins.clear()
 	_shared_coin_planned_until = PLAYER_X + SHARED_COIN_PLANNER_SCRIPT.COURSE_START_OFFSET
@@ -279,6 +292,7 @@ func _process(delta: float) -> void:
 	sprite.position = _render_player_position - player.position + Vector2(0.0, -float(player.call("get_gravity_direction")))
 	_update_camera()
 	_update_singleplayer_rock_warning_pulse(delta)
+	_ghost_warning_pulse.call("advance", delta)
 	_render_presentation_ready_usec = Time.get_ticks_usec()
 	if render_diagnostics_enabled and not game_over:
 		_record_render_diagnostic(delta)
@@ -414,6 +428,11 @@ func _physics_process(delta: float) -> void:
 					if not _spawned_early_saw_ids.has(saw_id):
 						_spawned_early_saw_ids[saw_id] = true
 						_spawn_course_event(planned_event)
+				elif planned_kind == "ghost" and event_distance <= course_distance + float(planned_event.get("trigger_lead", 2200.0)):
+					var ghost_id := _singleplayer_ghost_key(planned_event)
+					if not _spawned_early_ghost_ids.has(ghost_id):
+						_spawned_early_ghost_ids[ghost_id] = true
+						_spawn_course_event(planned_event)
 		for event in course_generator.pop_events_until(spawn_line):
 			var event_kind := str(event.get("kind", ""))
 			if event_kind == "rock":
@@ -426,6 +445,11 @@ func _physics_process(delta: float) -> void:
 				if _spawned_early_saw_ids.has(event_id):
 					continue
 				_spawned_early_saw_ids[event_id] = true
+			elif event_kind == "ghost":
+				var event_id := _singleplayer_ghost_key(event)
+				if _spawned_early_ghost_ids.has(event_id):
+					continue
+				_spawned_early_ghost_ids[event_id] = true
 			_spawn_course_event(event)
 		if RUN_LOOT_ENABLED:
 			for loot_event in loot_spawn_planner.pop_events_until(spawn_line):
@@ -452,6 +476,7 @@ func _physics_process(delta: float) -> void:
 	player.call("advance", delta, _floor_surface_y(float(player.get("world_x"))), _ceiling_surface_y(float(player.get("world_x"))), _surface_is_solid_at_x(float(player.get("world_x")), false), _surface_is_solid_at_x(float(player.get("world_x")), true))
 	_update_falling_rocks(previous_world_x, float(player.get("world_x")))
 	_update_saw_blades(previous_world_x, float(player.get("world_x")))
+	_update_ghost_hazards(float(player.get("world_x")))
 	_presentation.push(player.position)
 	var run_end_requested := player.position.y < -64.0 or player.position.y > WORLD_HEIGHT + 64.0
 
@@ -739,6 +764,7 @@ func _spawn_course_event(event: Dictionary) -> void:
 			if not near_terrain and _floor_surface_y(event_x) - _ceiling_surface_y(event_x) >= 260.0:
 				var rock := FALLING_ROCK_SCENE.instantiate() as Node2D
 				var rock_event_id := _singleplayer_rock_key(event)
+				rock.connect("impact_started", Callable(self, "_on_rock_impact_started"))
 				var rock_event := {"event_id": rock_event_id, "kind": "rock", "x": event_x, "width": width, "height": height, "floor_y": _floor_surface_y(event_x), "ceiling_y": _ceiling_surface_y(event_x), "trigger_lead": float(event.get("trigger_lead", FALLING_ROCK_MODEL.TRIGGER_LEAD)), "warning_ticks": int(event.get("warning_ticks", FALLING_ROCK_MODEL.WARNING_TICKS)), "fall_ticks": int(event.get("fall_ticks", FALLING_ROCK_MODEL.FALL_TICKS)), "burial_depth": float(event.get("burial_depth", FALLING_ROCK_MODEL.BURIAL_DEPTH))}
 				rock.call("configure", rock_event)
 				rock.name = "FallingRock_%s" % rock_event_id
@@ -767,6 +793,20 @@ func _spawn_course_event(event: Dictionary) -> void:
 			if _singleplayer_saw_activation_ticks.has(saw_key):
 				saw.call("set_activation_tick", int(_singleplayer_saw_activation_ticks[saw_key]))
 				saw.call("set_simulation_tick", _singleplayer_simulation_tick)
+		&"ghost":
+			var ghost_event := _resolve_singleplayer_ghost_event(event)
+			if ghost_event.is_empty():
+				return
+			var ghost_id := str(ghost_event.get("event_id", _singleplayer_ghost_key(event)))
+			var ghost := GHOST_HAZARD_SCENE.instantiate() as Node2D
+			ghost.call("configure", ghost_event)
+			ghost.name = "Ghost_%s" % ghost_id
+			ghost.connect("phase_changed", Callable(self, "_on_singleplayer_ghost_phase_changed").bind(ghost_event))
+			add_child(ghost)
+			obstacles.append(ghost)
+			if _singleplayer_ghost_activation_ticks.has(ghost_id):
+				ghost.call("set_activation_tick", int(_singleplayer_ghost_activation_ticks[ghost_id]))
+				ghost.call("set_simulation_tick", _singleplayer_simulation_tick)
 		_:
 			_spawn_custom_course_event(event, event_x)
 
@@ -808,13 +848,16 @@ func _singleplayer_rock_key(event: Dictionary) -> String:
 func _singleplayer_saw_key(event: Dictionary) -> String:
 	return "%s:%.3f" % [str(event.get("id", "saw")), float(event.get("course_distance", -1.0))]
 
+func _singleplayer_ghost_key(event: Dictionary) -> String:
+	return "%s:%.3f" % [str(event.get("id", "ghost")), float(event.get("course_distance", -1.0))]
+
 func _resolve_singleplayer_saw_event(source_event: Dictionary) -> Dictionary:
 	if course_generator == null or _manifest_builder == null:
 		return {}
 	var source_distance := float(source_event.get("course_distance", 0.0))
 	var support_horizon := source_distance + SAW_BLADE_MODEL.START_OFFSET + 3000.0
 	course_generator.ensure_horizon(support_horizon, _run_speed(), screen_height, COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE)
-	var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", course_generator.get_planned_events(), ceili(support_horizon))
+	var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", course_generator.get_planned_events(), ceili(support_horizon), _active_seed_version)
 	var target_x := PLAYER_X + source_distance
 	for resolved_event in resolved_events:
 		if str(resolved_event.get("kind", "")) == "saw" and absf(float(resolved_event.get("x", INF)) - target_x) < 0.5:
@@ -823,6 +866,21 @@ func _resolve_singleplayer_saw_event(source_event: Dictionary) -> Dictionary:
 			var surface_index: RefCounted = COURSE_SURFACE_INDEX_SCRIPT.new()
 			surface_index.call("configure", resolved_events, WORLD_HEIGHT - 80.0, 80.0)
 			_singleplayer_saw_surface_indexes[_singleplayer_saw_key(source_event)] = surface_index
+			return result
+	return {}
+
+func _resolve_singleplayer_ghost_event(source_event: Dictionary) -> Dictionary:
+	if course_generator == null or _manifest_builder == null:
+		return {}
+	var source_distance := float(source_event.get("course_distance", 0.0))
+	var support_horizon := source_distance + 200.0
+	course_generator.ensure_horizon(support_horizon, _run_speed(), screen_height, COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE)
+	var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", course_generator.get_planned_events(), ceili(support_horizon), _active_seed_version)
+	var target_x := PLAYER_X + source_distance
+	for resolved_event in resolved_events:
+		if str(resolved_event.get("kind", "")) == "ghost" and absf(float(resolved_event.get("x", INF)) - target_x) < 0.5:
+			var result := resolved_event.duplicate(true)
+			result["source_ghost_key"] = _singleplayer_ghost_key(source_event)
 			return result
 	return {}
 
@@ -858,6 +916,17 @@ func _update_falling_rocks(previous_x: float, current_x: float) -> void:
 		if current_x >= trigger_x:
 			obstacle.call("set_activation_tick", _singleplayer_simulation_tick + FALLING_ROCK_MODEL.DELIVERY_TICKS)
 			obstacle.call("set_simulation_tick", _singleplayer_simulation_tick)
+
+func _update_ghost_hazards(current_x: float) -> void:
+	for obstacle in obstacles:
+		if not is_instance_valid(obstacle) or not obstacle.is_in_group("ghost_hazards"):
+			continue
+		var event: Dictionary = obstacle.get("event")
+		var event_id := str(event.get("event_id", ""))
+		if not _singleplayer_ghost_activation_ticks.has(event_id) and current_x >= GHOST_HAZARD_MODEL.trigger_x(event):
+			_singleplayer_ghost_activation_ticks[event_id] = _singleplayer_simulation_tick
+			obstacle.call("set_activation_tick", _singleplayer_simulation_tick)
+		obstacle.call("set_simulation_tick", _singleplayer_simulation_tick)
 
 func _spawn_spike_group(count: int, from_ceiling: bool, start_x: float) -> void:
 	for i in range(count):
@@ -960,6 +1029,8 @@ func _resolve_obstacle_interactions() -> void:
 func _spawn_obstacle_scene(scene: PackedScene, width: float, height: float, from_ceiling: bool, x: float, motion_speed_multiplier: float = 1.0) -> void:
 	var obstacle := CoursePresentation.create_hazard(scene, Vector2(x, _ceiling_surface_y(x) if from_ceiling else _floor_surface_y(x)), Vector2(width, height), from_ceiling, _surface_angle_at(x, from_ceiling))
 	obstacle.connect("destroyed", Callable(self, "_on_obstacle_destroyed"))
+	if obstacle.is_in_group("barrels") and obstacle.has_signal("destruction_started"):
+		obstacle.connect("destruction_started", Callable(self, "_on_barrel_destruction_started"))
 	if obstacle.has_method("set_motion_speed_multiplier"):
 		obstacle.call("set_motion_speed_multiplier", motion_speed_multiplier)
 	add_child(obstacle)
@@ -968,11 +1039,18 @@ func _spawn_obstacle_scene(scene: PackedScene, width: float, height: float, from
 func _on_obstacle_destroyed(obstacle: Node2D) -> void:
 	obstacles.erase(obstacle)
 
+func _on_barrel_destruction_started(obstacle: Node2D) -> void:
+	_play_singleplayer_sfx("barrel_destroy", "%s|barrel_destroy|%d" % [_singleplayer_audio_round_id, obstacle.get_instance_id()])
+
+func _on_rock_impact_started(event_id: String) -> void:
+	_play_singleplayer_sfx("rock_impact", "%s|rock_impact|%s" % [_singleplayer_audio_round_id, event_id])
+
 func _spawn_coin_row() -> void:
 	var coin_count := randi_range(1, 3)
 	for i in range(coin_count):
 		var coin := COIN_SCENE.instantiate() as Node2D
 		coin.connect("collected", Callable(run_state, "add_coins"))
+		_connect_coin_audio(coin, "coin:%d" % coin.get_instance_id())
 		var coin_x := course_distance + screen_width + 70.0 + float(i) * 48.0
 		var placed := false
 		for attempt in range(20):
@@ -993,7 +1071,7 @@ func _spawn_shared_coins() -> void:
 	var horizon := course_distance + screen_width + 1400.0
 	if PLAYER_X + horizon >= _shared_coin_planned_until + 100.0:
 		var source_events: Array[Dictionary] = course_generator.get_planned_events()
-		var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", source_events, ceili(horizon))
+		var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", source_events, ceili(horizon), _active_seed_version)
 		var planned: Array[Dictionary] = _shared_coin_planner.extend(PLAYER_X + horizon, resolved_events, WORLD_HEIGHT - 80.0, 80.0, 0)
 		_pending_shared_coins.append_array(planned)
 		_shared_coin_planned_until = PLAYER_X + horizon
@@ -1008,12 +1086,44 @@ func _spawn_shared_coins() -> void:
 		var coin := COIN_SCENE.instantiate() as Node2D
 		coin.connect("collected", Callable(run_state, "add_coins"))
 		coin.connect("collected", Callable(self, "_on_shared_coin_collected").bind(entity_id))
+		_connect_coin_audio(coin, "coin:%s" % entity_id)
 		coin.position = Vector2(float(item.world_x), float(item.world_y))
 		add_child(coin)
 		coins.append(coin)
 
 func _on_shared_coin_collected(_value: int, entity_id: String) -> void:
 	_spawned_shared_coin_ids.erase(entity_id)
+
+func _connect_coin_audio(coin: Node, event_id: String) -> void:
+	var event_key := "%s|%s" % [_singleplayer_audio_round_id, event_id]
+	coin.connect("visual_collection_started", Callable(self, "_on_singleplayer_coin_visual_started").bind(coin, event_key))
+	coin.connect("visual_collection_cancelled", Callable(SfxController, "clear_event_key").bind(event_key))
+
+func _on_singleplayer_coin_visual_started(coin: Node2D, event_key: String) -> void:
+	if not is_instance_valid(coin):
+		return
+	var camera_left := float(player.get("world_x")) - PLAYER_X if is_instance_valid(player) else course_distance
+	var audible := coin.global_position.x >= camera_left - 64.0 and coin.global_position.x <= camera_left + screen_width + 64.0
+	_play_singleplayer_sfx("coin", event_key, audible)
+
+func _play_singleplayer_sfx(event_name: String, event_key: String, audible: bool = true) -> bool:
+	# Menu preview/demo runs deliberately have no gameplay audio identity.
+	if demo_mode or _singleplayer_audio_round_id.is_empty():
+		return false
+	return SfxController.play_event(event_name, event_key, audible)
+
+func _on_singleplayer_gravity_flipped() -> void:
+	_play_singleplayer_sfx("gravity_flip", "%s|gravity_flip|%d" % [_singleplayer_audio_round_id, _singleplayer_simulation_tick])
+
+func _on_singleplayer_ghost_phase_changed(event_id: String, phase: String, event: Dictionary) -> void:
+	if phase != GHOST_HAZARD_MODEL.WARNING:
+		return
+	_ghost_warning_pulse.call("observe_warning", event_id, bool(event.get("from_ceiling", false)))
+	queue_redraw()
+	var event_x := float(event.get("x", 0.0))
+	var camera_left := float(player.get("world_x")) - PLAYER_X if is_instance_valid(player) else course_distance
+	var audible := event_x >= camera_left - 64.0 and event_x <= camera_left + screen_width + 64.0
+	_play_singleplayer_sfx("ghost_warning", "%s|ghost_warning|%s" % [_singleplayer_audio_round_id, event_id], audible)
 
 func _spawn_loot_pickup(event: Dictionary) -> void:
 	if not RUN_LOOT_ENABLED or demo_mode or not AuthService.is_authenticated:
@@ -1142,6 +1252,7 @@ func _draw() -> void:
 	_draw_seed_finish_markers()
 	_draw_falling_rock_warning_markers()
 	_draw_rock_hud_warning()
+	_draw_ghost_hud_warning()
 	if render_diagnostics_enabled and not _render_diagnostic_frames.is_empty():
 		var frame_record: Dictionary = _render_diagnostic_frames.back()
 		if int(frame_record.get("render_callback_index", -1)) == _render_callback_index:
@@ -1188,6 +1299,12 @@ func _draw_rock_hud_warning() -> void:
 	var viewport_size := Vector2(screen_width, screen_height)
 	var center := ROCK_WARNING_PULSE_SCRIPT.world_center(view_left, viewport_size)
 	ROCK_WARNING_ICON_SCRIPT.draw(self, center, 56.0 * float(_rock_warning_pulse.call("scale")), Color("ff814f"), float(_rock_warning_pulse.call("alpha")))
+
+func _draw_ghost_hud_warning() -> void:
+	if not bool(_ghost_warning_pulse.call("is_active")):
+		return
+	var view_left := camera.get_screen_center_position().x - screen_width * 0.5 if is_instance_valid(camera) else _render_course_distance
+	_ghost_warning_pulse.call("draw", self, Vector2(view_left + screen_width * 0.5, screen_height * 0.5))
 
 func _on_seed_leaderboard_received(version: int, seed: int, rows: Array, _error_message: String) -> void:
 	if version != _active_seed_version or seed != _active_seed:

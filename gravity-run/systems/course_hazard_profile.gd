@@ -62,6 +62,9 @@ func create_event(rng: RandomNumberGenerator, course_distance: float, difficulty
 			lane_mask = FLOOR_LANE
 			width = 90.0
 			height = 100.0
+		&"ghost":
+			width = 72.0
+			height = 96.0
 	if difficulty != null:
 		var size_scale := float(difficulty.get("hazard_size"))
 		match event_kind:
@@ -98,6 +101,8 @@ func create_event(rng: RandomNumberGenerator, course_distance: float, difficulty
 	}
 	if event_kind == &"rock":
 		event.merge({"trigger_lead": 1100.0, "warning_ticks": 36, "fall_ticks": 20, "burial_depth": 24.0}, true)
+	elif event_kind == &"ghost":
+		event.merge({"trigger_lead": 2500.0, "warning_ticks": 120, "danger_ticks": 500, "fade_ticks": 45}, true)
 	event["threats"] = build_threat_intervals(event)
 	return event
 
@@ -127,6 +132,10 @@ func build_threat_intervals(event: Dictionary) -> Array[Dictionary]:
 			intervals.append({"start": forecast_center + 560.0, "end": forecast_center + 1350.0, "blocked_lanes": FLOOR_LANE})
 		else:
 			intervals.append({"start": forecast_center + 560.0, "end": forecast_center + 1100.0, "blocked_lanes": FLOOR_LANE})
+		return intervals
+	if StringName(event.get("kind", "")) == &"ghost":
+		var half_width := float(event.get("width", 72.0)) * 0.5 + threat_padding
+		intervals.append({"start": forecast_center - half_width, "end": forecast_center + half_width, "blocked_lanes": int(event.get("blocked_lanes", FLOOR_LANE))})
 		return intervals
 	if not threat_windows.is_empty():
 		for window in threat_windows:

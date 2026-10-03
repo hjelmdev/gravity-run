@@ -72,15 +72,18 @@ func _run() -> void:
 				saw_count += 1
 				_check(is_finite(float(event.get("spawn_x", NAN))) and event.has("floor_y") and event.has("ceiling_y"), "v9 saw serializes spawn and support geometry")
 		_check(saw_count > 0, "representative v9 seed includes saw content")
-	var v10_result: Dictionary = builder.build(v9_seed, 45000, Generator.GENERATOR_VERSION)
+	var v10_result: Dictionary = builder.build(v9_seed, 45000, Generator.GENERATOR_VERSION_10)
 	var v10_manifest: Resource = v10_result.get("manifest")
 	_check(v10_manifest != null and int(v10_manifest.get("generator_version")) == 10 and int(v10_manifest.get("manifest_version")) == 5, "v10 uses the new manifest format 5")
 	if v10_manifest != null:
 		for event in v10_manifest.get("events"):
 			if str(event.get("kind", "")) == "saw":
 				_check(event.has("saw_variant") and is_equal_approx(float(event.get("saw_radius", 0.0)), 34.0), "v10 saws serialize their variant and radius")
+	var v11_result: Dictionary = builder.build(v9_seed, 45000, Generator.GENERATOR_VERSION)
+	var v11_manifest: Resource = v11_result.get("manifest")
+	_check(v11_manifest != null and int(v11_manifest.get("generator_version")) == 11 and int(v11_manifest.get("manifest_version")) == 5, "v11 ghosts retain manifest format 5")
 	if failures == 0:
-		print("Generator compatibility passed: frozen v6/v7/v8 hashes unchanged; v9 stays manifest v4; v10 uses explicit saw variant/radius in manifest v5.")
+		print("Generator compatibility passed: frozen v6/v7/v8 hashes unchanged; v9 stays manifest v4; v10 saw variants and v11 ghosts share manifest v5.")
 	quit(1 if failures > 0 else 0)
 
 func _check(condition: bool, message: String) -> void:

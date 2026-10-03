@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="Gravity Run"
-config/version="2026.10.03-gen10-half-embedded-saw"
+config/version="2026.10.03-gen11-haunted-sfx-achievements"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.svg"
 run/main_scene="res://ui/main_menu.tscn"
@@ -28,6 +28,7 @@ AchievementService="*res://systems/achievement_service.gd"
 InventoryService="*res://systems/inventory_service.gd"
 AppNavigation="*res://systems/app_navigation.gd"
 MusicController="*res://systems/music_controller.gd"
+SfxController="*res://systems/sfx_controller.gd"
 MultiplayerV2Service="*res://systems/multiplayer_v2/multiplayer_v2_service.gd"
 MobileTextEntry="*res://systems/mobile_text_entry.gd"
 

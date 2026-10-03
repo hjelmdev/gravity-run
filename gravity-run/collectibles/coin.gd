@@ -1,6 +1,8 @@
 extends Node2D
 
 signal collected(value: int)
+signal visual_collection_started
+signal visual_collection_cancelled
 
 const COIN_SIZE := Vector2(24.0, 24.0)
 const COIN_VALUE := 1
@@ -30,6 +32,7 @@ func animate_collection() -> bool:
 	if is_being_collected:
 		return false
 	is_being_collected = true
+	visual_collection_started.emit()
 	for i in range(8):
 		var angle := TAU * float(i) / 8.0 + randf_range(-0.3, 0.3)
 		sparks.append({
@@ -67,6 +70,7 @@ func reject_visual_prediction(request_id: String) -> bool:
 		return false
 	_visual_prediction_pending = false
 	_visual_prediction_request_id = ""
+	visual_collection_cancelled.emit()
 	is_being_collected = false
 	burst_elapsed = 0.0
 	coin_face_scale_y = 1.0

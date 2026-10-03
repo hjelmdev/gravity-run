@@ -62,6 +62,12 @@ func request_password_reset(account_email: String) -> void:
 func get_access_token() -> String:
 	return _access_token
 
+func refresh_current_session() -> void:
+	if _refresh_pending or _refresh_token.is_empty() or not is_instance_valid(_provider):
+		return
+	_refresh_pending = true
+	_provider.refresh_session(_refresh_token)
+
 ## OAuth providers added later hand their Supabase session to this shared path.
 func accept_external_session(session: Dictionary) -> void:
 	if session.has("access_token") and session.has("refresh_token"):

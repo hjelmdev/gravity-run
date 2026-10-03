@@ -8,6 +8,7 @@ const LedgerScript := preload("res://systems/multiplayer_v2/v2_world_event_ledge
 const SurfaceIndexScript := preload("res://systems/course_surface_index.gd")
 const FallingRockModel := preload("res://systems/falling_rock_model.gd")
 const SawBladeModel := preload("res://systems/saw_blade_model.gd")
+const GhostModel := preload("res://systems/ghost_hazard_model.gd")
 
 const TICK_RATE := 60.0
 const FIXED_DELTA := 1.0 / TICK_RATE
@@ -20,6 +21,7 @@ var barrels: Array[Dictionary] = []
 var coins: Array[Dictionary] = []
 var rocks: Array[Dictionary] = []
 var saws: Array[Dictionary] = []
+var ghosts: Array[Dictionary] = []
 var _previous_saw_states: Dictionary = {}
 var _saw_history: Dictionary = {}
 var entity_ledger: MultiplayerV2WorldEventLedger = LedgerScript.new()
@@ -42,6 +44,7 @@ func configure(course_manifest: Resource) -> String:
 	coins.clear()
 	rocks.clear()
 	saws.clear()
+	ghosts.clear()
 	_previous_saw_states.clear()
 	_saw_history.clear()
 	_previous_render_barrels.clear()
@@ -66,13 +69,15 @@ func configure(course_manifest: Resource) -> String:
 				barrels.append(barrel)
 				entities.append({"entity_id": entity_id, "incarnation": 1, "kind": "barrel", "health": 1})
 				_entity_by_event[entity_id] = {"kind": "barrel", "event_id": event_id}
-		elif kind in ["block", "step", "rock", "saw"]:
+		elif kind in ["block", "step", "rock", "saw", "ghost"]:
 			entities.append({"entity_id": event_id, "incarnation": 1, "kind": kind, "health": 1})
 			_entity_by_event[event_id] = {"kind": kind, "event_id": event_id}
 			if kind == "rock":
 				rocks.append(event.duplicate(true))
 			elif kind == "saw":
 				saws.append({"event_id": event_id, "event": event.duplicate(true), "state": SawBladeModel.initial_state(event, float(manifest.start_x), 0)})
+			elif kind == "ghost":
+				ghosts.append(event.duplicate(true))
 	for collectible in manifest.collectibles:
 		var coin: Dictionary = collectible.duplicate(true)
 		coin["incarnation"] = 1
@@ -141,7 +146,13 @@ func render_state(fraction: float) -> Dictionary:
 			for key in ["x", "y", "roll_angle"]:
 				current_state[key] = lerpf(float(previous_state.get(key, current_state.get(key, 0.0))), float(current_state.get(key, 0.0)), clampf(fraction, 0.0, 1.0))
 		rendered_saws.append({"event_id": saw_id, "state": current_state, "event": saw.get("event", {})})
-	return {"barrels": rendered, "coins": coins, "rocks": rendered_rocks, "saws": rendered_saws, "entities": entity_ledger.entities}
+	var rendered_ghosts: Array[Dictionary] = []
+	for event in ghosts:
+		var event_id := str(event.get("event_id", ""))
+		var entity: Dictionary = entity_ledger.entities.get(event_id, {})
+		var activation_tick := int(entity.get("ghost_activation_tick", -1))
+		rendered_ghosts.append({"event_id": event_id, "event": event, "state": GhostModel.state(event, activation_tick, tick)})
+	return {"barrels": rendered, "coins": coins, "rocks": rendered_rocks, "saws": rendered_saws, "ghosts": rendered_ghosts, "entities": entity_ledger.entities}
 
 func barrel_presentation_probe(entity_id: String, presentation_tick: float, fraction: float) -> Dictionary:
 	var current: Dictionary = {}
@@ -261,6 +272,14 @@ func _player_contact_against(player_state: Dictionary, barrel_state: Array, simu
 			if bool(saw_state.get("active", false)) and not bool(saw_state.get("removed", false)) and HazardRules.circle_intersects_rect(Vector2(float(saw_state.get("x", 0.0)), float(saw_state.get("y", 0.0))), SawBladeModel.radius_for_state(saw_state), rect):
 				return {"kind": "terminal", "reason": "saw_blade", "entity_id": event_id, "event_id": event_id}
 			continue
+		if kind == "ghost":
+			var ghost_entity: Dictionary = entity_ledger.entities.get(event_id, {})
+			var ghost_tick := simulation_tick if simulation_tick >= 0 else tick
+			var ghost_activation := int(ghost_entity.get("ghost_activation_tick", -1))
+			var ghost_rect := GhostModel.hitbox(event, ghost_tick, ghost_activation)
+			if ghost_rect.size != Vector2.ZERO and HazardRules.player_impact(rect, "block", ghost_rect) == HazardRules.PlayerImpact.LETHAL:
+				return {"kind": "terminal", "reason": "ghost", "entity_id": event_id, "event_id": event_id}
+			continue
 		if kind == "spikes":
 			var triangles := HazardRules.spike_group_triangles(float(event.get("start_x", event.get("x", 0.0))), float(event.get("y", 0.0)), int(event.get("count", 1)), float(event.get("spacing", CourseGeneratorScript.SPIKE_GROUP_SPACING)), CourseGeneratorScript.SPIKE_WIDTH, CourseGeneratorScript.SPIKE_HEIGHT, bool(event.get("from_ceiling", false)))
 			if HazardRules.player_impact(rect, "spikes", Rect2(), triangles) == HazardRules.PlayerImpact.LETHAL:
@@ -323,6 +342,25 @@ func first_static_terminal_contact(previous: Dictionary, proposed: Dictionary) -
 					first_fraction = fraction
 					var saw_pose := start.lerp(end, fraction)
 					best = {"kind": "terminal", "reason": "saw_blade", "entity_id": entity_id, "event_id": entity_id, "fraction": fraction, "world_x": saw_pose.x, "y": saw_pose.y}
+			continue
+		if kind == "ghost":
+			var ghost_entity: Dictionary = entity_ledger.entities.get(entity_id, {})
+			var activation_tick := int(ghost_entity.get("ghost_activation_tick", -1))
+			if activation_tick >= 0 and GhostModel.phase_at(event, activation_tick, tick) == GhostModel.DANGEROUS:
+				var ghost_rect := GhostModel.hitbox(event, tick, activation_tick)
+				var previous_dangerous := GhostModel.phase_at(event, activation_tick, maxi(tick - 1, 0)) == GhostModel.DANGEROUS
+				var fraction := -1.0
+				if previous_dangerous:
+					var ghost_polygon := PackedVector2Array([ghost_rect.position, Vector2(ghost_rect.end.x, ghost_rect.position.y), ghost_rect.end, Vector2(ghost_rect.position.x, ghost_rect.end.y)])
+					fraction = HazardRules.swept_rect_polygon_fraction(rect, end - start, ghost_polygon)
+				elif HazardRules.player_impact(Rect2(end - Motion.SIZE * 0.5, Motion.SIZE), "block", ghost_rect) == HazardRules.PlayerImpact.LETHAL:
+					# The phase becomes lethal on this tick; do not retroactively
+					# treat the previous warning-phase pose as a collision.
+					fraction = 1.0
+				if fraction >= 0.0 and fraction < first_fraction:
+					first_fraction = fraction
+					var ghost_pose := start.lerp(end, fraction)
+					best = {"kind": "terminal", "reason": "ghost", "entity_id": entity_id, "event_id": entity_id, "fraction": fraction, "world_x": ghost_pose.x, "y": ghost_pose.y}
 			continue
 		if kind in ["block", "step"] and not entity_ledger.is_active(entity_id):
 			continue

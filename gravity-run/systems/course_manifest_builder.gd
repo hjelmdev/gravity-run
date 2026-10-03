@@ -8,6 +8,7 @@ const CourseRunDefinitionScript := preload("res://systems/course_run_definition.
 const ManifestScript := preload("res://systems/multiplayer_course_manifest.gd")
 const CoinPlanner := preload("res://systems/shared_coin_planner.gd")
 const SawBladeModel := preload("res://systems/saw_blade_model.gd")
+const BiomeRendererScript := preload("res://biomes/biome_renderer.gd")
 
 const PLAYER_START_X := 180.0
 const WORLD_WIDTH := 960.0
@@ -40,14 +41,14 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 	var source_events: Array[Dictionary] = generator.get_planned_events()
 	var manifest := ManifestScript.new() as MultiplayerCourseManifest
 	manifest.generator_version = generator_version
-	manifest.manifest_version = 5 if generator_version >= CourseGenerator.GENERATOR_VERSION else (4 if generator_version >= CourseGenerator.GENERATOR_VERSION_9 else (3 if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION else 2))
+	manifest.manifest_version = 5 if generator_version >= CourseGenerator.GENERATOR_VERSION_10 else (4 if generator_version >= CourseGenerator.GENERATOR_VERSION_9 else (3 if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION else 2))
 	manifest.course_identity = str(definition.call("get_course_identity"))
 	manifest.seed_value = seed_value
 	manifest.course_length_px = course_length_px
 	manifest.start_x = PLAYER_START_X
 	manifest.finish_x = PLAYER_START_X + float(course_length_px)
 	manifest.ruleset_fingerprint = str(ruleset.call("get_fingerprint"))
-	manifest.events = _resolve_events(source_events, course_length_px)
+	manifest.events = _resolve_events(source_events, course_length_px, generator_version)
 	if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION:
 		manifest.collectibles = CoinPlanner.plan(seed_value, manifest.start_x, manifest.finish_x, manifest.events, FLOOR_START_Y, CEILING_START_Y, int(ruleset.get("coin_revision")), float(ruleset.get("coin_density")))
 	manifest.manifest_hash = manifest.calculate_hash()
@@ -60,6 +61,9 @@ func _make_multiplayer_ruleset(generator_version: int) -> Resource:
 	var ruleset := CourseRulesetScript.new() as Resource
 	ruleset.set("ruleset_id", &"multiplayer_race")
 	if generator_version >= CourseGenerator.GENERATOR_VERSION:
+		ruleset.set("revision", 8)
+		ruleset.set("event_density", 1.55)
+	elif generator_version >= CourseGenerator.GENERATOR_VERSION_10:
 		ruleset.set("revision", 7)
 		ruleset.set("event_density", 1.55)
 	elif generator_version >= CourseGenerator.GENERATOR_VERSION_9:
@@ -87,7 +91,7 @@ func _make_multiplayer_ruleset(generator_version: int) -> Resource:
 	ruleset.set("include_all_profiles", true)
 	return ruleset
 
-func _resolve_events(source_events: Array[Dictionary], course_length_px: int) -> Array[Dictionary]:
+func _resolve_events(source_events: Array[Dictionary], course_length_px: int, generator_version: int) -> Array[Dictionary]:
 	var resolved: Array[Dictionary] = []
 	var source_terrain_distances: Array[float] = []
 	for planned_source in source_events:
@@ -287,6 +291,30 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int) ->
 					saw_record["roof_gap_x"] = roof_gap_x
 					saw_record["roof_gap_width"] = gap_width
 				resolved.append(saw_record)
+			"ghost":
+				if generator_version < CourseGenerator.GENERATOR_VERSION or BiomeRendererScript.biome_id_at(course_distance) != "haunted":
+					event_index += 1
+					continue
+				var ghost_width := float(source.get("width", 72.0))
+				var ghost_height := float(source.get("height", 96.0))
+				if floor_surface_y - ceiling_surface_y < ghost_height + 72.0:
+					event_index += 1
+					continue
+				resolved.append({
+					"event_id": event_prefix,
+					"kind": "ghost",
+					"x": event_x,
+					"width": ghost_width,
+					"height": ghost_height,
+					"floor_y": floor_surface_y,
+					"ceiling_y": ceiling_surface_y,
+					"from_ceiling": from_ceiling,
+					"blocked_lanes": int(source.get("blocked_lanes", CourseGenerator.FLOOR_LANE)),
+					"trigger_lead": float(source.get("trigger_lead", 2500.0)),
+					"warning_ticks": int(source.get("warning_ticks", 120)),
+					"danger_ticks": int(source.get("danger_ticks", 500)),
+					"fade_ticks": int(source.get("fade_ticks", 45)),
+				})
 			_:
 				push_error("Unsupported multiplayer course event kind '%s'." % kind)
 		event_index += 1

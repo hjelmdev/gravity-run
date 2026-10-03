@@ -1,6 +1,8 @@
 extends Node2D
 class_name FallingRock
 
+signal impact_started(event_id: String)
+
 const Model := preload("res://systems/falling_rock_model.gd")
 const WarningIcon := preload("res://systems/rock_warning_icon.gd")
 const ImpactDebris := preload("res://hazards/rock_impact_debris.gd")
@@ -87,6 +89,7 @@ func _spawn_impact_debris_once() -> void:
 	if _impact_debris_spawned or not is_inside_tree():
 		return
 	_impact_debris_spawned = true
+	impact_started.emit(str(event.get("event_id", "")))
 	var effect := ImpactDebris.new() as Node2D
 	effect.name = "RockImpactDebris"
 	get_parent().add_child(effect)

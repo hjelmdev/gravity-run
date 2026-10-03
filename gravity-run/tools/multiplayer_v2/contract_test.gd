@@ -19,8 +19,9 @@ const V2Transport := preload("res://systems/multiplayer_v2/v2_webrtc_transport.g
 const HudLayout := preload("res://ui/multiplayer_v2/v2_hud_layout.gd")
 
 func _initialize() -> void:
-	var lobby_version_migration := FileAccess.get_file_as_string("res://supabase/migrations/202610030002_generator10_saw_variants.sql")
-	_assert(lobby_version_migration.contains("p_game_version <> '%s'" % V2Service.V2_GAME_VERSION), "V2 client lobby version matches the shared-coin room-creation gate")
+	var lobby_version_migration := FileAccess.get_file_as_string("res://supabase/migrations/202610030003_generator11_ghost_sfx_mp_achievements.sql")
+	_assert(lobby_version_migration.contains("p_game_version <> '%s'" % V2Service.V2_GAME_VERSION) and lobby_version_migration.contains("p_generator_version <> 11"), "V2 client lobby version matches the gen11 room-creation gate")
+	_assert(lobby_version_migration.contains("v_room.generator_version <> 11") and lobby_version_migration.contains("v_room.game_version <> '%s'" % V2Service.V2_GAME_VERSION), "coin registration gate matches gen11 game version")
 	var numeric_roster := [
 		{"user_id": "host-user", "player_slot": 1.0},
 		{"user_id": "guest-user", "player_slot": 2.0}
