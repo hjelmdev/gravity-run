@@ -8,6 +8,7 @@ const HAUNTED: BiomeDefinition = preload("res://assets/biomes/definitions/haunte
 const THEME_LENGTH := 4800.0
 const CYCLE_LENGTH := THEME_LENGTH * 3.0
 const TILE_WORLD_SIZE := 64.0
+const LOGICAL_BACKGROUND_HEIGHT := 540.0
 
 static func definition_at(distance: float) -> BiomeDefinition:
 	var slot := int(floor(fposmod(maxf(distance, 0.0), CYCLE_LENGTH) / THEME_LENGTH))
@@ -32,13 +33,18 @@ static func draw_backdrop(canvas: CanvasItem, view_left: float, view_size: Vecto
 		var next_theme_distance: float = (floor(distance / THEME_LENGTH) + 1.0) * THEME_LENGTH
 		var segment_end := minf(right, cursor + maxf(next_theme_distance - distance, 1.0))
 		var segment_size := Vector2(segment_end - cursor, view_size.y)
+		var layout_size := Vector2(segment_size.x, minf(view_size.y, LOGICAL_BACKGROUND_HEIGHT))
+		var fragment_offset := cursor - view_left
 		canvas.draw_rect(Rect2(Vector2(cursor, 0.0), segment_size), biome.background_color)
-		if not _draw_background_layers(canvas, biome, cursor, segment_size, distance):
+		var has_layers := _draw_background_layers(canvas, biome, cursor, layout_size, distance, view_left, course_distance)
+		if not has_layers:
 			match biome.biome_id:
-				&"cave": _draw_cave_backdrop(canvas, cursor, segment_size, distance, biome)
-				&"haunted": _draw_haunted_backdrop(canvas, cursor, segment_size, distance, biome)
-				_: _draw_classic_backdrop(canvas, cursor, segment_size, distance, biome)
-		_draw_atlas_decorations(canvas, biome, cursor, segment_size, distance)
+				&"cave": _draw_cave_backdrop(canvas, cursor, layout_size, course_distance, fragment_offset, biome)
+				&"haunted": pass
+				_: _draw_classic_backdrop(canvas, cursor, layout_size, course_distance * 0.12 + fragment_offset, biome)
+		if biome.biome_id == &"haunted":
+			_draw_haunted_backdrop(canvas, cursor, layout_size, distance, view_left, Vector2(view_size.x, layout_size.y), course_distance, biome)
+		_draw_atlas_decorations(canvas, biome, cursor, layout_size, distance)
 		cursor = segment_end
 
 static func draw_surface_tiles(canvas: CanvasItem, biome: BiomeDefinition, ceiling: bool, start_x: float, end_x: float, canvas_origin_x: float, surface_y_at: Callable, tint := Color.WHITE, biome_distance_offset := 0.0) -> bool:
@@ -153,17 +159,41 @@ static func _draw_surface_tile_quad(canvas: CanvasItem, texture: Texture2D, sour
 	if overlay.a > 0.0:
 		canvas.draw_colored_polygon(points, overlay)
 
-static func _draw_background_layers(canvas: CanvasItem, biome: BiomeDefinition, left: float, size: Vector2, distance: float) -> bool:
+static func _draw_background_layers(canvas: CanvasItem, biome: BiomeDefinition, left: float, size: Vector2, distance: float, view_left: float, camera_course_distance: float) -> bool:
 	var drew := false
 	for index in range(biome.background_layers.size()):
 		var texture := biome.background_layers[index]
 		if texture == null:
 			continue
 		var tint := biome.background_layer_tints[index] if index < biome.background_layer_tints.size() else Color.WHITE
-		var texture_width := maxf(texture.get_size().x, 1.0)
-		var parallax_offset := fposmod(distance * (0.04 + float(index) * 0.025), texture_width)
-		var layer_rect := Rect2(left - parallax_offset, 0.0, size.x + parallax_offset, size.y)
-		canvas.draw_texture_rect(texture, layer_rect, true, tint)
+		var height_ratio := biome.background_layer_height_ratios[index] if index < biome.background_layer_height_ratios.size() else 1.0
+		var y_ratio := biome.background_layer_y_ratios[index] if index < biome.background_layer_y_ratios.size() else 0.0
+		var parallax := biome.background_layer_parallax[index] if index < biome.background_layer_parallax.size() else 0.06 + float(index) * 0.025
+		if height_ratio <= 0.0 or parallax <= 0.0:
+			continue
+		var source_size := texture.get_size()
+		var tile_height := size.y * height_ratio
+		var tile_width := maxf(tile_height * source_size.x / maxf(source_size.y, 1.0), 1.0)
+		# Course origin controls slow parallax motion; fragment offset remains 1:1
+		# so splitting a viewport at a theme boundary cannot resize the artwork.
+		var parallax_left := camera_course_distance * parallax + (left - view_left)
+		var parallax_right := parallax_left + size.x
+		var first_tile := floori(parallax_left / tile_width)
+		var last_tile := ceili(parallax_right / tile_width)
+		var destination_y := size.y * y_ratio
+		for tile_index in range(first_tile, last_tile):
+			var tile_left := float(tile_index) * tile_width
+			var clip_left := maxf(tile_left, parallax_left)
+			var clip_right := minf(tile_left + tile_width, parallax_right)
+			if clip_right <= clip_left:
+				continue
+			var u0 := (clip_left - tile_left) / tile_width
+			var u1 := (clip_right - tile_left) / tile_width
+			var source_rect := Rect2(u0 * source_size.x, 0.0, (u1 - u0) * source_size.x, source_size.y)
+			var dest_left := view_left + (clip_left - camera_course_distance * parallax)
+			var dest_width := clip_right - clip_left
+			var dest := Rect2(dest_left, destination_y, dest_width, tile_height)
+			canvas.draw_texture_rect_region(texture, dest, source_rect, tint)
 		drew = true
 	return drew
 
@@ -176,8 +206,8 @@ static func _draw_atlas_decorations(canvas: CanvasItem, biome: BiomeDefinition, 
 	var region := Vector2(source.texture_region_size)
 	if region.x <= 0.0 or region.y <= 0.0:
 		return
-	var first_index := floori((distance + left) / 224.0)
-	var last_index := ceili((distance + left + size.x) / 224.0)
+	var first_index := floori(distance / 224.0)
+	var last_index := ceili((distance + size.x) / 224.0)
 	for index in range(first_index, last_index):
 		var world_x := float(index) * 224.0
 		var x := left + world_x - distance
@@ -186,50 +216,123 @@ static func _draw_atlas_decorations(canvas: CanvasItem, biome: BiomeDefinition, 
 			continue
 		var atlas_region := Rect2(Vector2(tile) * region, region)
 		var destination := Rect2(x, size.y * 0.24 + float(posmod(index, 3)) * 18.0, 30.0, 30.0)
+		if destination.position.x < left or destination.end.x > left + size.x:
+			continue
 		canvas.draw_texture_rect_region(source.texture, destination, atlas_region, biome.surface_tint)
 
-static func _draw_classic_backdrop(canvas: CanvasItem, left: float, size: Vector2, distance: float, biome: BiomeDefinition) -> void:
-	for i in range(16):
-		var x := left + fposmod(float(i * 97) + distance * 0.12, size.x)
-		canvas.draw_circle(Vector2(x, 48.0 + float((i * 43) % maxi(int(size.y - 80.0), 1))), 1.4, biome.accent_color)
+static func _draw_classic_backdrop(canvas: CanvasItem, left: float, size: Vector2, parallax_left: float, biome: BiomeDefinition) -> void:
+	for point in _landmarks_in_course(parallax_left, parallax_left + size.x, 82.0, 13):
+		var screen_x := left + float(point.x) - parallax_left
+		var radius := 0.8 + point.y * 0.9
+		if screen_x - radius < left or screen_x + radius > left + size.x:
+			continue
+		var y := size.y * (0.10 + point.y * 0.54)
+		var color := biome.accent_color
+		color.a = 0.38 + point.y * 0.30
+		canvas.draw_circle(Vector2(screen_x, y), radius, color)
 
-static func _draw_cave_backdrop(canvas: CanvasItem, left: float, size: Vector2, distance: float, biome: BiomeDefinition) -> void:
-	if size.x < 48.0:
-		canvas.draw_rect(Rect2(Vector2(left, 0.0), size), biome.background_color)
-		return
+static func _draw_cave_backdrop(canvas: CanvasItem, left: float, size: Vector2, camera_course_distance: float, fragment_offset: float, biome: BiomeDefinition) -> void:
 	for layer in range(3):
 		var amplitude := size.y * (0.13 + 0.055 * float(layer))
 		var base_y := size.y * (0.32 + 0.18 * float(layer))
 		var points := PackedVector2Array()
-		for i in range(13):
-			var x := left + float(i) * size.x / 12.0
-			var phase := (x + distance * (0.06 + 0.04 * float(layer))) * (0.003 + float(layer) * 0.0008)
+		var spacing := 48.0
+		var parallax := 0.16 + 0.07 * float(layer)
+		var layer_parallax_left := camera_course_distance * parallax + fragment_offset
+		var first_sample := floori(layer_parallax_left / spacing)
+		var last_sample := ceili((layer_parallax_left + size.x) / spacing)
+		for i in range(first_sample, last_sample + 1):
+			var course_x := float(i) * spacing
+			var x := left + course_x - layer_parallax_left
+			var phase := course_x * 0.003
 			var ridge_y := clampf(base_y + sin(phase) * amplitude + cos(phase * 0.37) * amplitude * 0.4, size.y * 0.04, size.y * 0.94)
 			points.append(Vector2(x, ridge_y))
+		if points.is_empty():
+			continue
 		points.append(Vector2(left + size.x, size.y))
 		points.append(Vector2(left, size.y))
 		var color := biome.layer_colors[layer % biome.layer_colors.size()]
-		canvas.draw_colored_polygon(points, color)
-	for i in range(4):
-		var x := left + fposmod(float(i * 241) + distance * 0.045, size.x)
-		var y := size.y * (0.31 + float((i * 13) % 24) / 100.0)
+		var clipped := PackedVector2Array([Vector2(left, _cave_ridge_y(layer_parallax_left, size.y, layer)), Vector2(left + size.x, _cave_ridge_y(layer_parallax_left + size.x, size.y, layer))])
+		for point_index in range(points.size()):
+			var point := points[point_index]
+			if point.x > left and point.x < left + size.x:
+				clipped.insert(clipped.size() - 1, point)
+		clipped.append(Vector2(left + size.x, size.y))
+		clipped.append(Vector2(left, size.y))
+		canvas.draw_colored_polygon(clipped, color)
+	var crystal_parallax_left := camera_course_distance * 0.11 + fragment_offset
+	for point in _landmarks_in_course(crystal_parallax_left, crystal_parallax_left + size.x, 193.0, 51):
+		var x := left + float(point.x) - crystal_parallax_left
+		if x - 6.0 < left or x + 6.0 > left + size.x:
+			continue
+		var y := size.y * (0.28 + point.y * 0.18)
 		var crystal := biome.accent_color.lerp(biome.background_color, 0.48)
 		crystal.a = 0.68
 		canvas.draw_colored_polygon(PackedVector2Array([Vector2(x, y - 6.0), Vector2(x + 5.0, y), Vector2(x, y + 8.0), Vector2(x - 5.0, y)]), crystal)
 		canvas.draw_line(Vector2(x, y + 8.0), Vector2(x, y + 12.0), crystal, 1.2, true)
 
-static func _draw_haunted_backdrop(canvas: CanvasItem, left: float, size: Vector2, distance: float, biome: BiomeDefinition) -> void:
-	var moon_center := Vector2(left + size.x * 0.77, size.y * 0.2)
-	canvas.draw_circle(moon_center, minf(size.x, size.y) * 0.075, biome.accent_color)
-	canvas.draw_circle(moon_center + Vector2(9.0, -5.0), minf(size.x, size.y) * 0.069, biome.background_color)
-	for i in range(6):
-		var x := left + fposmod(float(i * 197) + distance * 0.035, size.x)
-		# Keep the skyline in the playable corridor's background. It must be
-		# visible above the floor in both the SP and MP camera layouts; placing
-		# its base near the viewport bottom lets the course occlude it entirely.
-		var base_y := size.y * (0.54 + float(i % 3) * 0.025)
-		var width := 24.0 + float(i % 3) * 10.0
-		var height := size.y * (0.14 + float((i + 1) % 3) * 0.035)
-		var tint := biome.layer_colors[i % biome.layer_colors.size()]
-		canvas.draw_rect(Rect2(x, base_y - height, width, height), tint)
-		canvas.draw_rect(Rect2(x - 4.0, base_y - height - 6.0, width + 8.0, 7.0), tint)
+static func _cave_ridge_y(parallax_x: float, viewport_height: float, layer: int) -> float:
+	var amplitude := viewport_height * (0.13 + 0.055 * float(layer))
+	var base_y := viewport_height * (0.32 + 0.18 * float(layer))
+	var phase := parallax_x * 0.003
+	return clampf(base_y + sin(phase) * amplitude + cos(phase * 0.37) * amplitude * 0.4, viewport_height * 0.04, viewport_height * 0.94)
+
+static func _draw_haunted_backdrop(canvas: CanvasItem, left: float, size: Vector2, distance: float, view_left: float, full_view_size: Vector2, camera_course_distance: float, biome: BiomeDefinition) -> void:
+	# Moon and silhouettes are tied to the biome's course interval, not the
+	# width of the fragment left after clipping at a theme boundary.
+	var haunted_start := floori(distance / CYCLE_LENGTH) * CYCLE_LENGTH + THEME_LENGTH * 2.0
+	var moon_parallax := 0.055
+	var moon_anchor := haunted_start * moon_parallax + full_view_size.x * 0.74
+	var moon_x_screen := view_left + moon_anchor - camera_course_distance * moon_parallax
+	var moon_radius := minf(full_view_size.x, full_view_size.y) * 0.055
+	if moon_x_screen - moon_radius >= left and moon_x_screen + moon_radius <= left + size.x:
+		var moon_center := Vector2(moon_x_screen, full_view_size.y * 0.50)
+		var halo := Color(0.66, 0.61, 0.91, 0.075)
+		canvas.draw_circle(moon_center, moon_radius * 1.6, halo)
+		canvas.draw_circle(moon_center, moon_radius, Color(0.84, 0.81, 0.93, 0.90))
+		canvas.draw_circle(moon_center + Vector2(moon_radius * 0.30, -moon_radius * 0.13), moon_radius * 0.88, biome.background_color)
+	var silhouette_parallax_left := camera_course_distance * 0.22 + (left - view_left)
+	for point in _landmarks_in_course(silhouette_parallax_left, silhouette_parallax_left + size.x, 247.0, 87):
+		var center_x := view_left + float(point.x) - camera_course_distance * 0.22
+		var width := 30.0 + point.y * 25.0
+		var height := full_view_size.y * (0.09 + point.y * 0.09)
+		var base_y := full_view_size.y * (0.62 + point.y * 0.055)
+		if center_x - width * 0.5 < left or center_x + width * 0.5 > left + size.x:
+			continue
+		var tint := biome.layer_colors[1]
+		tint.a = 0.78
+		var x := center_x - width * 0.5
+		canvas.draw_rect(Rect2(x + width * 0.18, base_y - height * 0.68, width * 0.64, height * 0.68), tint)
+		canvas.draw_colored_polygon(PackedVector2Array([Vector2(x, base_y - height * 0.68), Vector2(center_x, base_y - height), Vector2(x + width, base_y - height * 0.68)]), tint)
+		# Bare branch-like spires stay faint and well behind the play surface.
+		var branch := Color(0.24, 0.20, 0.34, 0.66)
+		canvas.draw_line(Vector2(center_x, base_y - height * 0.18), Vector2(center_x - width * 0.30, base_y - height * 0.48), branch, 2.0, true)
+		canvas.draw_line(Vector2(center_x, base_y - height * 0.28), Vector2(center_x + width * 0.31, base_y - height * 0.61), branch, 2.0, true)
+		canvas.draw_line(Vector2(center_x - width * 0.19, base_y - height * 0.39), Vector2(center_x - width * 0.35, base_y - height * 0.53), branch, 1.2, true)
+		canvas.draw_line(Vector2(center_x + width * 0.20, base_y - height * 0.51), Vector2(center_x + width * 0.36, base_y - height * 0.66), branch, 1.2, true)
+	# Restrained ground-hugging fog across the playable corridor.
+	for fog_index in range(2):
+		var y := full_view_size.y * (0.68 + fog_index * 0.045)
+		var fog := Color(0.62, 0.59, 0.77, 0.045)
+		canvas.draw_rect(Rect2(left, y, size.x, full_view_size.y * 0.055), fog)
+
+static func _landmarks_in_course(course_start: float, course_end: float, period: float, salt: int) -> Array[Vector2]:
+	## Deterministic course-space point lattice; segmentation or viewport width
+	## cannot alter a point's position, count, or vertical placement.
+	var result: Array[Vector2] = []
+	if period <= 0.0 or course_end <= course_start:
+		return result
+	var first := floori(course_start / period) - 1
+	var last := ceili(course_end / period) + 1
+	for cell in range(first, last + 1):
+		var point := _landmark_for_cell(cell, period, salt)
+		if point.x >= course_start and point.x < course_end:
+			result.append(point)
+	return result
+
+static func _landmark_for_cell(cell: int, period: float, salt: int) -> Vector2:
+	var raw := posmod(cell * 1103515245 + salt * 12345 + 1013904223, 2147483647)
+	var next_raw := posmod(raw * 48271 + 1, 2147483647)
+	var jitter := float(raw) / 2147483647.0
+	var vertical := float(next_raw) / 2147483647.0
+	return Vector2((float(cell) + 0.18 + jitter * 0.64) * period, vertical)

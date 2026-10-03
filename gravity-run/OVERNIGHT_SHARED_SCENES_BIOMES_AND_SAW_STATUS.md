@@ -63,3 +63,13 @@ Orelaterade dirty `main.gd` capture hunks, `ui/main_menu.gd`, `tools/singleplaye
 2. Try a multiplayer room after the v9 database gate is live; compare visible biome transitions and a saw encounter with another player when available.
 3. Report failures with the diagnostics export; generator frequency measurements cover only three representative seeds and do not guarantee shorter worst-case gaps.
 
+## Post-release visual follow-up — biome backdrop anchoring
+
+Uppdaterad 2026-10-03 efter rootens godkännande av GPU-fångster. Denna ändring är en ren presentationsfix efter publicerad gen9-release; generator 9, serviceversion `2.1.20261003.5`, fysik, hazardtiming och databasekontrakt är oförändrade. Synlig projektetikett för den nya exporten är `2026.10.03-biome-backdrop-anchor`.
+
+- Bakgrundslager repeteras nu i en fast course-/parallaxkoordinat och beskärs med UV-regioner inom varje biomefragment. Texturer behåller fast skala oavsett fragmentbredd. Klassiska stjärnor, grottkristaller och ruiner får samma stabila deterministiska gitter; grottans ridgepolygon beräknar exakta fragmentändpunkter och kan inte måla ut i angränsande tema.
+- Haunted-resursen använder utbytbara SVG-lager för avlägsna ruiner och dämpad dimma via `BiomeDefinition.background_layers`, med konfigurerad storlek, vertikal placering och parallax. Måne/halo och SVG-lager använder en gemensam 540 px logisk bakgrundshöjd för SP och MP, vilket håller dem synliga i den normala spelkorridoren även i portrait och vid SP-zoom.
+- Riktad regression `tools/biome_backdrop_anchor_test.gd` PASS för temaavstånden 4800/14400, 20 px gränsfönster och parallaxfaktorer 0.055/0.12/0.22, med jämförelse mellan hel viewport och uppdelade fragment i 1280- och 540-px layouter. `tools/biome_tile_swap_test.gd` PASS; editor/headless parse PASS. Godots lokala Windows-certifikatstore gav en miljövarning; inga GDScript-/parsefel rapporterades.
+- Aktuella GPU-fångster för SP `main.tscn` och MP `RaceCoursePresentation` finns i `.codex-overnight-review/`: `sp-v9-live-demo-distance-09700.png` är en normal, oförflyttad demo vid 9700 utan omstart och visar måne/ruiner/dimma över den tidigare höga takytan. Övriga SP seam-bilder (`sp-v9-distance-*`, `sp-v9-portrait-distance-*`) är seek-fixturebilder från riktiga main-scenen. MP har landscape- och portrait-seamserier (`mp-v9-distance-*`, `mp-v9-portrait-distance-*`) vid 4790/4800/4810, 9590/9600/9610 och 14390/14400/14410; capturekameran använder kursrelativ camera origin som matchruntime.
+- Root visuellt godkände MP landscape/portrait och normal SP live-demo-bilden vid 9700. Den aktuella visuella uppföljningen är godkänd för scoped release; inga migrationer eller protokolländringar behövs.
+

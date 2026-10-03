@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="180" viewBox="0 0 1024 180">
+  <defs>
+    <linearGradient id="fog" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c4b5df" stop-opacity="0"/>
+      <stop offset=".58" stop-color="#b6a9d2" stop-opacity=".13"/>
+      <stop offset="1" stop-color="#c8bddb" stop-opacity=".03"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#fog)" d="M0 20h1024v160H0z"/>
+  <g fill="none" stroke="#c9bddf" stroke-opacity=".14" stroke-width="5">
+    <path d="M-20 84c90-27 132 20 220-2s123-26 210-2 138 25 220 1 144-26 234 0 130 15 190-3"/>
+    <path d="M-30 122c78-19 142 18 222 0s144-19 220 0 141 19 222 0 142-16 218 0 142 14 202-2" stroke-width="3"/>
+  </g>
+</svg>

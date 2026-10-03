@@ -22,6 +22,11 @@ extends Resource
 ## renderer's vector fallback motifs and can be swapped without code changes.
 @export var background_layers: Array[Texture2D] = []
 @export var background_layer_tints: Array[Color] = []
+## Background layer scale/placement and scroll speed. Each item stays anchored to
+## course distance even when a biome only occupies a narrow viewport fragment.
+@export var background_layer_height_ratios := PackedFloat32Array()
+@export var background_layer_y_ratios := PackedFloat32Array()
+@export var background_layer_parallax := PackedFloat32Array()
 @export var background_color: Color = Color("101827")
 @export var accent_color: Color = Color("42d6c5")
 @export var surface_tint: Color = Color.WHITE
