@@ -1,6 +1,6 @@
 # Overnight Ghost, SFX and Multiplayer Achievements — Status
 
-Updated 2026-10-03. **REVIEW_READY — mandatory root findings addressed; awaiting re-review.** No live migration, commit, source push, or Pages publication has been performed for this task.
+Updated 2026-10-04. **RELEASED — root approved the implementation; scoped source commit, reviewed migrations, and Pages publication are complete.**
 
 ## Contract and preservation
 
@@ -50,8 +50,13 @@ Updated 2026-10-03. **REVIEW_READY — mandatory root findings addressed; awaiti
 - The headless SP test invokes the actual main-scene resolver/spawn methods and confirms the resolved shared support, but does not simulate a full-length run until a generated ghost warning and collision. The standalone shared-route test covers real RunnerMotion crossings at 250/500/750 px/s with and without a lane switch.
 - Godot on this machine reports inability to write `user://logs/godot.log` and failure to read the Windows root certificate store. These environment messages persist; targeted tests above still complete with their stated pass results.
 
-## Next
+## Release evidence
 
-1. Root reviews the current scoped diff, migration and this evidence.
-2. Address any review findings, then prepare a selective feature-only commit while preserving unrelated dirty work.
-3. Only after review approval, follow the existing authorized release process for live migration, Azure source and Pages export/publication.
+- Root approved the implementation and the two migrations before release. Source commit `cb14b78` (`Add shared ghost, SFX, and multiplayer achievements`) was pushed to Azure `codex/current-prototype`.
+- The Web export was built from the clean archive of exact commit `cb14b78`, at `E:/Utveckling/Gravity Run/.codex-overnight-review/clean-cb14b78`. Godot 4.7.2 editor import completed; `singleplayer_ghost_runtime_test.gd` then passed against that clean archive (`seed=100000000`, failures=0).
+- Before live deployment, linked migration history matched through `202610030002`; dry run listed only `.003` and `.004`. Both reviewed migrations were applied. A subsequent linked migration list confirmed local and remote history match through `202610030004`.
+- GitHub Pages commit `5119043` (`Publish gen11 ghost, audio, and achievements build`) was pushed to `https://github.com/hjelmdev/gravity-run.git`, branch `main`. The existing root wrapper and active `docs/game` bundle were updated; historic versioned packs and redirect paths were preserved.
+- Public build identifier: `shared-ghost-sfx-achievements-gen11-cb14b78-20261004`. Public game pack: 3,079,996 bytes, SHA256 `CF4ACA0608ED67D7E79C13F15D15C0E905CD98D8647722A9E5DD6F3F93233F9E`; this exactly matches the clean-archive export. The root loader and game index both returned HTTP 200 with the new build ID and pack reference.
+- The Pages repository has no checked-in GitHub Actions workflow, and the GitHub Pages “latest build” API returned 404. Direct root, loader, and pack checks confirm the branch-published site serves the new bundle. A desktop browser screenshot/console review was unavailable in this thread; root was asked to perform the final visual check if its browser session is available.
+- Live authenticated multiplayer achievement play was not performed. SQL was validated with local PostgreSQL/Supabase shims and synthetic identities; SFX were integration-tested locally but not artistically reviewed by the user in a browser. The Godot sandbox also reports denied normal user-profile/editor-cache writes; the SFX persistence test passed when run with the approved host profile. These do not indicate failures in the targeted feature tests.
+- Unrelated dirty `main.gd` capture instrumentation, `ui/main_menu.gd` capture routing, frame-pacing files, and other pre-existing working-tree changes were excluded from the source commit.
