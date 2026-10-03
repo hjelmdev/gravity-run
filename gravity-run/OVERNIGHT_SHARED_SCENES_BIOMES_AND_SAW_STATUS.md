@@ -96,3 +96,13 @@ Updated 2026-10-03. This is a scoped continuation of the published gen9 release.
 ### Root review request
 
 Please review the gen10 radius/model contract, gap placement/planner rationale and new migration. Current source working tree includes unrelated changes; do not stage broadly. No commit, live migration or publication has been made for this gen10 candidate.
+
+## Gen10 release completion
+
+Updated 2026-10-03 after live release. The gen10 saw refinement is now published and replaces the REVIEW_READY candidate status above.
+
+- Source commit `848fcac04a78859e6effe617c0852050b0ec602a` is pushed to Azure `codex/current-prototype`. The release includes only scoped feature files and two reviewed gameplay hunks in `main.gd`; unrelated capture, pacing, and menu work remains uncommitted.
+- Live migration `202610030002` is applied. Linked Supabase migration history confirms all 40 local/remote migrations match through `202610030002`.
+- Godot 4.7.2 Web export was produced from the clean archive of exact source commit `848fcac`. PCK `index.shared-biomes-saw-gen10-848fcac-20261003.pck` is 2,947,628 bytes with SHA-256 `E3F5B5B3D672146CBB8A97BEE54CC7A13D7D1756F3DA07EDC7339723420CA7E7`.
+- Pages commit `a03be1de0aaaba6cc42c78768f704044ea92ad17` publishes the active bundle under `docs/game`, updates the root loader and both BUILD_ID markers to `shared-biomes-saw-gen10-848fcac-20261003`, and points `mainPack` at the uniquely named PCK. GitHub Pages workflow `37106221521` completed successfully. The public root, game loader and build marker returned the expected build ID; a fresh public PCK download matched the clean export SHA-256 exactly. Root independently checked the browser main menu/demo and reported no console errors or warnings.
+- The gen10 candidate checks and review evidence above remain applicable. The new variant distribution was 120 floor-embedded, 58 ceiling-embedded and 17 ceiling-gap-drop saws over 120 representative seeds. This is a bounded sample, not a frequency guarantee. Browser verification covered the public menu/demo; it did not constitute an authenticated multiplayer match.
