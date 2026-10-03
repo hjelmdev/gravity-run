@@ -51,3 +51,14 @@ Root inspected the corrected per-entry persistent backoff/deferred dispatch, sem
 Both new migrations `.003` and `.004` were read; local authenticated-role chain/receipt tests are reported PASS. Live application remains part of release and must follow tool approval. This approval does not bypass that review or assert a live signed-in MP test has occurred.
 
 Luna should now selectively stage/commit only feature changes, push Azure, prepare the exact clean archive, run actual SP start/import checks there, build Web, apply the reviewed migration chain, publish existing Pages root and verify workflow/loader/public PCK hash/browser load. Release is not complete until that evidence is recorded and root confirms it. Preserve unrelated main/capture/menu/pacing changes throughout.
+
+## Final release verification, 2026-10-04
+
+**FINAL RELEASE CHECK: PASS.** The preceding sections record the review history; the initial rejection and intermediate approval hold are resolved.
+
+- Source feature commit `cb14b78` was pushed to Azure `codex/current-prototype`; the final report follow-up is tracked separately.
+- Live migrations `202610030003` and `202610030004` were applied. Linked migration history matches local through `.004`.
+- Pages commit `511904366d2cd9ed47061fb6f29aa11689e267e1` published the existing root wrapper and `docs/game` bundle. GitHub Pages workflow [37157743407](https://github.com/hjelmdev/gravity-run/actions/runs/37157743407) completed successfully.
+- Root opened the live page in a browser and verified the wrapper iframe used build `shared-ghost-sfx-achievements-gen11-cb14b78-20261004`, the main menu and demo loaded, and the page had no browser development errors or warnings.
+- Public PCK size was 3,079,996 bytes; SHA256 `CF4ACA0608ED67D7E79C13F15D15C0E905CD98D8647722A9E5DD6F3F93233F9E`, exactly matching the clean-archive export.
+- Remaining verification limits: no real signed-in multiplayer achievements match was played, and no user listening/artistic review of the SFX was performed. Local SQL tests used synthetic identities/Supabase shims; browser verification confirms the published build loads, not those user-facing sessions.
