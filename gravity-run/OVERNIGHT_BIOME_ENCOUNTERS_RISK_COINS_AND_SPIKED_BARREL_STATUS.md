@@ -1,6 +1,6 @@
 # Biome encounters, risk coins and spiked barrel — status
 
-Updated 2026-10-05. **Phase: RELEASE_PUSHED; remote Pages workflow and live asset verification are pending.**
+Updated 2026-10-05. **Phase: RELEASE_VERIFIED; Pages metadata follow-up pushed, its workflow run is pending.**
 
 ## Release contract and compatibility
 
@@ -42,13 +42,12 @@ Godot emits environment-only warnings in this workspace about writing `user://lo
 
 Feature changes are in the Gen12 generator/manifest/ruleset, shared risk-coin planner, shared barrel/world/presentation paths, release metadata, `.005` migration, and focused tools/tests listed above. Source commit `40b7c1d` (`Add biome risk encounters and spiked barrels`) was pushed to Azure `codex/current-prototype`. The build was exported from a clean archive of that exact commit at `E:/Utveckling/Gravity Run/.codex-gen12-40b7c1d/` into `E:/Utveckling/Gravity Run/.codex-web-export-40b7c1d/`.
 
-Pages commit `2ee7616` (`Publish Gen12 biome risk gameplay build`) was pushed to GitHub Pages `main`. It updates the active `docs/game/` loader, root wrapper, build marker, and adds the versioned PCK while retaining older bundles. Build ID: `biome-risk-gen12-40b7c1d-20261005`. Exported PCK: 3,134,504 bytes, SHA256 `FB88AC669B56D130340BFEC32CB4F597EF7C88A0DA8930BBF29A4B7917996E40`; the staged Pages PCK matches this hash locally. Public URL: `https://hjelmdev.github.io/gravity-run/`.
+Pages commit `2ee7616` (`Publish Gen12 biome risk gameplay build`) published the active `docs/game/` loader and versioned PCK. Root independently verified GitHub Pages workflow `37244042870` completed successfully for that commit, the public root wrapper and game loader identify build `biome-risk-gen12-40b7c1d-20261005`, and the downloaded public PCK matches the clean export: 3,134,504 bytes, SHA256 `FB88AC669B56D130340BFEC32CB4F597EF7C88A0DA8930BBF29A4B7917996E40`. Public URL: `https://hjelmdev.github.io/gravity-run/`.
 
-The Pages push completed, but this task environment could not complete an independent remote loader/workflow/download check: direct HTTPS was blocked by the sandbox socket policy and the escalated verification process failed to start with access denied. Therefore the publication is pushed but remote workflow completion, live loader build ID, and downloaded PCK hash remain pending independent verification. Do not describe the web release as fully verified until those checks pass.
+Root found that the root-level `docs/BUILD_ID` had been left at the previous release. Pages commit `18f7717` (`Sync root build marker for Gen12 release`) now updates that marker to `biome-risk-gen12-40b7c1d-20261005`; it does not alter the game loader or pack. This metadata-only follow-up is pushed, and its Pages workflow/public wrapper refresh is awaiting verification. Azure report commit `12657dd` records the initial deployment; this status update will record the metadata follow-up once its workflow completes.
+
+The clean-archive parse/runtime checks and main-scene captures are complete. No live signed-in multiplayer gameplay/account-reward session was tested.
 
 ## Remaining release verification
 
-- Confirm GitHub Pages workflow success for Pages commit `2ee7616`.
-- Confirm the public root wrapper and `docs/game/` loader report build ID `biome-risk-gen12-40b7c1d-20261005` and point to the versioned PCK.
-- Download the public PCK and compare its SHA256 to the clean export hash above.
-- The local clean-archive parse/runtime checks and main-scene captures are complete; no live signed-in multiplayer session or account reward was tested.
+- Confirm Pages workflow success for follow-up commit `18f7717` and that the public root `docs/BUILD_ID` matches the game build marker.
