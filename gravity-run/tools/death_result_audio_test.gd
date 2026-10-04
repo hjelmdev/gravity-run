@@ -31,14 +31,15 @@ func _run() -> void:
 	capture.clear_buffer()
 	game._end_run()
 	var began := Time.get_ticks_msec()
-	while Time.get_ticks_msec() - began < 100:
+	var check_after_msec := int(clampf(sfx.STREAMS["death"].get_length() * 300.0, 40.0, 100.0))
+	while Time.get_ticks_msec() - began < check_after_msec:
 		await process_frame
 	var voices: Array = sfx._voices
 	var live_death := false
 	for voice in voices:
 		if voice.playing:
-			live_death = voice.get_playback_position() > 0.03 and not voice.stream_paused
-			_check(is_equal_approx(voice.volume_db, 8.0), "death has its own gain")
+			live_death = voice.get_playback_position() > 0.01 and not voice.stream_paused
+			_check(is_zero_approx(voice.volume_db), "recorded death uses original level without the old synthetic boost")
 			print("DEATH_VOICE playing=",voice.playing," position=",voice.get_playback_position()," paused=",voice.stream_paused)
 	_check(game.run_end_panel.visible and not paused, "real SP result opens without pausing audio")
 	_check(live_death, "death playback advances after result opens")

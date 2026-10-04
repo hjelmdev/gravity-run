@@ -5,15 +5,13 @@ signal event_started(event_name: String, event_key: String)
 
 const SFX_BUS := "SFX"
 const VOICE_LIMIT := 8
-## The low voiced ouff needs more level than the bright pickup/flip sounds.
-const EVENT_GAIN_DB: Dictionary = {"death": 8.0}
 const STREAMS: Dictionary = {
 	"coin": preload("res://assets/audio/sfx/coin.wav"),
 	"gravity_flip": preload("res://assets/audio/sfx/gravity_flip.wav"),
 	"barrel_destroy": preload("res://assets/audio/sfx/barrel_destroy.wav"),
 	"rock_impact": preload("res://assets/audio/sfx/rock_impact.wav"),
 	"ghost_warning": preload("res://assets/audio/sfx/ghost_warning.wav"),
-	"death": preload("res://assets/audio/sfx/death.wav"),
+	"death": preload("res://assets/audio/sfx/death.mp3"),
 }
 
 var _voices: Array[AudioStreamPlayer] = []
@@ -88,8 +86,8 @@ func play_event(event_name: String, event_key: String, audible: bool = true) -> 
 	var voice := _voices[voice_index]
 	voice.stop()
 	voice.stream = STREAMS[event_name]
-	# Reset for every event: a reused death voice must not boost later pickups.
-	voice.volume_db = float(EVENT_GAIN_DB.get(event_name, 0.0))
+	# Recorded effects use their original level and the user's shared SFX gain.
+	voice.volume_db = 0.0
 	voice.play()
 	_voice_started_msec[voice_index] = Time.get_ticks_msec()
 	event_started.emit(event_name, event_key)
