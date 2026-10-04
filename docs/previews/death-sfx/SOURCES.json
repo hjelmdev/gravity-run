@@ -1,0 +1,32 @@
+{
+  "author": "EZduzziteh",
+  "source": "https://opengameart.org/content/hurt-sound-effects",
+  "license": "CC0-1.0",
+  "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "files": [
+    {
+      "name": "hurt_01.mp3",
+      "url": "https://opengameart.org/sites/default/files/hurt_01_0.mp3"
+    },
+    {
+      "name": "hurt_02.mp3",
+      "url": "https://opengameart.org/sites/default/files/hurt_02.mp3"
+    },
+    {
+      "name": "hurt_03.mp3",
+      "url": "https://opengameart.org/sites/default/files/hurt_03.mp3"
+    },
+    {
+      "name": "hurt_04.mp3",
+      "url": "https://opengameart.org/sites/default/files/hurt_04.mp3"
+    },
+    {
+      "name": "hurt_05.mp3",
+      "url": "https://opengameart.org/sites/default/files/hurt_05.mp3"
+    },
+    {
+      "name": "hurt_06.mp3",
+      "url": "https://opengameart.org/sites/default/files/hurt_06.mp3"
+    }
+  ]
+}
