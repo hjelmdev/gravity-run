@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="sv">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gravity Run – lyssna på dödsljud</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#101827;color:#edf3ff}body{max-width:640px;margin:auto;padding:28px 18px}h1{font-size:1.8rem;margin-bottom:10px}p{color:#b9c7db;line-height:1.5}article{margin:20px 0;padding:20px;background:#1d2b3e;border:1px solid #38516c;border-radius:14px}h2{margin:0 0 8px;font-size:1.2rem}audio{display:block;width:100%;margin:16px 0}a{color:#53dfcc}small{color:#b9c7db}
+</style>
+<h1>Vilket dödsljud passar bäst?</h1>
+<p>Tryck på spela för att lyssna. Varje förslag hörs två gånger. Börja med låg volym.</p>
+<article><h2>1. Dov träff</h2><p>En kort smäll utan röst.</p><audio controls preload="none" aria-label="Spela dov träff"><source src="01-dov-traff.wav" type="audio/wav"></audio><a href="01-dov-traff.wav">Öppna ljudfilen separat</a></article>
+<article><h2>2. Arkad</h2><p>Ett snabbt fallande ”bwopp”.</p><audio controls preload="none" aria-label="Spela arkadljud"><source src="02-arkad.wav" type="audio/wav"></audio><a href="02-arkad.wav">Öppna ljudfilen separat</a></article>
+<article><h2>3. Tecknat uff</h2><p>En syntetisk variant med mer träff och mindre utdragen röst.</p><audio controls preload="none" aria-label="Spela tecknat uff"><source src="03-tecknat-uff.wav" type="audio/wav"></audio><a href="03-tecknat-uff.wav">Öppna ljudfilen separat</a></article>
+<small>Förslag för jämförelse. Inget av dessa förslag har införts i spelet.</small>
+<script>document.querySelectorAll('audio').forEach(a=>a.addEventListener('play',()=>document.querySelectorAll('audio').forEach(b=>{if(a!==b)b.pause()})))</script>
+</html>
