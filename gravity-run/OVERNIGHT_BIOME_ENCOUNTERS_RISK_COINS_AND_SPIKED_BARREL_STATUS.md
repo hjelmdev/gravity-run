@@ -1,6 +1,6 @@
 # Biome encounters, risk coins and spiked barrel — status
 
-Updated 2026-10-05. **Phase: RELEASE_VERIFIED; Pages metadata follow-up pushed, its workflow run is pending.**
+Updated 2026-10-05. **Phase: RELEASE_COMPLETE.**
 
 ## Release contract and compatibility
 
@@ -44,10 +44,14 @@ Feature changes are in the Gen12 generator/manifest/ruleset, shared risk-coin pl
 
 Pages commit `2ee7616` (`Publish Gen12 biome risk gameplay build`) published the active `docs/game/` loader and versioned PCK. Root independently verified GitHub Pages workflow `37244042870` completed successfully for that commit, the public root wrapper and game loader identify build `biome-risk-gen12-40b7c1d-20261005`, and the downloaded public PCK matches the clean export: 3,134,504 bytes, SHA256 `FB88AC669B56D130340BFEC32CB4F597EF7C88A0DA8930BBF29A4B7917996E40`. Public URL: `https://hjelmdev.github.io/gravity-run/`.
 
-Root found that the root-level `docs/BUILD_ID` had been left at the previous release. Pages commit `18f7717` (`Sync root build marker for Gen12 release`) now updates that marker to `biome-risk-gen12-40b7c1d-20261005`; it does not alter the game loader or pack. This metadata-only follow-up is pushed, and its Pages workflow/public wrapper refresh is awaiting verification. Azure report commit `12657dd` records the initial deployment; this status update will record the metadata follow-up once its workflow completes.
+Root found that the root-level `docs/BUILD_ID` had been left at the previous release. Pages commit `18f7717` (`Sync root build marker for Gen12 release`) updates that marker to `biome-risk-gen12-40b7c1d-20261005`; it does not alter the game loader or pack. Root verified workflow `37245091377` completed successfully for that commit and the public `/BUILD_ID` now returns the expected value. The earlier verified workflow `37244042870` and public loader/PCK hash remain valid for the unchanged game bundle.
 
 The clean-archive parse/runtime checks and main-scene captures are complete. No live signed-in multiplayer gameplay/account-reward session was tested.
 
-## Remaining release verification
+## Release verification complete
 
-- Confirm Pages workflow success for follow-up commit `18f7717` and that the public root `docs/BUILD_ID` matches the game build marker.
+- Source: Azure commit `40b7c1d` contains the scoped Gen12 gameplay release; report follow-ups are `12657dd` and `ee997a7`.
+- Backend migration `202610050001` is applied and linked migration history was verified.
+- Pages: game release commit `2ee7616`; root build-marker correction `18f7717`; both workflows completed successfully (`37244042870`, `37245091377`). Public root and game markers match build `biome-risk-gen12-40b7c1d-20261005`.
+- The downloaded public PCK matches the clean export hash: 3,134,504 bytes, SHA256 `FB88AC669B56D130340BFEC32CB4F597EF7C88A0DA8930BBF29A4B7917996E40`.
+- Limitation: no live signed-in multiplayer gameplay/account-reward session was tested; route playability was exercised on a small targeted sample, not exhaustively across all seeds.
