@@ -477,6 +477,8 @@ func _process(delta: float) -> void:
 	if _round_started:
 		var catchup_started_usec := Time.get_ticks_usec() if _profiling_enabled else 0
 		_advance_local_to_shared_clock(0.0, callback_begin_usec if _render_anchor_experiment_enabled else -1)
+		if not _round_aborted and str(_runner.player_state.get("state", "")) == "dead":
+			SfxController.play_death(_round_id, "local")
 		if _profiling_enabled:
 			_profile_phase("fixed_step_catchup", catchup_started_usec)
 	_presentation_anchor_usec = callback_begin_usec if _round_started and _render_anchor_experiment_enabled else Time.get_ticks_usec()
@@ -695,6 +697,8 @@ func _on_terminal_report(peer_id: int, report: Dictionary) -> void:
 	var next_state := str(report.get("state", "dead"))
 	if peer_id == int(MultiplayerV2Service.session.get("local_peer_id", 1)):
 		_runner.stop(next_state)
+		if next_state == "dead" and not _round_aborted:
+			SfxController.play_death(_round_id, "local")
 	else:
 		_remote_terminal[peer_id] = next_state
 		_remote_locomotion[peer_id] = next_state

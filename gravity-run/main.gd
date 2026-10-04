@@ -545,10 +545,13 @@ func _physics_process(delta: float) -> void:
 	queue_redraw()
 
 func _end_run() -> void:
+	if game_over:
+		return
 	game_over = true
 	_rock_warning_pulse.call("reset")
 	_rock_warning_accessibility_button.visible = false
 	if not demo_mode:
+		SfxController.play_death(_singleplayer_audio_round_id, "local")
 		MusicController.enter_menu()
 	_presentation.reset(player.position)
 	for obstacle in obstacles:

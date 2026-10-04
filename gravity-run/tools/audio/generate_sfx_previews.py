@@ -96,8 +96,35 @@ def impact():
     return soften(data)
 
 
+def death():
+    """Original short voiced 'ouff': falling pitch, round vowel, soft breath.
+
+    Synthesized here, with no sampled voice or third-party sound asset.
+    """
+    duration = 0.34
+    rng = random.Random(61)
+    data = []
+    phase = 0.0
+    air = 0.0
+    for i in range(round(duration * RATE)):
+        t = i / RATE
+        pitch = 150.0 - 65.0 * min(t / 0.23, 1.0)
+        phase += TAU * pitch / RATE
+        voice = 0.0
+        for harmonic in range(1, 25):
+            frequency = pitch * harmonic
+            formant = (math.exp(-0.5 * ((frequency - 420.0) / 110.0) ** 2)
+                       + 0.65 * math.exp(-0.5 * ((frequency - 870.0) / 160.0) ** 2))
+            voice += math.sin(phase * harmonic) * (0.12 + formant) / harmonic
+        air = 0.65 * air + 0.35 * rng.uniform(-1, 1)
+        vowel = voice * min(1.0, t / 0.012) * math.exp(-t * 6.0)
+        breath = air * min(1.0, max(0.0, (t - 0.18) / 0.04)) * math.exp(-max(0.0, t - 0.18) * 20.0)
+        data.append((vowel + 0.32 * breath) * edge(t, duration))
+    return soften(data)
+
+
 def main():
-    clips = [("coin.wav", coin()), ("gravity_flip.wav", flip()), ("rock_impact.wav", impact()), ("barrel_destroy.wav", barrel_destroy()), ("ghost_warning.wav", ghost_warning())]
+    clips = [("coin.wav", coin()), ("gravity_flip.wav", flip()), ("rock_impact.wav", impact()), ("barrel_destroy.wav", barrel_destroy()), ("ghost_warning.wav", ghost_warning()), ("death.wav", death())]
     for name, samples in clips:
         save(name, samples)
         with wave.open(str(OUT / name), "rb") as check:

@@ -11,12 +11,14 @@ const STREAMS: Dictionary = {
 	"barrel_destroy": preload("res://assets/audio/sfx/barrel_destroy.wav"),
 	"rock_impact": preload("res://assets/audio/sfx/rock_impact.wav"),
 	"ghost_warning": preload("res://assets/audio/sfx/ghost_warning.wav"),
+	"death": preload("res://assets/audio/sfx/death.wav"),
 }
 
 var _voices: Array[AudioStreamPlayer] = []
 var _voice_started_msec: Dictionary = {}
 var _played_keys: Dictionary = {}
 var _round_id := ""
+var _death_keys: Dictionary = {}
 var _web_unlocked := false
 
 func _ready() -> void:
@@ -47,7 +49,18 @@ func begin_round(round_id: String) -> void:
 		return
 	stop_all()
 	_played_keys.clear()
+	_death_keys.clear()
 	_round_id = round_id
+
+## Death is a terminal event, never replayed by repeated reports or after unmute.
+func play_death(round_id: String, player_key: String) -> bool:
+	if round_id.is_empty() or round_id != _round_id or player_key.is_empty():
+		return false
+	var key := "%s|death|%s" % [round_id, player_key]
+	if _death_keys.has(key):
+		return false
+	_death_keys[key] = true
+	return play_event("death", key)
 
 func play_event(event_name: String, event_key: String, audible: bool = true) -> bool:
 	if not audible or get_tree().paused or event_key.is_empty() or not STREAMS.has(event_name):

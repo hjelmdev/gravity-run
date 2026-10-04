@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="Gravity Run"
-config/version="2026.10.03-gen11-haunted-sfx-achievements"
+config/version="2026.10.04-ghost-float-death-sfx"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.svg"
 run/main_scene="res://ui/main_menu.tscn"
