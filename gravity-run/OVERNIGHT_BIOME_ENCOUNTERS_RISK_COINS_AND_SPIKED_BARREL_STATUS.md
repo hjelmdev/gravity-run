@@ -1,13 +1,13 @@
 # Biome encounters, risk coins and spiked barrel — status
 
-Updated 2026-10-05. **Phase: REVIEW_READY; awaiting root's final review. No commit, live migration, Azure push or Pages publication has been made.**
+Updated 2026-10-05. **Phase: RELEASE_PUSHED; remote Pages workflow and live asset verification are pending.**
 
 ## Release contract and compatibility
 
 - Published baseline remains generator 11 / manifest 5 / API `2.1.20261003.7`.
 - Candidate release is generator 12 / manifest 6 / API `2.1.20261005.8`, visible build `2026.10.05-biome-risk-gen12`.
 - Migration candidate `supabase/migrations/202610050001_generator12_biome_risk_barrel.sql` permits exactly the old Gen11/.7 and new Gen12/.8 tuples at create and coin-round registration, and retains achievement receipt processing for those frozen rounds. It changes release gates/functions only; it does not alter wallets, existing rows, policies, or privileges.
-- The migration was applied only to disposable local database `overnight_gen12_local_20261005` cloned from local database `overnight_gen9_root_utf8_20261003`. Local authenticated-role tests passed and rolled back their fixtures. **No live migration was attempted.** The local Supabase shim does not prove hosted GoTrue/PostgREST behavior.
+- Migration `202610050001_generator12_biome_risk_barrel.sql` was applied to the linked Supabase project after `migration list --linked` showed it as the only pending migration and `db push --dry-run` confirmed exactly that migration. The post-push history matched local and remote. The root also ran the full local authenticated-role release-gate/receipt tests; they do not prove hosted GoTrue/PostgREST behavior.
 - `tools/generator_v11_freeze_test.gd` passes four exact frozen Gen11 manifest/coin fixtures from the clean published baseline. `tools/generator_v8_compatibility_test.gd` passes frozen v6/v7/v8 and v9/v10/v11 format expectations; v12 uses manifest format 6.
 
 ## Implemented
@@ -40,8 +40,15 @@ Godot emits environment-only warnings in this workspace about writing `user://lo
 
 ## Files and scope
 
-Feature changes are in the Gen12 generator/manifest/ruleset, shared risk-coin planner, shared barrel/world/presentation paths, release metadata, `.005` migration, and focused tools/tests listed above. `main.gd` also contains pre-existing capture instrumentation; preserve it and stage only the Gen12 gameplay hunk if later approved. Existing dirty capture, pacing, menu and planning files remain unrelated and must stay out of this task's commit.
+Feature changes are in the Gen12 generator/manifest/ruleset, shared risk-coin planner, shared barrel/world/presentation paths, release metadata, `.005` migration, and focused tools/tests listed above. Source commit `40b7c1d` (`Add biome risk encounters and spiked barrels`) was pushed to Azure `codex/current-prototype`. The build was exported from a clean archive of that exact commit at `E:/Utveckling/Gravity Run/.codex-gen12-40b7c1d/` into `E:/Utveckling/Gravity Run/.codex-web-export-40b7c1d/`.
 
-## Remaining before release
+Pages commit `2ee7616` (`Publish Gen12 biome risk gameplay build`) was pushed to GitHub Pages `main`. It updates the active `docs/game/` loader, root wrapper, build marker, and adds the versioned PCK while retaining older bundles. Build ID: `biome-risk-gen12-40b7c1d-20261005`. Exported PCK: 3,134,504 bytes, SHA256 `FB88AC669B56D130340BFEC32CB4F597EF7C88A0DA8930BBF29A4B7917996E40`; the staged Pages PCK matches this hash locally. Public URL: `https://hjelmdev.github.io/gravity-run/`.
 
-Root should inspect the implementation/status and migration diff. If accepted, selectively stage only this task's changes (including the gameplay-only `main.gd` hunk), then use the established clean-commit export, migration approval, Azure source push, Pages `docs/game` publication, and verify workflow/live PCK hash. No live action is authorized in this REVIEW_READY phase.
+The Pages push completed, but this task environment could not complete an independent remote loader/workflow/download check: direct HTTPS was blocked by the sandbox socket policy and the escalated verification process failed to start with access denied. Therefore the publication is pushed but remote workflow completion, live loader build ID, and downloaded PCK hash remain pending independent verification. Do not describe the web release as fully verified until those checks pass.
+
+## Remaining release verification
+
+- Confirm GitHub Pages workflow success for Pages commit `2ee7616`.
+- Confirm the public root wrapper and `docs/game/` loader report build ID `biome-risk-gen12-40b7c1d-20261005` and point to the versioned PCK.
+- Download the public PCK and compare its SHA256 to the clean export hash above.
+- The local clean-archive parse/runtime checks and main-scene captures are complete; no live signed-in multiplayer session or account reward was tested.
