@@ -5,6 +5,7 @@ enum ContactResult { IGNORE, BLOCK, LETHAL, DAMAGE_AND_CONTINUE, CONSUME_AND_LET
 
 const POLICIES := {
 	"barrel": {"destruction_policy": "consume_on_lethal_contact", "player_contact": ContactResult.CONSUME_AND_LETHAL, "initial_health": 1},
+	"spiked_barrel": {"destruction_policy": "consume_on_lethal_contact", "player_contact": ContactResult.CONSUME_AND_LETHAL, "initial_health": 1},
 	"breakable_wall": {"destruction_policy": "damage", "player_contact": ContactResult.BLOCK, "initial_health": 1},
 	"test_multihp": {"destruction_policy": "damage", "player_contact": ContactResult.BLOCK, "initial_health": 2},
 	"spike": {"destruction_policy": "indestructible", "player_contact": ContactResult.LETHAL, "initial_health": 0},
@@ -27,6 +28,8 @@ static func host_commit(ledger: MultiplayerV2WorldEventLedger, request: Dictiona
 	var action := str(request.get("action", "destroy"))
 	if action == "damage" and str(policy.destruction_policy) != "damage":
 		return {"accepted": false, "reason": "damage_not_allowed", "world_revision": ledger.revision}
+	if action == "lethal_contact" and int(policy.get("player_contact", ContactResult.IGNORE)) != ContactResult.CONSUME_AND_LETHAL:
+		return {"accepted": false, "reason": "lethal_contact_not_allowed", "world_revision": ledger.revision}
 	if action not in ["damage", "destroy", "lethal_contact"]:
 		return {"accepted": false, "reason": "invalid_action", "world_revision": ledger.revision}
 	var health_before := int(entity.get("shared_health", 1))

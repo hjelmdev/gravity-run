@@ -3,6 +3,7 @@ class_name CourseGenerator
 
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const BiomeRenderer := preload("res://biomes/biome_renderer.gd")
+const BiomeEncounterMixScript := preload("res://systems/biome_encounter_mix.gd")
 ## Deterministic, data-driven encounter planning with a route-feasibility check.
 ## New hazard profiles register their own blocked-lane forecasts; the planner
 ## rejects overlapping/no-exit patterns and spaces lane changes conservatively.
@@ -33,8 +34,10 @@ const ROCK_SAFE_GENERATOR_VERSION := 7
 const GENERATOR_VERSION_8 := 8
 const GENERATOR_VERSION_9 := 9
 const GENERATOR_VERSION_10 := 10
-const PREVIOUS_CURRENT_GENERATOR_VERSION := GENERATOR_VERSION_10
-const GENERATOR_VERSION := 11
+const GENERATOR_VERSION_11 := 11
+const GENERATOR_VERSION_12 := 12
+const PREVIOUS_CURRENT_GENERATOR_VERSION := GENERATOR_VERSION_11
+const GENERATOR_VERSION := GENERATOR_VERSION_12
 const PUBLISHED_SHARED_GENERATOR_VERSION := 5
 const LEGACY_GENERATOR_VERSION := 3
 const PREVIOUS_GENERATOR_VERSION := 4
@@ -120,7 +123,7 @@ func set_difficulty_profile(profile: Resource) -> void:
 func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> bool:
 	_configuration_failed = false
 	_generator_version = generator_version
-	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_10, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
+	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_11, GENERATOR_VERSION_10, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
 		push_error("Unsupported course generator version: %d" % generator_version)
 		return false
 	_profiles.clear()
@@ -144,7 +147,7 @@ func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> b
 		_profiles.append(_make_profile(&"falling_rock", &"rock", rock_weight, FLOOR_LANE, Vector2(90.0, 90.0), Vector2i(1, 1), PackedFloat32Array([100.0])))
 		if generator_version >= GENERATOR_VERSION_9:
 			_profiles.append(_make_profile(&"saw_blade", &"saw", 0.65, BOTH_LANES, Vector2(64.0, 64.0), Vector2i(1, 1), PackedFloat32Array([60.0])))
-		if generator_version >= GENERATOR_VERSION:
+		if generator_version >= GENERATOR_VERSION_11:
 			_profiles.append(_make_profile(&"haunted_ghost", &"ghost", 0.85, BOTH_LANES, Vector2(72.0, 96.0), Vector2i(1, 1), PackedFloat32Array([96.0])))
 	return true
 
@@ -262,7 +265,8 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 	var spacing := BASE_EVENT_SPACING
 	var clearance := get_switch_clearance_distance(speed, track_height)
 	for _attempt in range(64):
-		var profile := _pick_profile()
+		var candidate_biome := BiomeRenderer.biome_id_at(_next_event_distance) if _generator_version >= GENERATOR_VERSION_12 else ""
+		var profile := _pick_profile(_next_event_distance)
 		if profile == null:
 			break
 		var candidate := profile.create_event(_rng, _next_event_distance, _difficulty, _preferred_lane())
@@ -286,6 +290,8 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 			spacing += PLAN_RETRY_SPACING
 			continue
 		for _shift in range(128):
+			if _generator_version >= GENERATOR_VERSION_12 and BiomeRenderer.biome_id_at(_next_event_distance) != candidate_biome:
+				break
 			candidate["course_distance"] = _next_event_distance
 			candidate["threats"] = profile.build_threat_intervals(candidate)
 			_apply_rock_switch_clearance(candidate, candidate_clearance if candidate_is_rock else 0.0)
@@ -341,7 +347,8 @@ func _apply_generator_timing(event: Dictionary) -> void:
 			event["warning_ticks"] = 104
 
 func _try_append_independent_barrel(base_event: Dictionary, clearance: float) -> void:
-	var barrel_weight := _barrel_profile.weight * _get_profile_weight_multiplier(_barrel_profile.profile_id)
+	var base_distance := float(base_event.get("course_distance", 0.0))
+	var barrel_weight := _get_versioned_profile_weight(_barrel_profile, base_distance)
 	if barrel_weight <= 0.0:
 		return
 	var base_kind := StringName(base_event.get("kind", ""))
@@ -349,11 +356,12 @@ func _try_append_independent_barrel(base_event: Dictionary, clearance: float) ->
 		return
 	var normal_weight := 0.0
 	for profile in _profiles:
-		normal_weight += profile.weight * _get_profile_weight_multiplier(profile.profile_id)
+		normal_weight += _get_versioned_profile_weight(profile, base_distance)
 	if _rng.randf() >= barrel_weight / maxf(normal_weight + barrel_weight, 0.001):
 		return
-	var base_distance := float(base_event["course_distance"])
 	var barrel_event := _barrel_profile.create_event(_rng, base_distance, _difficulty, FLOOR_LANE)
+	if _generator_version >= GENERATOR_VERSION_12 and base_kind == &"block" and _rng.randf() < 0.25:
+		barrel_event["spiked"] = true
 	# Put the extra floor-only barrel chain just beyond the base obstacle so it
 	# rolls into that obstacle on screen; its independent roll never replaces it.
 	var chain_width := float(barrel_event.get("width", HazardRules.BARREL_WIDTH)) - HazardRules.BARREL_WIDTH
@@ -370,6 +378,8 @@ func _append_safe_fallback(speed: float, track_height: float) -> void:
 	var clearance := get_switch_clearance_distance(speed, track_height)
 	var safe_distance := maxf(_next_event_distance, 700.0)
 	for profile in _profiles:
+		if _get_versioned_profile_weight(profile, safe_distance) <= 0.0:
+			continue
 		for attempt in range(64):
 			var candidate := profile.create_event(_rng, safe_distance, _difficulty, 0)
 			_apply_generator_timing(candidate)
@@ -386,18 +396,28 @@ func _append_safe_fallback(speed: float, track_height: float) -> void:
 	push_error("The active course ruleset has no solvable fallback encounter.")
 	_configuration_failed = true
 
-func _pick_profile() -> CourseHazardProfile:
+func _pick_profile(course_distance: float = -1.0) -> CourseHazardProfile:
+	var pick_distance := _next_event_distance if course_distance < 0.0 else course_distance
 	var total_weight := 0.0
 	for profile in _profiles:
-		total_weight += profile.weight * _get_profile_weight_multiplier(profile.profile_id)
+		total_weight += _get_versioned_profile_weight(profile, pick_distance)
 	if total_weight <= 0.0:
 		return null
 	var choice := _rng.randf() * total_weight
 	for profile in _profiles:
-		choice -= profile.weight * _get_profile_weight_multiplier(profile.profile_id)
+		choice -= _get_versioned_profile_weight(profile, pick_distance)
 		if choice <= 0.0:
 			return profile
 	return _profiles.back()
+
+func _get_versioned_profile_weight(profile: CourseHazardProfile, course_distance: float) -> float:
+	if profile == null:
+		return 0.0
+	var base_weight := profile.weight * _get_profile_weight_multiplier(profile.profile_id)
+	if base_weight <= 0.0 or _generator_version < GENERATOR_VERSION_12:
+		return base_weight
+	var biome := BiomeRenderer.biome_id_at(course_distance)
+	return base_weight * BiomeEncounterMixScript.multiplier(_generator_version, biome, profile.profile_id)
 
 func _get_profile_weight_multiplier(profile_id: StringName) -> float:
 	if _difficulty == null:

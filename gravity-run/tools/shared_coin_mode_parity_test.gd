@@ -1,4 +1,4 @@
-extends SceneTree
+extends Node
 
 const Builder := preload("res://systems/course_manifest_builder.gd")
 const Generator := preload("res://systems/course_generator.gd")
@@ -7,7 +7,7 @@ const RunDefinition := preload("res://systems/course_run_definition.gd")
 const Planner := preload("res://systems/shared_coin_planner.gd")
 const Presentation := preload("res://systems/race_course_presentation.gd")
 
-func _initialize() -> void:
+func _ready() -> void:
 	call_deferred("_run")
 
 func _run() -> void:
@@ -33,7 +33,7 @@ func _run() -> void:
 			continue
 		generator.ensure_horizon(float(length), 500.0, Generator.REFERENCE_TRACK_HEIGHT, Generator.EVENT_SPAWN_LEAD_DISTANCE)
 		var source_events: Array[Dictionary] = generator.get_planned_events()
-		var resolved: Array[Dictionary] = Builder.new().call("_resolve_events", source_events, length)
+		var resolved: Array[Dictionary] = Builder.new().call("_resolve_events", source_events, length, 8)
 		var stream = Planner.new()
 		stream.reset(seed_value, Builder.PLAYER_START_X, int(ruleset.get("coin_revision")), float(ruleset.get("coin_density")))
 		var streamed: Array[Dictionary] = []
@@ -62,10 +62,10 @@ func _run() -> void:
 		presentation.free()
 	if failures.is_empty():
 		print("shared_coin_mode_parity_test: PASS")
-		quit(0)
+		get_tree().quit(0)
 	else:
 		for failure in failures: push_error(failure)
-		quit(1)
+		get_tree().quit(1)
 
 func _largest_coin_gap(coins: Array) -> float:
 	var previous := float(Builder.PLAYER_START_X)

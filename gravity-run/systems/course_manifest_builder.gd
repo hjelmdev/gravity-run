@@ -41,7 +41,7 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 	var source_events: Array[Dictionary] = generator.get_planned_events()
 	var manifest := ManifestScript.new() as MultiplayerCourseManifest
 	manifest.generator_version = generator_version
-	manifest.manifest_version = 5 if generator_version >= CourseGenerator.GENERATOR_VERSION_10 else (4 if generator_version >= CourseGenerator.GENERATOR_VERSION_9 else (3 if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION else 2))
+	manifest.manifest_version = 6 if generator_version >= CourseGenerator.GENERATOR_VERSION_12 else (5 if generator_version >= CourseGenerator.GENERATOR_VERSION_10 else (4 if generator_version >= CourseGenerator.GENERATOR_VERSION_9 else (3 if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION else 2)))
 	manifest.course_identity = str(definition.call("get_course_identity"))
 	manifest.seed_value = seed_value
 	manifest.course_length_px = course_length_px
@@ -60,7 +60,11 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 func _make_multiplayer_ruleset(generator_version: int) -> Resource:
 	var ruleset := CourseRulesetScript.new() as Resource
 	ruleset.set("ruleset_id", &"multiplayer_race")
-	if generator_version >= CourseGenerator.GENERATOR_VERSION:
+	if generator_version >= CourseGenerator.GENERATOR_VERSION_12:
+		ruleset.set("revision", 9)
+		ruleset.set("event_density", 1.55)
+		ruleset.set("coin_revision", 2)
+	elif generator_version == CourseGenerator.GENERATOR_VERSION_11:
 		ruleset.set("revision", 8)
 		ruleset.set("event_density", 1.55)
 	elif generator_version >= CourseGenerator.GENERATOR_VERSION_10:
@@ -147,7 +151,7 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 				if floor_surface_y - ceiling_surface_y < barrel_height + 56.0:
 					event_index += 1
 					continue
-				resolved.append({
+				var barrel_record := {
 					"event_id": event_prefix,
 					"kind": "barrels",
 					"x": event_x,
@@ -158,7 +162,10 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 					"spacing": HazardRules.BARREL_CHAIN_SPACING,
 					"motion_speed_multiplier": float(source.get("motion_speed_multiplier", 1.0)),
 					"spawn_lead_distance": CourseGenerator.EVENT_SPAWN_LEAD_DISTANCE,
-				})
+				}
+				if generator_version >= CourseGenerator.GENERATOR_VERSION_12 and bool(source.get("spiked", false)):
+					barrel_record["spiked"] = true
+				resolved.append(barrel_record)
 			"gap":
 				resolved.append({
 					"event_id": event_prefix,
@@ -292,7 +299,7 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 					saw_record["roof_gap_width"] = gap_width
 				resolved.append(saw_record)
 			"ghost":
-				if generator_version < CourseGenerator.GENERATOR_VERSION or BiomeRendererScript.biome_id_at(course_distance) != "haunted":
+				if generator_version < CourseGenerator.GENERATOR_VERSION_11 or BiomeRendererScript.biome_id_at(course_distance) != "haunted":
 					event_index += 1
 					continue
 				var ghost_width := float(source.get("width", 72.0))

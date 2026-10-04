@@ -79,11 +79,14 @@ func _run() -> void:
 		for event in v10_manifest.get("events"):
 			if str(event.get("kind", "")) == "saw":
 				_check(event.has("saw_variant") and is_equal_approx(float(event.get("saw_radius", 0.0)), 34.0), "v10 saws serialize their variant and radius")
-	var v11_result: Dictionary = builder.build(v9_seed, 45000, Generator.GENERATOR_VERSION)
+	var v11_result: Dictionary = builder.build(v9_seed, 45000, Generator.GENERATOR_VERSION_11)
 	var v11_manifest: Resource = v11_result.get("manifest")
 	_check(v11_manifest != null and int(v11_manifest.get("generator_version")) == 11 and int(v11_manifest.get("manifest_version")) == 5, "v11 ghosts retain manifest format 5")
+	var v12_result: Dictionary = builder.build(v9_seed, 45000, Generator.GENERATOR_VERSION_12)
+	var v12_manifest: Resource = v12_result.get("manifest")
+	_check(v12_manifest != null and int(v12_manifest.get("generator_version")) == 12 and int(v12_manifest.get("manifest_version")) == 6, "v12 biome encounters use manifest format 6")
 	if failures == 0:
-		print("Generator compatibility passed: frozen v6/v7/v8 hashes unchanged; v9 stays manifest v4; v10 saw variants and v11 ghosts share manifest v5.")
+		print("Generator compatibility passed: frozen v6/v7/v8 hashes unchanged; v9 stays manifest v4; v10/v11 share manifest v5 and v12 uses manifest v6.")
 	quit(1 if failures > 0 else 0)
 
 func _check(condition: bool, message: String) -> void:

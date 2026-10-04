@@ -134,6 +134,7 @@ func load_manifest(course_manifest: Resource) -> String:
 					var barrel_id := "%s_%d" % [event_id, index]
 					var barrel := create_hazard(BarrelScene, Vector2(x + spawn_offset - chain_width * 0.5 + float(index) * spacing, float(event.get("y", floor_y))), Vector2(HazardRules.BARREL_WIDTH, float(event.get("height", HazardRules.BARREL_WIDTH))), false)
 					barrel.call("set_motion_speed_multiplier", speed_multiplier)
+					barrel.call("set_spiked", bool(event.get("spiked", false)))
 					barrel.connect("destruction_started", Callable(self, "_on_barrel_destruction_started"))
 					barrel.name = "Barrel_%s" % barrel_id
 					_tag_presentation_target(barrel, barrel_id, "barrel", true)
@@ -333,6 +334,8 @@ func set_world_state(world_state: Dictionary) -> void:
 				continue
 			var node: Node2D = node_value
 			node.call("apply_replicated_motion", Vector2(float(state.get("x", node.position.x)), float(state.get("y", node.position.y))), float(state.get("roll_angle", 0.0)), float(state.get("rotation", 0.0)), bool(state.get("spawned", false)))
+			if node.has_method("set_spiked"):
+				node.call("set_spiked", bool(state.get("spiked", node.get("is_spiked"))))
 			if bool(state.get("destroyed", false)):
 				apply_destroyed_entity(str(state.get("entity_id", "")))
 	var destroyed: Variant = world_state.get("destroyed_event_ids", [])

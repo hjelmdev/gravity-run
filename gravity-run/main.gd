@@ -1023,19 +1023,22 @@ func _resolve_obstacle_interactions() -> void:
 			var block_impact: int = HAZARD_RULES_SCRIPT.barrel_impact(center, radius, "block", obstacle.call("get_hitbox_rect"))
 			if block_impact == HAZARD_RULES_SCRIPT.BarrelImpact.BARREL_AND_TARGET_DESTROYED:
 				obstacle.call("destroy")
-				barrel.call("destroy")
-				break
+				if not bool(barrel.get("is_spiked")):
+					barrel.call("destroy")
+					break
 	obstacles = obstacles.filter(func(obstacle: Node2D) -> bool:
 		return is_instance_valid(obstacle) and not obstacle.is_queued_for_deletion()
 	)
 
-func _spawn_obstacle_scene(scene: PackedScene, width: float, height: float, from_ceiling: bool, x: float, motion_speed_multiplier: float = 1.0) -> void:
+func _spawn_obstacle_scene(scene: PackedScene, width: float, height: float, from_ceiling: bool, x: float, motion_speed_multiplier: float = 1.0, spiked_barrel: bool = false) -> void:
 	var obstacle := CoursePresentation.create_hazard(scene, Vector2(x, _ceiling_surface_y(x) if from_ceiling else _floor_surface_y(x)), Vector2(width, height), from_ceiling, _surface_angle_at(x, from_ceiling))
 	obstacle.connect("destroyed", Callable(self, "_on_obstacle_destroyed"))
 	if obstacle.is_in_group("barrels") and obstacle.has_signal("destruction_started"):
 		obstacle.connect("destruction_started", Callable(self, "_on_barrel_destruction_started"))
 	if obstacle.has_method("set_motion_speed_multiplier"):
 		obstacle.call("set_motion_speed_multiplier", motion_speed_multiplier)
+	if obstacle.has_method("set_spiked"):
+		obstacle.call("set_spiked", spiked_barrel)
 	add_child(obstacle)
 	obstacles.append(obstacle)
 

@@ -62,7 +62,7 @@ func calculate_hash() -> String:
 
 func load_canonical_dictionary(data: Dictionary, expected_wire_hash := "", wire_payload := PackedByteArray()) -> bool:
 	manifest_version = int(data.get("manifest_version", -1))
-	if manifest_version not in [2, 3, 4, 5] or not data.get("world", {}) is Dictionary:
+	if manifest_version not in [2, 3, 4, 5, 6] or not data.get("world", {}) is Dictionary:
 		return false
 	if not expected_wire_hash.is_empty():
 		if expected_wire_hash.length() != 64 or wire_payload.is_empty():
@@ -124,7 +124,7 @@ func validate() -> String:
 		return "The multiplayer world dimensions are invalid."
 	if events.size() > 4000:
 		return "The multiplayer manifest has too many events."
-	if manifest_version not in [2, 3, 4, 5] or (generator_version >= CourseGenerator.GENERATOR_VERSION_10 and manifest_version != 5) or (generator_version >= CourseGenerator.GENERATOR_VERSION_9 and generator_version < CourseGenerator.GENERATOR_VERSION_10 and manifest_version != 4) or (generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and generator_version < CourseGenerator.GENERATOR_VERSION_9 and manifest_version != 3) or (generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and manifest_version != 2):
+	if manifest_version not in [2, 3, 4, 5, 6] or (generator_version >= CourseGenerator.GENERATOR_VERSION_12 and manifest_version != 6) or (generator_version >= CourseGenerator.GENERATOR_VERSION_10 and generator_version < CourseGenerator.GENERATOR_VERSION_12 and manifest_version != 5) or (generator_version >= CourseGenerator.GENERATOR_VERSION_9 and generator_version < CourseGenerator.GENERATOR_VERSION_10 and manifest_version != 4) or (generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and generator_version < CourseGenerator.GENERATOR_VERSION_9 and manifest_version != 3) or (generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and manifest_version != 2):
 		return "The course generator and manifest versions are incompatible."
 	var previous_x := -INF
 	for event in events:
@@ -133,8 +133,10 @@ func validate() -> String:
 		var event_x := float(event.x)
 		if not is_finite(event_x) or event_x < start_x or event_x > finish_x + 1000.0 or event_x < previous_x:
 			return "Manifest events must be finite, ordered, and inside the course bounds."
-		if str(event.kind) not in ["spikes", "block", "barrels", "gap", "step", "slope", "rock", "saw", "ghost"] or (str(event.kind) == "rock" and generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION) or (str(event.kind) == "saw" and generator_version < CourseGenerator.GENERATOR_VERSION_9) or (str(event.kind) == "ghost" and generator_version < CourseGenerator.GENERATOR_VERSION):
+		if str(event.kind) not in ["spikes", "block", "barrels", "gap", "step", "slope", "rock", "saw", "ghost"] or (str(event.kind) == "rock" and generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION) or (str(event.kind) == "saw" and generator_version < CourseGenerator.GENERATOR_VERSION_9) or (str(event.kind) == "ghost" and generator_version < CourseGenerator.GENERATOR_VERSION_11):
 			return "The manifest contains an unsupported dynamic or unknown event type."
+		if str(event.kind) == "barrels" and bool(event.get("spiked", false)) and (generator_version < CourseGenerator.GENERATOR_VERSION_12 or not (event.get("spiked") is bool)):
+			return "The manifest contains an invalid spiked-barrel variant."
 		if str(event.kind) == "rock":
 			var width := float(event.get("width", NAN))
 			var height := float(event.get("height", NAN))

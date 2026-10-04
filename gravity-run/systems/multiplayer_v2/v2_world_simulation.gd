@@ -65,10 +65,11 @@ func configure(course_manifest: Resource) -> String:
 			var lead := float(event.get("spawn_lead_distance", 820.0))
 			for index in range(count):
 				var entity_id := "%s_%d" % [event_id, index]
-				var barrel := {"entity_id": entity_id, "event_id": event_id, "incarnation": 1, "kind": "barrel", "x": float(event.get("x", 0.0)) + lead * (multiplier - 1.0) - float(count - 1) * spacing * 0.5 + float(index) * spacing, "y": float(event.get("y", manifest.initial_floor_y)), "width": width, "height": height, "motion_speed_multiplier": multiplier, "spawn_time": maxf(0.0, float(event.get("x", 0.0)) - lead - float(manifest.start_x)) / Motion.BASE_RUN_SPEED, "spawned": false, "fall_velocity": 0.0, "falling": false, "roll_angle": 0.0, "rotation": 0.0, "destroyed": false}
+				var is_spiked := bool(event.get("spiked", false))
+				var barrel := {"entity_id": entity_id, "event_id": event_id, "incarnation": 1, "kind": "spiked_barrel" if is_spiked else "barrel", "spiked": is_spiked, "x": float(event.get("x", 0.0)) + lead * (multiplier - 1.0) - float(count - 1) * spacing * 0.5 + float(index) * spacing, "y": float(event.get("y", manifest.initial_floor_y)), "width": width, "height": height, "motion_speed_multiplier": multiplier, "spawn_time": maxf(0.0, float(event.get("x", 0.0)) - lead - float(manifest.start_x)) / Motion.BASE_RUN_SPEED, "spawned": false, "fall_velocity": 0.0, "falling": false, "roll_angle": 0.0, "rotation": 0.0, "destroyed": false}
 				barrels.append(barrel)
-				entities.append({"entity_id": entity_id, "incarnation": 1, "kind": "barrel", "health": 1})
-				_entity_by_event[entity_id] = {"kind": "barrel", "event_id": event_id}
+				entities.append({"entity_id": entity_id, "incarnation": 1, "kind": str(barrel.kind), "health": 1})
+				_entity_by_event[entity_id] = {"kind": str(barrel.kind), "event_id": event_id}
 		elif kind in ["block", "step", "rock", "saw", "ghost"]:
 			entities.append({"entity_id": event_id, "incarnation": 1, "kind": kind, "health": 1})
 			_entity_by_event[event_id] = {"kind": kind, "event_id": event_id}
@@ -442,7 +443,7 @@ func state_hash() -> String:
 		normalized.append({"id": str(entity_id), "incarnation": int(state.incarnation), "kind": str(state.kind), "state": str(state.state), "hp": int(state.shared_health), "winner_peer_id": int(state.get("winner_peer_id", 0)), "award_value": int(state.get("award_value", 0)), "rock_activation_tick": int(state.get("rock_activation_tick", -1)), "saw_activation_tick": int(state.get("saw_activation_tick", -1))})
 	var barrel_state := []
 	for barrel in barrels:
-		barrel_state.append({"id": str(barrel.entity_id), "x": int(round(float(barrel.x) * 16.0)), "y": int(round(float(barrel.y) * 16.0)), "spawned": bool(barrel.spawned), "falling": bool(barrel.falling), "destroyed": bool(barrel.destroyed)})
+		barrel_state.append({"id": str(barrel.entity_id), "x": int(round(float(barrel.x) * 16.0)), "y": int(round(float(barrel.y) * 16.0)), "spawned": bool(barrel.spawned), "falling": bool(barrel.falling), "destroyed": bool(barrel.destroyed), "spiked": bool(barrel.get("spiked", false))})
 	var saw_state := []
 	for saw in saws:
 		var state: Dictionary = saw.get("state", {})
@@ -557,10 +558,12 @@ func _resolve_barrel_interactions(barrel: Dictionary) -> void:
 			var block_y := edge_y - height if not bool(event.get("from_ceiling", false)) else edge_y
 			var target := Rect2(Vector2(float(event.get("x", 0.0)) - width * 0.5, block_y), Vector2(width, height))
 			if HazardRules.barrel_impact(center, radius, "block", target) == HazardRules.BarrelImpact.BARREL_AND_TARGET_DESTROYED:
-				barrel.destroyed = true
-				apply_deterministic_destruction(str(barrel.entity_id), tick)
+				if not bool(barrel.get("spiked", false)):
+					barrel.destroyed = true
+					apply_deterministic_destruction(str(barrel.entity_id), tick)
 				apply_deterministic_destruction(event_id, tick)
-				return
+				if not bool(barrel.get("spiked", false)):
+					return
 	for event in manifest.events:
 		if str(event.get("kind", "")) != "step" or not entity_ledger.is_active(str(event.get("event_id", ""))):
 			continue

@@ -6,6 +6,7 @@ const RunnerMotion := preload("res://systems/runner_motion.gd")
 var roll_angle := 0.0
 var fall_velocity := 0.0
 var is_falling := false
+var is_spiked := false
 var motion_speed_multiplier := 1.0
 var _local_render_motion := false
 var _previous_position := Vector2.ZERO
@@ -32,6 +33,10 @@ func scale_track_height(scale: float) -> void:
 
 func set_motion_speed_multiplier(multiplier: float) -> void:
 	motion_speed_multiplier = maxf(multiplier, 1.0)
+
+func set_spiked(value: bool) -> void:
+	is_spiked = value
+	queue_redraw()
 
 func apply_replicated_motion(new_position: Vector2, new_roll_angle: float, new_rotation: float, should_be_visible: bool) -> void:
 	position = new_position
@@ -97,6 +102,11 @@ func _draw() -> void:
 	var second_end := Vector2(-radius * 0.55, radius * 0.45).rotated(rendered_roll) + Vector2(0.0, center_y)
 	draw_line(first_start, first_end, Color("743e35"), 4.0)
 	draw_line(second_start, second_end, Color("743e35"), 4.0)
+	if is_spiked:
+		for index in range(8):
+			var angle := TAU * float(index) / 8.0 + rendered_roll
+			var outward := Vector2.RIGHT.rotated(angle)
+			draw_colored_polygon(PackedVector2Array([outward * (radius - 2.0) + Vector2(0.0, center_y), outward * (radius + 9.0) + Vector2(0.0, center_y) + outward.rotated(PI * 0.5) * 4.0, outward * (radius + 9.0) + Vector2(0.0, center_y) - outward.rotated(PI * 0.5) * 4.0]), Color("d8c6a2"))
 	draw_set_transform(Vector2.ZERO)
 
 func intersects_rect(rect: Rect2) -> bool:
