@@ -7,7 +7,7 @@ Updated 2026-10-05. **Phase: ROOT_APPROVED; scoped commit and release in progres
 - Baseline: HEAD `8009c472ee73453d0d6dd1dec1d73ebb6fe3121f`, API `2.1.20261005.9`, Gen13, manifest6. Current working-tree target is API `.10`, Gen14, manifest7, visible build label `2026.10.05-gen14-lava-seed-replay`.
 - Five pre-change Gen13 manifest/event/coin hash fixtures remain byte-identical via `tools/generator_v13_freeze_test.gd`.
 - Gen14's encounter mix overlays lava weights over the Gen12 cave/haunted table, preserving cave rocks/saws/spikes and haunted ghost weight. Gen13 and earlier use their existing rules and do not receive lava or Gen14 rhythm.
-- Migration `supabase/migrations/202610050003_generator14_lava_rhythm_seed_replay.sql` is pending live apply after a linked-history check. Its release gates are API `.10` + Gen14; existing Gen11–13 tuples and receipt behavior remain. Three migrations `.001`–`.003` and `tools/lava_gen14_release_gate_test.sql` passed in an isolated local PostgreSQL clone under `SET ROLE authenticated`; the existing auth shim does not emulate live GoTrue/PostgREST.
+- Migration `supabase/migrations/202610050003_generator14_lava_rhythm_seed_replay.sql` was applied live and the linked migration history was verified through `.003`. Its release gates are API `.10` + Gen14; existing Gen11–13 tuples and receipt behavior remain. Three migrations `.001`–`.003` and `tools/lava_gen14_release_gate_test.sql` passed in an isolated local PostgreSQL clone under `SET ROLE authenticated`; the existing auth shim does not emulate live GoTrue/PostgREST.
 - Pre-existing dirty `main.gd`, menu, pacing, capture, audio, and unrelated files are excluded from this scoped commit; only the reviewed lava/gameplay hunks of `main.gd` are staged.
 
 ## Review findings addressed
@@ -35,7 +35,11 @@ Updated 2026-10-05. **Phase: ROOT_APPROVED; scoped commit and release in progres
 
 ## Current handoff
 
-Root approved the reviewed implementation. The scoped source commit and backend migration are the next release steps; a clean exact-commit Web build and Pages publication follow after backend history verifies the gate.
+The originally reviewed implementation is source commit `c61399868b2b8c2d134471fa2421aa79c702279d`; its live backend gate and Pages build were deployed before the demo-specific issue was reported. This follow-up is source commit `3f48788badeeb1951346e344e4d51e733dd48ac4`, pushed to Azure `codex/current-prototype`. The clean exact-commit archive is `E:/Utveckling/Gravity Run/.codex-clean-gen14-followup-3f48788/gravity-run`; the new Web export is `E:/Utveckling/Gravity Run/.codex-gen14-web-followup-3f48788/`.
+
+The corrected Pages deployment is commit `6f6cf7019adbd638f72d8c4de57b1203f3234292`, workflow `37360697724` completed successfully at that head. Both root and game `BUILD_ID` and the root loader now use `lava-rhythm-demo-fix-3f48788-20261005`. The configured `mainPack` is `index.lava-rhythm-demo-fix-3f48788-20261005.pck` (3,230,536 bytes). Downloading that public file produced SHA-256 `D0DAEC95A9D2A15A325DC217B18BC2F77EEADE5338D20439EF7CCE70846E7495`, exactly matching the clean local export. No additional migration was needed for this runtime/presentation-only correction; the live backend remains on `.003`/Gen14.
+
+Follow-up test: `tools/singleplayer_seed_replay_integration_test.tscn` passed both in the working tree and from the clean exact-commit archive. It runs the real `main.tscn`, selects generated crack and volcano events with matching shared-manifest coordinates, spawns them via the regular event path, exercises both demo lane-risk evaluations while the scene physics process runs, and checks exposed side metadata and nonempty collision bounds. `tools/lava_shared_world_test.tscn` also passed (failures=0). The headless environment reports its known inability to write the Godot user log and certificate-store warning, plus shutdown resource notices; assertion tests exited 0. The code and public package are verified, but I did not independently collect browser console telemetry after this redeployment.
 
 ## Post-release correction (2026-10-05)
 
