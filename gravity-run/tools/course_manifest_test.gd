@@ -67,7 +67,7 @@ func _run() -> void:
 		var current: Resource = current_result.manifest
 		var repeated: Resource = current_repeat.manifest
 		var coins: Array = current.get("collectibles")
-		_check(int(current.get("manifest_version")) == 6, "current generator should use biome/risk/barrel manifest version 6")
+		_check(int(current.get("manifest_version")) == 7, "current generator should use lava-enabled manifest version 7")
 		_check(not coins.is_empty(), "current manifest should contain shared coins")
 		var saw_count := 0
 		for event in current.get("events"):
@@ -76,6 +76,29 @@ func _run() -> void:
 		_check(saw_count > 0, "current manifest should include the shared saw profile for this seed")
 		_check(coins == repeated.get("collectibles"), "coin placement should repeat exactly for a seed")
 		_check(str(current.call("validate")).is_empty(), "current collectible manifest should validate")
+		var validation_build: Dictionary = BuilderScript.new().build(100000003, 45000, 14)
+		var validation_manifest: Resource = validation_build.get("manifest")
+		var malformed_crack: Resource = validation_manifest.duplicate(true)
+		var crack_events: Array[Dictionary] = malformed_crack.get("events")
+		for index in range(crack_events.size()):
+			if str(crack_events[index].get("kind", "")) == "lava_crack":
+				crack_events[index]["from_ceiling"] = "false"
+				break
+		malformed_crack.set("events", crack_events)
+		malformed_crack.set("manifest_hash", malformed_crack.call("calculate_hash"))
+		_check(not str(malformed_crack.call("validate")).is_empty(), "lava crack validator rejects a non-boolean from_ceiling value")
+		var unsafe_volcano: Resource = validation_manifest.duplicate(true)
+		var volcano_events: Array[Dictionary] = unsafe_volcano.get("events")
+		for index in range(volcano_events.size()):
+			if str(volcano_events[index].get("kind", "")) == "volcano":
+				volcano_events[index]["height"] = 96.0
+				volcano_events[index]["projectile_vertical_speed"] = 700.0
+				volcano_events[index]["projectile_gravity"] = 900.0
+				volcano_events[index]["projectile_radius"] = 18.0
+				break
+		unsafe_volcano.set("events", volcano_events)
+		unsafe_volcano.set("manifest_hash", unsafe_volcano.call("calculate_hash"))
+		_check(not str(unsafe_volcano.call("validate")).is_empty(), "volcano validator rejects payload whose maximum apex enters ceiling-runner space")
 	if failures == 0:
 		print("Course manifest tests passed.")
 	quit(1 if failures > 0 else 0)

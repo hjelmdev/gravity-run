@@ -14,9 +14,12 @@ signal main_menu_requested
 var _status_label: Label
 var _balance_label: Label
 var _start_button: Button
+var _seed_edit: LineEdit
+var _seed_label: Label
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	visibility_changed.connect(_on_visibility_changed)
 	_build()
 
 func _build() -> void:
@@ -54,12 +57,23 @@ func _build() -> void:
 	_status_label.add_theme_font_size_override("font_size", 12)
 	_status_label.add_theme_color_override("font_color", Color("b8c7dc"))
 	layout.add_child(_status_label)
+	_seed_label = Label.new()
+	_seed_label.text = tr("Optional seed: number or GR-version-seed code")
+	_seed_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_seed_label.add_theme_font_size_override("font_size", 12)
+	_seed_label.add_theme_color_override("font_color", Color("b8c7dc"))
+	layout.add_child(_seed_label)
+	_seed_edit = LineEdit.new()
+	_seed_edit.placeholder_text = tr("Leave blank for a random course")
+	_seed_edit.max_length = 32
+	_seed_edit.clear_button_enabled = true
+	layout.add_child(_seed_edit)
 	_balance_label = Label.new()
 	_balance_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_balance_label.add_theme_color_override("font_color", Color("f5d45e"))
 	layout.add_child(_balance_label)
 	_start_button = _make_button(tr("Start challenge") if ChallengeService.active else tr("Start run"), 44.0)
-	_start_button.pressed.connect(start_run_requested.emit)
+	_start_button.pressed.connect(_start_run)
 	layout.add_child(_start_button)
 	var challenge_button := _make_button(tr("Challenges"), 38.0)
 	challenge_button.pressed.connect(challenges_requested.emit)
@@ -139,6 +153,21 @@ func _update_account_summary() -> void:
 	_balance_label.text = tr("Coins: %d") % AccountProgress.wallet_coins if AuthService.is_authenticated else tr("Coins: —")
 	if is_instance_valid(_start_button):
 		_start_button.text = tr("Start challenge") if ChallengeService.active else tr("Start run")
+	if is_instance_valid(_seed_label):
+		_seed_label.visible = not ChallengeService.active
+	if is_instance_valid(_seed_edit):
+		_seed_edit.visible = not ChallengeService.active
+		_seed_edit.editable = not ChallengeService.active
+
+func _on_visibility_changed() -> void:
+	_update_account_summary()
+
+func _start_run() -> void:
+	var seed_input := _seed_edit.text.strip_edges() if is_instance_valid(_seed_edit) and not ChallengeService.active else ""
+	if not seed_input.is_empty() and not bool(ChallengeService.call("start_singleplayer_seed_input", seed_input)):
+		_status_label.text = tr(str(ChallengeService.get("last_error")))
+		return
+	start_run_requested.emit()
 
 func _on_account_changed(_authenticated: bool, _email: String) -> void:
 	_update_account_summary()

@@ -9,6 +9,7 @@ const SurfaceIndexScript := preload("res://systems/course_surface_index.gd")
 const FallingRockModel := preload("res://systems/falling_rock_model.gd")
 const SawBladeModel := preload("res://systems/saw_blade_model.gd")
 const GhostModel := preload("res://systems/ghost_hazard_model.gd")
+const LavaModel := preload("res://systems/lava_hazard_model.gd")
 
 const TICK_RATE := 60.0
 const FIXED_DELTA := 1.0 / TICK_RATE
@@ -22,6 +23,7 @@ var coins: Array[Dictionary] = []
 var rocks: Array[Dictionary] = []
 var saws: Array[Dictionary] = []
 var ghosts: Array[Dictionary] = []
+var lava_events: Array[Dictionary] = []
 var _previous_saw_states: Dictionary = {}
 var _saw_history: Dictionary = {}
 var entity_ledger: MultiplayerV2WorldEventLedger = LedgerScript.new()
@@ -45,6 +47,7 @@ func configure(course_manifest: Resource) -> String:
 	rocks.clear()
 	saws.clear()
 	ghosts.clear()
+	lava_events.clear()
 	_previous_saw_states.clear()
 	_saw_history.clear()
 	_previous_render_barrels.clear()
@@ -56,6 +59,9 @@ func configure(course_manifest: Resource) -> String:
 		if event_id.is_empty():
 			continue
 		var kind := str(event.get("kind", ""))
+		if kind in ["lava_crack", "volcano"]:
+			lava_events.append(event.duplicate(true))
+			continue
 		if kind == "barrels":
 			var count := clampi(int(event.get("count", 1)), 1, 6)
 			var spacing := float(event.get("spacing", HazardRules.BARREL_CHAIN_SPACING))
@@ -153,7 +159,11 @@ func render_state(fraction: float) -> Dictionary:
 		var entity: Dictionary = entity_ledger.entities.get(event_id, {})
 		var activation_tick := int(entity.get("ghost_activation_tick", -1))
 		rendered_ghosts.append({"event_id": event_id, "event": event, "state": GhostModel.state(event, activation_tick, tick)})
-	return {"barrels": rendered, "coins": coins, "rocks": rendered_rocks, "saws": rendered_saws, "ghosts": rendered_ghosts, "entities": entity_ledger.entities}
+	var lava_render_tick := float(tick - 1) + clampf(fraction, 0.0, 1.0)
+	var rendered_lava: Array[Dictionary] = []
+	for event in lava_events:
+		rendered_lava.append({"event_id": str(event.get("event_id", "")), "event": event, "tick": lava_render_tick, "course_start_x": float(manifest.start_x)})
+	return {"tick": tick, "barrels": rendered, "coins": coins, "rocks": rendered_rocks, "saws": rendered_saws, "ghosts": rendered_ghosts, "lava": rendered_lava, "entities": entity_ledger.entities}
 
 func barrel_presentation_probe(entity_id: String, presentation_tick: float, fraction: float) -> Dictionary:
 	var current: Dictionary = {}
@@ -258,6 +268,16 @@ func _player_contact_against(player_state: Dictionary, barrel_state: Array, simu
 	for event in manifest.events:
 		var kind := str(event.get("kind", ""))
 		var event_id := str(event.get("event_id", ""))
+		if kind == "lava_crack":
+			if HazardRules.player_impact(rect, "block", LavaModel.crack_rect(event)) == HazardRules.PlayerImpact.LETHAL:
+				return {"kind": "terminal", "reason": "lava_crack", "entity_id": event_id, "event_id": event_id}
+			continue
+		if kind == "volcano":
+			var volcano_tick := simulation_tick if simulation_tick >= 0 else tick
+			var volcano_fraction := LavaModel.swept_contact_fraction(event, float(manifest.start_x), volcano_tick, volcano_tick, rect.get_center(), rect.get_center(), rect.size)
+			if volcano_fraction >= 0.0:
+				return {"kind": "terminal", "reason": "lava_projectile", "entity_id": event_id, "event_id": event_id}
+			continue
 		if kind in ["block", "step"] and not entity_ledger.is_active(event_id):
 			continue
 		if kind == "rock":
@@ -321,6 +341,22 @@ func first_static_terminal_contact(previous: Dictionary, proposed: Dictionary) -
 	for event in manifest.events:
 		var kind := str(event.get("kind", ""))
 		var entity_id := str(event.get("event_id", ""))
+		if kind == "lava_crack":
+			var crack_rect: Rect2 = LavaModel.crack_rect(event)
+			var crack_polygon := PackedVector2Array([crack_rect.position, Vector2(crack_rect.end.x, crack_rect.position.y), crack_rect.end, Vector2(crack_rect.position.x, crack_rect.end.y)])
+			var crack_fraction := HazardRules.swept_rect_polygon_fraction(rect, end - start, crack_polygon)
+			if crack_fraction >= 0.0 and crack_fraction < first_fraction:
+				first_fraction = crack_fraction
+				var crack_pose := start.lerp(end, crack_fraction)
+				best = {"kind": "terminal", "reason": "lava_crack", "entity_id": entity_id, "event_id": entity_id, "fraction": crack_fraction, "world_x": crack_pose.x, "y": crack_pose.y}
+			continue
+		if kind == "volcano":
+			var lava_fraction := LavaModel.swept_contact_fraction(event, float(manifest.start_x), maxi(tick - 1, 0), tick, start, end, Motion.SIZE)
+			if lava_fraction >= 0.0 and lava_fraction < first_fraction:
+				first_fraction = lava_fraction
+				var lava_pose := start.lerp(end, lava_fraction)
+				best = {"kind": "terminal", "reason": "lava_projectile", "entity_id": entity_id, "event_id": entity_id, "fraction": lava_fraction, "world_x": lava_pose.x, "y": lava_pose.y}
+			continue
 		if kind == "rock":
 			var rock_entity: Dictionary = entity_ledger.entities.get(entity_id, {})
 			var activation_tick := int(rock_entity.get("rock_activation_tick", -1))

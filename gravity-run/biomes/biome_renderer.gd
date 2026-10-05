@@ -5,32 +5,48 @@ class_name BiomeRenderer
 const CLASSIC: BiomeDefinition = preload("res://assets/biomes/definitions/classic.tres")
 const CAVE: BiomeDefinition = preload("res://assets/biomes/definitions/cave.tres")
 const HAUNTED: BiomeDefinition = preload("res://assets/biomes/definitions/haunted.tres")
+const LAVA: BiomeDefinition = preload("res://assets/biomes/definitions/lava.tres")
+const GENERATOR_VERSION_14 := 14
 const THEME_LENGTH := 4800.0
 const CYCLE_LENGTH := THEME_LENGTH * 3.0
+const GEN14_CYCLE_LENGTH := THEME_LENGTH * 4.0
 const TILE_WORLD_SIZE := 64.0
 const LOGICAL_BACKGROUND_HEIGHT := 540.0
 
 static func definition_at(distance: float) -> BiomeDefinition:
-	var slot := int(floor(fposmod(maxf(distance, 0.0), CYCLE_LENGTH) / THEME_LENGTH))
+	return definition_for_generator(distance, GENERATOR_VERSION_14 - 1)
+
+static func definition_for_generator(distance: float, generator_version: int) -> BiomeDefinition:
+	var cycle_length := GEN14_CYCLE_LENGTH if generator_version >= GENERATOR_VERSION_14 else CYCLE_LENGTH
+	var slot := int(floor(fposmod(maxf(distance, 0.0), cycle_length) / THEME_LENGTH))
 	match slot:
 		1: return CAVE
 		2: return HAUNTED
+		3: return LAVA if generator_version >= GENERATOR_VERSION_14 else CLASSIC
 		_: return CLASSIC
 
 static func biome_id_at(distance: float) -> String:
 	return String(definition_at(distance).biome_id)
 
+static func biome_id_for_generator(distance: float, generator_version: int) -> String:
+	return String(definition_for_generator(distance, generator_version).biome_id)
+
+static func cycle_length_for_generator(generator_version: int) -> float:
+	return GEN14_CYCLE_LENGTH if generator_version >= GENERATOR_VERSION_14 else CYCLE_LENGTH
+
 static func course_distance_at_world_x(world_x: float, course_start_x: float) -> float:
 	## SP and manifest-backed MP share this world-to-course coordinate contract.
 	return maxf(world_x - course_start_x, 0.0)
 
-static func draw_backdrop(canvas: CanvasItem, view_left: float, view_size: Vector2, course_distance: float) -> void:
+static func draw_backdrop(canvas: CanvasItem, view_left: float, view_size: Vector2, course_distance: float, generator_version: int = GENERATOR_VERSION_14 - 1) -> void:
 	var cursor := view_left
 	var right := view_left + view_size.x
+	var cycle_length := cycle_length_for_generator(generator_version)
 	while cursor < right:
 		var distance := maxf(course_distance + cursor - view_left, 0.0)
-		var biome := definition_at(distance)
-		var next_theme_distance: float = (floor(distance / THEME_LENGTH) + 1.0) * THEME_LENGTH
+		var biome := definition_for_generator(distance, generator_version)
+		var cycle_start: float = floor(distance / cycle_length) * cycle_length
+		var next_theme_distance: float = cycle_start + (floor(fposmod(distance, cycle_length) / THEME_LENGTH) + 1.0) * THEME_LENGTH
 		var segment_end := minf(right, cursor + maxf(next_theme_distance - distance, 1.0))
 		var segment_size := Vector2(segment_end - cursor, view_size.y)
 		var layout_size := Vector2(segment_size.x, minf(view_size.y, LOGICAL_BACKGROUND_HEIGHT))
@@ -41,13 +57,14 @@ static func draw_backdrop(canvas: CanvasItem, view_left: float, view_size: Vecto
 			match biome.biome_id:
 				&"cave": _draw_cave_backdrop(canvas, cursor, layout_size, course_distance, fragment_offset, biome)
 				&"haunted": pass
+				&"lava": _draw_lava_backdrop(canvas, cursor, layout_size, distance, view_left, course_distance, biome)
 				_: _draw_classic_backdrop(canvas, cursor, layout_size, course_distance * 0.12 + fragment_offset, biome)
 		if biome.biome_id == &"haunted":
-			_draw_haunted_backdrop(canvas, cursor, layout_size, distance, view_left, Vector2(view_size.x, layout_size.y), course_distance, biome)
+			_draw_haunted_backdrop(canvas, cursor, layout_size, distance, view_left, Vector2(view_size.x, layout_size.y), course_distance, biome, cycle_length)
 		_draw_atlas_decorations(canvas, biome, cursor, layout_size, distance)
 		cursor = segment_end
 
-static func draw_surface_tiles(canvas: CanvasItem, biome: BiomeDefinition, ceiling: bool, start_x: float, end_x: float, canvas_origin_x: float, surface_y_at: Callable, tint := Color.WHITE, biome_distance_offset := 0.0) -> bool:
+static func draw_surface_tiles(canvas: CanvasItem, biome: BiomeDefinition, ceiling: bool, start_x: float, end_x: float, canvas_origin_x: float, surface_y_at: Callable, tint := Color.WHITE, biome_distance_offset := 0.0, generator_version: int = GENERATOR_VERSION_14 - 1) -> bool:
 	if end_x <= start_x:
 		return false
 	var drew_any := false
@@ -62,7 +79,7 @@ static func draw_surface_tiles(canvas: CanvasItem, biome: BiomeDefinition, ceili
 		var tile_right := minf(x + float(world_tile_size.x), end_x)
 		if tile_right <= tile_left:
 			continue
-		var selected_biome := biome if biome != null else definition_at((tile_left + tile_right) * 0.5 - biome_distance_offset)
+		var selected_biome := biome if biome != null else definition_for_generator((tile_left + tile_right) * 0.5 - biome_distance_offset, generator_version)
 		if selected_biome == null or selected_biome.tile_set == null:
 			continue
 		var source := selected_biome.tile_set.get_source(selected_biome.atlas_source_id) as TileSetAtlasSource
@@ -282,10 +299,10 @@ static func _cave_ridge_y(parallax_x: float, viewport_height: float, layer: int)
 	var phase := parallax_x * 0.003
 	return clampf(base_y + sin(phase) * amplitude + cos(phase * 0.37) * amplitude * 0.4, viewport_height * 0.04, viewport_height * 0.94)
 
-static func _draw_haunted_backdrop(canvas: CanvasItem, left: float, size: Vector2, distance: float, view_left: float, full_view_size: Vector2, camera_course_distance: float, biome: BiomeDefinition) -> void:
+static func _draw_haunted_backdrop(canvas: CanvasItem, left: float, size: Vector2, distance: float, view_left: float, full_view_size: Vector2, camera_course_distance: float, biome: BiomeDefinition, cycle_length: float = CYCLE_LENGTH) -> void:
 	# Moon and silhouettes are tied to the biome's course interval, not the
 	# width of the fragment left after clipping at a theme boundary.
-	var haunted_start := floori(distance / CYCLE_LENGTH) * CYCLE_LENGTH + THEME_LENGTH * 2.0
+	var haunted_start := floori(distance / cycle_length) * cycle_length + THEME_LENGTH * 2.0
 	var moon_parallax := 0.055
 	var moon_anchor := haunted_start * moon_parallax + full_view_size.x * 0.74
 	var moon_x_screen := view_left + moon_anchor - camera_course_distance * moon_parallax
@@ -320,6 +337,36 @@ static func _draw_haunted_backdrop(canvas: CanvasItem, left: float, size: Vector
 		var y := full_view_size.y * (0.68 + fog_index * 0.045)
 		var fog := Color(0.62, 0.59, 0.77, 0.045)
 		canvas.draw_rect(Rect2(left, y, size.x, full_view_size.y * 0.055), fog)
+
+static func _draw_lava_backdrop(canvas: CanvasItem, left: float, size: Vector2, distance: float, view_left: float, camera_course_distance: float, biome: BiomeDefinition) -> void:
+	# Fixed course-space motifs keep the lava backdrop stable across fragments,
+	# viewport sizes, and SP/MP cameras. All bright marks stay above the track.
+	var parallax := 0.14
+	var parallax_left := camera_course_distance * parallax + (left - view_left)
+	var first := floori(parallax_left / 210.0) - 1
+	var last := ceili((parallax_left + size.x) / 210.0) + 1
+	for cell in range(first, last + 1):
+		var motif := _landmark_for_cell(cell, 210.0, 503)
+		var x := view_left + motif.x - camera_course_distance * parallax
+		if x < left - 50.0 or x > left + size.x + 50.0:
+			continue
+		var height := size.y * (0.18 + motif.y * 0.20)
+		var base_y := size.y * (0.72 + motif.y * 0.09)
+		var width := 46.0 + motif.y * 34.0
+		var silhouette := biome.layer_colors[posmod(cell, maxi(biome.layer_colors.size(), 1))]
+		canvas.draw_colored_polygon(PackedVector2Array([Vector2(x - width * 0.5, base_y), Vector2(x - width * 0.28, base_y - height * 0.62), Vector2(x - width * 0.12, base_y - height * 0.43), Vector2(x + width * 0.06, base_y - height), Vector2(x + width * 0.24, base_y - height * 0.49), Vector2(x + width * 0.43, base_y)]), silhouette)
+	# Sparse dim lava veins are decorative background only; the lethal cracks
+	# are separate manifest hazards rendered on the support surface.
+	var vein_left := camera_course_distance * 0.20 + (left - view_left)
+	for point in _landmarks_in_course(vein_left, vein_left + size.x, 310.0, 521):
+		var x := view_left + float(point.x) - camera_course_distance * 0.20
+		if x < left or x > left + size.x:
+			continue
+		var y := size.y * (0.55 + point.y * 0.15)
+		var glow := biome.accent_color
+		glow.a = 0.24
+		canvas.draw_line(Vector2(x - 13.0, y), Vector2(x, y + 5.0), glow, 2.0, true)
+		canvas.draw_line(Vector2(x, y + 5.0), Vector2(x + 12.0, y - 2.0), glow, 2.0, true)
 
 static func _landmarks_in_course(course_start: float, course_end: float, period: float, salt: int) -> Array[Vector2]:
 	## Deterministic course-space point lattice; segmentation or viewport width

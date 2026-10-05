@@ -37,8 +37,11 @@ const GENERATOR_VERSION_10 := 10
 const GENERATOR_VERSION_11 := 11
 const GENERATOR_VERSION_12 := 12
 const GENERATOR_VERSION_13 := 13
-const PREVIOUS_CURRENT_GENERATOR_VERSION := GENERATOR_VERSION_12
-const GENERATOR_VERSION := GENERATOR_VERSION_13
+const GENERATOR_VERSION_14 := 14
+const GEN14_RHYTHM_SPACING_DELTAS := [-120.0, -120.0, 240.0]
+const GEN14_RHYTHM_BASE_SPACING_SCALE := 1.22
+const PREVIOUS_CURRENT_GENERATOR_VERSION := GENERATOR_VERSION_13
+const GENERATOR_VERSION := GENERATOR_VERSION_14
 const PUBLISHED_SHARED_GENERATOR_VERSION := 5
 const LEGACY_GENERATOR_VERSION := 3
 const PREVIOUS_GENERATOR_VERSION := 4
@@ -52,6 +55,7 @@ var _barrel_profile: CourseHazardProfile
 var _events: Array[Dictionary] = []
 var _next_event_distance := 1050.0
 var _next_spawn_index := 0
+var _rhythm_event_index := 0
 var _seed := 0
 var _generator_version := GENERATOR_VERSION
 var _difficulty: Resource
@@ -125,7 +129,7 @@ func set_difficulty_profile(profile: Resource) -> void:
 func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> bool:
 	_configuration_failed = false
 	_generator_version = generator_version
-	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_12, GENERATOR_VERSION_11, GENERATOR_VERSION_10, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
+	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_13, GENERATOR_VERSION_12, GENERATOR_VERSION_11, GENERATOR_VERSION_10, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
 		push_error("Unsupported course generator version: %d" % generator_version)
 		return false
 	_profiles.clear()
@@ -151,6 +155,9 @@ func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> b
 			_profiles.append(_make_profile(&"saw_blade", &"saw", 0.65, BOTH_LANES, Vector2(64.0, 64.0), Vector2i(1, 1), PackedFloat32Array([60.0])))
 		if generator_version >= GENERATOR_VERSION_11:
 			_profiles.append(_make_profile(&"haunted_ghost", &"ghost", 0.85, BOTH_LANES, Vector2(72.0, 96.0), Vector2i(1, 1), PackedFloat32Array([96.0])))
+		if generator_version >= GENERATOR_VERSION_14:
+			_profiles.append(_make_profile(&"lava_crack", &"lava_crack", 1.2, BOTH_LANES, Vector2(104.0, 136.0), Vector2i(1, 1), PackedFloat32Array([18.0])))
+			_profiles.append(_make_profile(&"lava_volcano", &"volcano", 0.85, FLOOR_LANE, Vector2(104.0, 136.0), Vector2i(1, 1), PackedFloat32Array([72.0])))
 	return true
 
 func get_profile_catalog(generator_version: int = GENERATOR_VERSION) -> Array[CourseHazardProfile]:
@@ -172,6 +179,7 @@ func reset(seed: int = 0) -> void:
 	_spiked_barrel_corridors.clear()
 	_next_event_distance = 1400.0 if _generator_version >= PUBLISHED_SHARED_GENERATOR_VERSION else 1050.0
 	_next_spawn_index = 0
+	_rhythm_event_index = 0
 
 func ensure_horizon(horizon_distance: float, _current_speed: float, _track_height: float = REFERENCE_TRACK_HEIGHT, _spawn_lead_distance: float = EVENT_SPAWN_LEAD_DISTANCE) -> void:
 	_spawn_lead_distance = EVENT_SPAWN_LEAD_DISTANCE
@@ -268,13 +276,13 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 	var spacing := BASE_EVENT_SPACING
 	var clearance := get_switch_clearance_distance(speed, track_height)
 	for _attempt in range(64):
-		var candidate_biome := BiomeRenderer.biome_id_at(_next_event_distance) if _generator_version >= GENERATOR_VERSION_12 else ""
+		var candidate_biome := BiomeRenderer.biome_id_for_generator(_next_event_distance, _generator_version) if _generator_version >= GENERATOR_VERSION_12 else ""
 		var profile := _pick_profile(_next_event_distance)
 		if profile == null:
 			break
 		var candidate := profile.create_event(_rng, _next_event_distance, _difficulty, _preferred_lane())
 		_apply_generator_timing(candidate)
-		if str(candidate.get("kind", "")) == "ghost" and BiomeRenderer.biome_id_at(float(candidate.get("course_distance", 0.0))) != "haunted":
+		if str(candidate.get("kind", "")) == "ghost" and BiomeRenderer.biome_id_for_generator(float(candidate.get("course_distance", 0.0)), _generator_version) != "haunted":
 			_next_event_distance += PLAN_RETRY_SPACING
 			spacing += PLAN_RETRY_SPACING
 			continue
@@ -293,7 +301,7 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 			spacing += PLAN_RETRY_SPACING
 			continue
 		for _shift in range(128):
-			if _generator_version >= GENERATOR_VERSION_12 and BiomeRenderer.biome_id_at(_next_event_distance) != candidate_biome:
+			if _generator_version >= GENERATOR_VERSION_12 and BiomeRenderer.biome_id_for_generator(_next_event_distance, _generator_version) != candidate_biome:
 				break
 			candidate["course_distance"] = _next_event_distance
 			if _candidate_crosses_spiked_barrel_corridor(candidate):
@@ -304,11 +312,17 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 			var trial := _events.duplicate()
 			trial.append(candidate)
 			if is_plan_solvable(trial, clearance):
+				var phase := _rhythm_event_index % GEN14_RHYTHM_SPACING_DELTAS.size()
+				if _generator_version >= GENERATOR_VERSION_14:
+					candidate["rhythm_phase"] = phase
 				_events.append(candidate)
 				var widest := 0.0
 				for threat in candidate["threats"]:
 					widest = maxf(widest, float(threat["end"]) - float(threat["start"]))
 				var conservative_spacing := maxf(spacing, widest + candidate_clearance)
+				if _generator_version >= GENERATOR_VERSION_14:
+					conservative_spacing = maxf(BASE_EVENT_SPACING, conservative_spacing * GEN14_RHYTHM_BASE_SPACING_SCALE + GEN14_RHYTHM_SPACING_DELTAS[phase])
+					_rhythm_event_index += 1
 				_next_event_distance += get_density_adjusted_spacing(conservative_spacing)
 				if _barrel_profile != null:
 					_try_append_independent_barrel(candidate, clearance)
@@ -435,11 +449,17 @@ func _append_safe_fallback(speed: float, track_height: float) -> void:
 				continue
 			candidate["threats"] = profile.build_threat_intervals(candidate)
 			if is_plan_solvable(_events + [candidate], clearance):
+				if _generator_version >= GENERATOR_VERSION_14:
+					candidate["rhythm_phase"] = _rhythm_event_index % GEN14_RHYTHM_SPACING_DELTAS.size()
 				_events.append(candidate)
 				var widest := 0.0
 				for threat in candidate["threats"]:
 					widest = maxf(widest, float(threat["end"]) - float(threat["start"]))
-				_next_event_distance = safe_distance + get_density_adjusted_spacing(maxf(BASE_EVENT_SPACING, widest + clearance))
+				var fallback_spacing := maxf(BASE_EVENT_SPACING, widest + clearance)
+				if _generator_version >= GENERATOR_VERSION_14:
+					fallback_spacing = maxf(BASE_EVENT_SPACING, fallback_spacing + GEN14_RHYTHM_SPACING_DELTAS[_rhythm_event_index % GEN14_RHYTHM_SPACING_DELTAS.size()])
+					_rhythm_event_index += 1
+				_next_event_distance = safe_distance + get_density_adjusted_spacing(fallback_spacing)
 				return
 			safe_distance += maxf(250.0, clearance * 0.5)
 	push_error("The active course ruleset has no solvable fallback encounter.")
@@ -465,7 +485,7 @@ func _get_versioned_profile_weight(profile: CourseHazardProfile, course_distance
 	var base_weight := profile.weight * _get_profile_weight_multiplier(profile.profile_id)
 	if base_weight <= 0.0 or _generator_version < GENERATOR_VERSION_12:
 		return base_weight
-	var biome := BiomeRenderer.biome_id_at(course_distance)
+	var biome := BiomeRenderer.biome_id_for_generator(course_distance, _generator_version)
 	return base_weight * BiomeEncounterMixScript.multiplier(_generator_version, biome, profile.profile_id)
 
 func _get_profile_weight_multiplier(profile_id: StringName) -> float:

@@ -27,6 +27,7 @@ var last_error := ""
 var _score_provider: Node
 var _challenge_provider: Node
 var _custom_challenge_mode := false
+var _ordinary_seed_run_pending := false
 var _pending_challenge_name := ""
 
 func _ready() -> void:
@@ -43,11 +44,16 @@ func _ready() -> void:
 func begin_run() -> int:
 	if active and seed_value > 0:
 		return seed_value
+	if _ordinary_seed_run_pending and seed_value > 0:
+		_ordinary_seed_run_pending = false
+		last_error = ""
+		return seed_value
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
 	seed_value = rng.randi_range(MIN_CHALLENGE_SEED, MAX_CHALLENGE_SEED)
 	generation_version = GENERATOR_VERSION
 	_custom_challenge_mode = false
+	_ordinary_seed_run_pending = false
 	active_challenge_code = ""
 	ruleset = _new_default_ruleset(GENERATOR_VERSION)
 	last_error = ""
@@ -70,7 +76,44 @@ func start_challenge_from_code(raw_code: String) -> bool:
 	generation_version = requested_version
 	seed_value = parsed_seed
 	active = true
+	_ordinary_seed_run_pending = false
 	_custom_challenge_mode = false
+	active_challenge_code = ""
+	ruleset = _new_default_ruleset(requested_version)
+	return true
+
+## Ordinary single-player seed selection shares the established numeric/GR parser
+## but does not turn the run into a saved/community challenge.
+func start_singleplayer_seed_input(raw_input: String) -> bool:
+	var input := raw_input.strip_edges().to_upper()
+	last_error = ""
+	if input.is_empty():
+		return true
+	var requested_version := GENERATOR_VERSION
+	var parsed_seed := 0
+	if input.begins_with("GR"):
+		var parts := input.split("-", false)
+		if parts.size() != 2 or not parts[0].substr(2).is_valid_int() or not parts[1].is_valid_int():
+			last_error = "Invalid seed code. Use GR%d-seed or enter a number." % GENERATOR_VERSION
+			return false
+		requested_version = parts[0].substr(2).to_int()
+		parsed_seed = parts[1].to_int()
+		if not _supports_generator_version(requested_version):
+			last_error = "That seed code uses an unsupported generator version."
+			return false
+	else:
+		if not input.is_valid_int():
+			last_error = "Enter a positive number or a versioned GR seed code."
+			return false
+		parsed_seed = input.to_int()
+	if parsed_seed < 1 or parsed_seed > MAX_CHALLENGE_SEED:
+		last_error = "The seed must be between 1 and %d." % MAX_CHALLENGE_SEED
+		return false
+	generation_version = requested_version
+	seed_value = parsed_seed
+	active = false
+	_custom_challenge_mode = false
+	_ordinary_seed_run_pending = true
 	active_challenge_code = ""
 	ruleset = _new_default_ruleset(requested_version)
 	return true
@@ -289,13 +332,17 @@ func _get_available_profiles(generator_version: int = GENERATOR_VERSION) -> Arra
 	return generator.get_profile_catalog(generator_version)
 
 func _supports_generator_version(generator_version: int) -> bool:
-	return generator_version in [GENERATOR_VERSION, CourseGeneratorScript.GENERATOR_VERSION_12, CourseGeneratorScript.GENERATOR_VERSION_11, CourseGeneratorScript.GENERATOR_VERSION_10, CourseGeneratorScript.GENERATOR_VERSION_9, CourseGeneratorScript.GENERATOR_VERSION_8, CourseGeneratorScript.ROCK_SAFE_GENERATOR_VERSION, CourseGeneratorScript.GENERATOR_VERSION_6, CourseGeneratorScript.PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]
+	return generator_version in [GENERATOR_VERSION, CourseGeneratorScript.GENERATOR_VERSION_13, CourseGeneratorScript.GENERATOR_VERSION_12, CourseGeneratorScript.GENERATOR_VERSION_11, CourseGeneratorScript.GENERATOR_VERSION_10, CourseGeneratorScript.GENERATOR_VERSION_9, CourseGeneratorScript.GENERATOR_VERSION_8, CourseGeneratorScript.ROCK_SAFE_GENERATOR_VERSION, CourseGeneratorScript.GENERATOR_VERSION_6, CourseGeneratorScript.PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]
 
 func _new_default_ruleset(generator_version: int) -> Resource:
 	var default_ruleset := RulesetScript.new() as Resource
 	if generator_version == LEGACY_GENERATOR_VERSION:
 		default_ruleset.set("event_density", 1.0)
 	elif generator_version == GENERATOR_VERSION:
+		default_ruleset.set("revision", 11)
+		default_ruleset.set("event_density", 1.55)
+		default_ruleset.set("coin_revision", 2)
+	elif generator_version == CourseGeneratorScript.GENERATOR_VERSION_13:
 		default_ruleset.set("revision", 10)
 		default_ruleset.set("event_density", 1.55)
 		default_ruleset.set("coin_revision", 2)
@@ -351,5 +398,6 @@ func clear_challenge() -> void:
 	generation_version = GENERATOR_VERSION
 	active_challenge_code = ""
 	_custom_challenge_mode = false
+	_ordinary_seed_run_pending = false
 	ruleset = _new_default_ruleset(GENERATOR_VERSION)
 	last_error = ""

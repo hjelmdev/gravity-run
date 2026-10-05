@@ -6,15 +6,15 @@ const EDGE_COLOR := Color("42d6c5")
 const SAMPLE_SPACING := 16.0
 const BiomeRendererScript := preload("res://biomes/biome_renderer.gd")
 
-static func draw_track(canvas: CanvasItem, view_left: float, view_size: Vector2, gap_intervals: Array[Dictionary], terrain_boundaries: Array[float], step_positions: Array[float], surface_y_at: Callable, canvas_origin_x: float, biome: BiomeDefinition = null, biome_distance_offset := 0.0) -> void:
-	_draw_surface(canvas, true, view_left, view_size, gap_intervals, terrain_boundaries, step_positions, surface_y_at, canvas_origin_x, biome, biome_distance_offset)
-	_draw_surface(canvas, false, view_left, view_size, gap_intervals, terrain_boundaries, step_positions, surface_y_at, canvas_origin_x, biome, biome_distance_offset)
+static func draw_track(canvas: CanvasItem, view_left: float, view_size: Vector2, gap_intervals: Array[Dictionary], terrain_boundaries: Array[float], step_positions: Array[float], surface_y_at: Callable, canvas_origin_x: float, biome: BiomeDefinition = null, biome_distance_offset := 0.0, generator_version := 13) -> void:
+	_draw_surface(canvas, true, view_left, view_size, gap_intervals, terrain_boundaries, step_positions, surface_y_at, canvas_origin_x, biome, biome_distance_offset, generator_version)
+	_draw_surface(canvas, false, view_left, view_size, gap_intervals, terrain_boundaries, step_positions, surface_y_at, canvas_origin_x, biome, biome_distance_offset, generator_version)
 
-static func draw_track_cached(canvas: CanvasItem, view_left: float, view_size: Vector2, ceiling_gaps: Array[Dictionary], floor_gaps: Array[Dictionary], terrain_boundaries: Array[float], step_positions: Array[float], surface_y_at: Callable, canvas_origin_x: float, biome: BiomeDefinition = null, biome_distance_offset := 0.0) -> void:
-	_draw_surface_cached(canvas, true, view_left, view_size, ceiling_gaps, terrain_boundaries, step_positions, surface_y_at, canvas_origin_x, biome, biome_distance_offset)
-	_draw_surface_cached(canvas, false, view_left, view_size, floor_gaps, terrain_boundaries, step_positions, surface_y_at, canvas_origin_x, biome, biome_distance_offset)
+static func draw_track_cached(canvas: CanvasItem, view_left: float, view_size: Vector2, ceiling_gaps: Array[Dictionary], floor_gaps: Array[Dictionary], terrain_boundaries: Array[float], step_positions: Array[float], surface_y_at: Callable, canvas_origin_x: float, biome: BiomeDefinition = null, biome_distance_offset := 0.0, generator_version := 13) -> void:
+	_draw_surface_cached(canvas, true, view_left, view_size, ceiling_gaps, terrain_boundaries, step_positions, surface_y_at, canvas_origin_x, biome, biome_distance_offset, generator_version)
+	_draw_surface_cached(canvas, false, view_left, view_size, floor_gaps, terrain_boundaries, step_positions, surface_y_at, canvas_origin_x, biome, biome_distance_offset, generator_version)
 
-static func _draw_surface_cached(canvas: CanvasItem, ceiling: bool, view_left: float, view_size: Vector2, gaps: Array[Dictionary], terrain_boundaries: Array[float], step_positions: Array[float], surface_y_at: Callable, canvas_origin_x: float, biome: BiomeDefinition = null, biome_distance_offset := 0.0) -> void:
+static func _draw_surface_cached(canvas: CanvasItem, ceiling: bool, view_left: float, view_size: Vector2, gaps: Array[Dictionary], terrain_boundaries: Array[float], step_positions: Array[float], surface_y_at: Callable, canvas_origin_x: float, biome: BiomeDefinition = null, biome_distance_offset := 0.0, generator_version := 13) -> void:
 	var view_right := view_left + view_size.x
 	var cursor := view_left
 	for gap in gaps:
@@ -29,16 +29,16 @@ static func _draw_surface_cached(canvas: CanvasItem, ceiling: bool, view_left: f
 		if gap_end <= cursor:
 			continue
 		if gap_start > cursor:
-			_draw_segment_cached(canvas, ceiling, cursor, gap_start, canvas_origin_x, view_size, terrain_boundaries, step_positions, surface_y_at, biome, biome_distance_offset)
+			_draw_segment_cached(canvas, ceiling, cursor, gap_start, canvas_origin_x, view_size, terrain_boundaries, step_positions, surface_y_at, biome, biome_distance_offset, generator_version)
 		cursor = maxf(cursor, gap_end)
 	if cursor < view_right:
-		_draw_segment_cached(canvas, ceiling, cursor, view_right, canvas_origin_x, view_size, terrain_boundaries, step_positions, surface_y_at, biome, biome_distance_offset)
+		_draw_segment_cached(canvas, ceiling, cursor, view_right, canvas_origin_x, view_size, terrain_boundaries, step_positions, surface_y_at, biome, biome_distance_offset, generator_version)
 
-static func _draw_segment_cached(canvas: CanvasItem, ceiling: bool, start_x: float, end_x: float, canvas_origin_x: float, view_size: Vector2, terrain_boundaries: Array[float], step_positions: Array[float], surface_y_at: Callable, biome: BiomeDefinition = null, biome_distance_offset := 0.0) -> void:
+static func _draw_segment_cached(canvas: CanvasItem, ceiling: bool, start_x: float, end_x: float, canvas_origin_x: float, view_size: Vector2, terrain_boundaries: Array[float], step_positions: Array[float], surface_y_at: Callable, biome: BiomeDefinition = null, biome_distance_offset := 0.0, generator_version := 13) -> void:
 	if end_x - start_x < 0.5:
 		return
 	if biome == null:
-		_draw_biome_segments_cached(canvas, ceiling, start_x, end_x, canvas_origin_x, view_size, terrain_boundaries, step_positions, surface_y_at, biome_distance_offset)
+		_draw_biome_segments_cached(canvas, ceiling, start_x, end_x, canvas_origin_x, view_size, terrain_boundaries, step_positions, surface_y_at, biome_distance_offset, generator_version)
 		return
 	var xs: Array[float] = [start_x]
 	var x := ceilf(start_x / SAMPLE_SPACING) * SAMPLE_SPACING
@@ -70,10 +70,10 @@ static func _draw_segment_cached(canvas: CanvasItem, ceiling: bool, start_x: flo
 		fill.append_array(points)
 		fill.append(Vector2(end_x - canvas_origin_x, view_size.y))
 		fill.append(Vector2(start_x - canvas_origin_x, view_size.y))
-	var palette: BiomeDefinition = biome if biome != null else BiomeRendererScript.definition_at(maxf((start_x + end_x) * 0.5 - biome_distance_offset, 0.0))
+	var palette: BiomeDefinition = biome if biome != null else BiomeRendererScript.definition_for_generator(maxf((start_x + end_x) * 0.5 - biome_distance_offset, 0.0), generator_version)
 	canvas.draw_colored_polygon(fill, palette.terrain_fill_color if palette != null else FILL_COLOR)
 	canvas.draw_polyline(points, palette.terrain_edge_color if palette != null else EDGE_COLOR, 3.0, true)
-	BiomeRendererScript.draw_surface_tiles(canvas, biome, ceiling, start_x, end_x, canvas_origin_x, surface_y_at, biome.surface_tint if biome != null else Color.WHITE, biome_distance_offset)
+	BiomeRendererScript.draw_surface_tiles(canvas, biome, ceiling, start_x, end_x, canvas_origin_x, surface_y_at, biome.surface_tint if biome != null else Color.WHITE, biome_distance_offset, generator_version)
 
 static func _append_sorted_values_in_range(destination: Array[float], values: Array[float], start_x: float, end_x: float) -> void:
 	var index := _lower_bound(values, start_x)
@@ -98,7 +98,7 @@ static func _lower_bound(values: Array[float], value: float) -> int:
 			high = middle
 	return low
 
-static func _draw_surface(canvas: CanvasItem, ceiling: bool, view_left: float, view_size: Vector2, all_gaps: Array[Dictionary], terrain_boundaries: Array[float], step_positions: Array[float], surface_y_at: Callable, canvas_origin_x: float, biome: BiomeDefinition = null, biome_distance_offset := 0.0) -> void:
+static func _draw_surface(canvas: CanvasItem, ceiling: bool, view_left: float, view_size: Vector2, all_gaps: Array[Dictionary], terrain_boundaries: Array[float], step_positions: Array[float], surface_y_at: Callable, canvas_origin_x: float, biome: BiomeDefinition = null, biome_distance_offset := 0.0, generator_version := 13) -> void:
 	var view_right := view_left + view_size.x
 	var gaps: Array[Dictionary] = []
 	for gap in all_gaps:
@@ -116,16 +116,16 @@ static func _draw_surface(canvas: CanvasItem, ceiling: bool, view_left: float, v
 		if gap_end <= cursor:
 			continue
 		if gap_start > cursor:
-			_draw_segment(canvas, ceiling, cursor, gap_start, canvas_origin_x, view_size, terrain_boundaries, step_positions, surface_y_at, biome, biome_distance_offset)
+			_draw_segment(canvas, ceiling, cursor, gap_start, canvas_origin_x, view_size, terrain_boundaries, step_positions, surface_y_at, biome, biome_distance_offset, generator_version)
 		cursor = maxf(cursor, gap_end)
 	if cursor < view_right:
-		_draw_segment(canvas, ceiling, cursor, view_right, canvas_origin_x, view_size, terrain_boundaries, step_positions, surface_y_at, biome, biome_distance_offset)
+		_draw_segment(canvas, ceiling, cursor, view_right, canvas_origin_x, view_size, terrain_boundaries, step_positions, surface_y_at, biome, biome_distance_offset, generator_version)
 
-static func _draw_segment(canvas: CanvasItem, ceiling: bool, start_x: float, end_x: float, canvas_origin_x: float, view_size: Vector2, terrain_boundaries: Array[float], step_positions: Array[float], surface_y_at: Callable, biome: BiomeDefinition = null, biome_distance_offset := 0.0) -> void:
+static func _draw_segment(canvas: CanvasItem, ceiling: bool, start_x: float, end_x: float, canvas_origin_x: float, view_size: Vector2, terrain_boundaries: Array[float], step_positions: Array[float], surface_y_at: Callable, biome: BiomeDefinition = null, biome_distance_offset := 0.0, generator_version := 13) -> void:
 	if end_x - start_x < 0.5:
 		return
 	if biome == null:
-		_draw_biome_segments(canvas, ceiling, start_x, end_x, canvas_origin_x, view_size, terrain_boundaries, step_positions, surface_y_at, biome_distance_offset)
+		_draw_biome_segments(canvas, ceiling, start_x, end_x, canvas_origin_x, view_size, terrain_boundaries, step_positions, surface_y_at, biome_distance_offset, generator_version)
 		return
 	var xs: Array[float] = [start_x]
 	var x := ceilf(start_x / SAMPLE_SPACING) * SAMPLE_SPACING
@@ -166,27 +166,27 @@ static func _draw_segment(canvas: CanvasItem, ceiling: bool, start_x: float, end
 		fill.append_array(points)
 		fill.append(Vector2(end_x - canvas_origin_x, view_size.y))
 		fill.append(Vector2(start_x - canvas_origin_x, view_size.y))
-	var palette: BiomeDefinition = biome if biome != null else BiomeRendererScript.definition_at(maxf((start_x + end_x) * 0.5 - biome_distance_offset, 0.0))
+	var palette: BiomeDefinition = biome if biome != null else BiomeRendererScript.definition_for_generator(maxf((start_x + end_x) * 0.5 - biome_distance_offset, 0.0), generator_version)
 	canvas.draw_colored_polygon(fill, palette.terrain_fill_color if palette != null else FILL_COLOR)
 	canvas.draw_polyline(points, palette.terrain_edge_color if palette != null else EDGE_COLOR, 3.0, true)
-	BiomeRendererScript.draw_surface_tiles(canvas, biome, ceiling, start_x, end_x, canvas_origin_x, surface_y_at, biome.surface_tint if biome != null else Color.WHITE, biome_distance_offset)
+	BiomeRendererScript.draw_surface_tiles(canvas, biome, ceiling, start_x, end_x, canvas_origin_x, surface_y_at, biome.surface_tint if biome != null else Color.WHITE, biome_distance_offset, generator_version)
 
-static func _draw_biome_segments_cached(canvas: CanvasItem, ceiling: bool, start_x: float, end_x: float, canvas_origin_x: float, view_size: Vector2, terrain_boundaries: Array[float], step_positions: Array[float], surface_y_at: Callable, distance_offset: float) -> void:
+static func _draw_biome_segments_cached(canvas: CanvasItem, ceiling: bool, start_x: float, end_x: float, canvas_origin_x: float, view_size: Vector2, terrain_boundaries: Array[float], step_positions: Array[float], surface_y_at: Callable, distance_offset: float, generator_version: int) -> void:
 	var cursor := start_x
 	while cursor < end_x:
 		var distance := maxf(cursor - distance_offset, 0.0)
 		var next_boundary: float = distance_offset + (floor(distance / BiomeRendererScript.THEME_LENGTH) + 1.0) * BiomeRendererScript.THEME_LENGTH
 		var piece_end := minf(end_x, maxf(next_boundary, cursor + 0.5))
-		var biome := BiomeRendererScript.definition_at(maxf((cursor + piece_end) * 0.5 - distance_offset, 0.0))
-		_draw_segment_cached(canvas, ceiling, cursor, piece_end, canvas_origin_x, view_size, terrain_boundaries, step_positions, surface_y_at, biome, distance_offset)
+		var biome := BiomeRendererScript.definition_for_generator(maxf((cursor + piece_end) * 0.5 - distance_offset, 0.0), generator_version)
+		_draw_segment_cached(canvas, ceiling, cursor, piece_end, canvas_origin_x, view_size, terrain_boundaries, step_positions, surface_y_at, biome, distance_offset, generator_version)
 		cursor = piece_end
 
-static func _draw_biome_segments(canvas: CanvasItem, ceiling: bool, start_x: float, end_x: float, canvas_origin_x: float, view_size: Vector2, terrain_boundaries: Array[float], step_positions: Array[float], surface_y_at: Callable, distance_offset: float) -> void:
+static func _draw_biome_segments(canvas: CanvasItem, ceiling: bool, start_x: float, end_x: float, canvas_origin_x: float, view_size: Vector2, terrain_boundaries: Array[float], step_positions: Array[float], surface_y_at: Callable, distance_offset: float, generator_version: int) -> void:
 	var cursor := start_x
 	while cursor < end_x:
 		var distance := maxf(cursor - distance_offset, 0.0)
 		var next_boundary: float = distance_offset + (floor(distance / BiomeRendererScript.THEME_LENGTH) + 1.0) * BiomeRendererScript.THEME_LENGTH
 		var piece_end := minf(end_x, maxf(next_boundary, cursor + 0.5))
-		var biome := BiomeRendererScript.definition_at(maxf((cursor + piece_end) * 0.5 - distance_offset, 0.0))
-		_draw_segment(canvas, ceiling, cursor, piece_end, canvas_origin_x, view_size, terrain_boundaries, step_positions, surface_y_at, biome, distance_offset)
+		var biome := BiomeRendererScript.definition_for_generator(maxf((cursor + piece_end) * 0.5 - distance_offset, 0.0), generator_version)
+		_draw_segment(canvas, ceiling, cursor, piece_end, canvas_origin_x, view_size, terrain_boundaries, step_positions, surface_y_at, biome, distance_offset, generator_version)
 		cursor = piece_end

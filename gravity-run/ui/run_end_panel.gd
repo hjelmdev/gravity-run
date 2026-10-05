@@ -295,9 +295,13 @@ func _build_ui() -> void:
 	_submit_button.pressed.connect(_submit_score)
 	buttons.add_child(_submit_button)
 
-	var retry_button := _make_button(tr("New Run"))
+	var retry_button := _make_button(tr("Replay this course"))
 	retry_button.pressed.connect(func() -> void: get_parent().call("retry_run"))
 	buttons.add_child(retry_button)
+
+	var random_button := _make_button(tr("New random course"))
+	random_button.pressed.connect(func() -> void: get_parent().call("new_random_run"))
+	buttons.add_child(random_button)
 
 	var menu_button := _make_button(tr("Game Hub"))
 	menu_button.pressed.connect(func() -> void: get_parent().call("return_to_main_menu"))

@@ -17,6 +17,7 @@ const RISK_EXIT_DISTANCE := 180.0
 const RISK_MOVING_HAZARD_MARGIN := 120.0
 const SurfaceIndexScript := preload("res://systems/course_surface_index.gd")
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
+const LavaHazardModelScript := preload("res://systems/lava_hazard_model.gd")
 
 var _seed := 0
 var _revision := 1
@@ -90,7 +91,12 @@ static func _position_blocked(x: float, y: float, events: Array[Dictionary]) -> 
 		var kind := str(event.get("kind", ""))
 		var event_x := float(event.get("x", 0.0))
 		var reach := maxf(float(event.get("width", 0.0)) * 0.5, float(event.get("count", 1)) * float(event.get("spacing", 0.0)) + 40.0)
-		if absf(x - event_x) > reach + COIN_RADIUS:
+		var volcano_envelope := Rect2()
+		if kind == "volcano":
+			volcano_envelope = LavaHazardModelScript.volcano_collision_envelope(event)
+			if x + COIN_RADIUS < volcano_envelope.position.x or x - COIN_RADIUS > volcano_envelope.end.x:
+				continue
+		elif absf(x - event_x) > reach + COIN_RADIUS:
 			continue
 		if kind == "block":
 			var width := float(event.get("width", 48.0))
@@ -111,6 +117,13 @@ static func _position_blocked(x: float, y: float, events: Array[Dictionary]) -> 
 			var low := minf(float(event.get("start_y", 0.0)), float(event.get("end_y", 0.0)))
 			var high := maxf(float(event.get("start_y", 0.0)), float(event.get("end_y", 0.0)))
 			if coin_rect.intersects(Rect2(Vector2(event_x - 2.0, low), Vector2(4.0, high - low))):
+				return true
+		elif kind == "lava_crack":
+			var crack := LavaHazardModelScript.crack_rect(event)
+			if coin_rect.intersects(crack):
+				return true
+		elif kind == "volcano":
+			if coin_rect.intersects(volcano_envelope):
 				return true
 	return false
 
@@ -159,7 +172,7 @@ func _risk_has_unmodeled_motion(row_start_x: float, events: Array[Dictionary]) -
 	var corridor_left := row_start_x - RISK_APPROACH_DISTANCE
 	var corridor_right := row_start_x + float(COIN_ROW_MAX - 1) * 38.0 + RISK_EXIT_DISTANCE
 	for event in events:
-		if str(event.get("kind", "")) not in ["barrels", "rock", "saw", "ghost"]:
+		if str(event.get("kind", "")) not in ["barrels", "rock", "saw", "ghost", "volcano"]:
 			continue
 		var center_x := float(event.get("x", 0.0))
 		var half_width := maxf(float(event.get("width", 0.0)) * 0.5, float(event.get("count", 1)) * float(event.get("spacing", 0.0)) * 0.5 + 32.0)

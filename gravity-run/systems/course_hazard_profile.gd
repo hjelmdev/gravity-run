@@ -65,6 +65,14 @@ func create_event(rng: RandomNumberGenerator, course_distance: float, difficulty
 		&"ghost":
 			width = 72.0
 			height = 96.0
+		&"lava_crack":
+			lane_mask = _choose_lane(rng, preferred_lane, lane_alternation)
+			width = rng.randf_range(width_range.x, width_range.y)
+			height = 14.0
+		&"volcano":
+			lane_mask = FLOOR_LANE
+			width = rng.randf_range(width_range.x, width_range.y)
+			height = 76.0
 	if difficulty != null:
 		var size_scale := float(difficulty.get("hazard_size"))
 		match event_kind:
@@ -103,6 +111,10 @@ func create_event(rng: RandomNumberGenerator, course_distance: float, difficulty
 		event.merge({"trigger_lead": 1100.0, "warning_ticks": 36, "fall_ticks": 20, "burial_depth": 24.0}, true)
 	elif event_kind == &"ghost":
 		event.merge({"trigger_lead": 2500.0, "warning_ticks": 120, "danger_ticks": 500, "fade_ticks": 45}, true)
+	elif event_kind == &"lava_crack":
+		event.merge({"hot_depth": 14.0, "blocked_lanes": lane_mask}, true)
+	elif event_kind == &"volcano":
+		event.merge({"eruption_lead": 1800.0, "eruption_period_ticks": 156, "projectile_lifetime_ticks": 58, "projectile_speed": 330.0, "projectile_vertical_speed": 430.0, "projectile_gravity": 900.0, "projectile_radius": 14.0, "blocked_lanes": FLOOR_LANE}, true)
 	event["threats"] = build_threat_intervals(event)
 	return event
 
@@ -136,6 +148,15 @@ func build_threat_intervals(event: Dictionary) -> Array[Dictionary]:
 	if StringName(event.get("kind", "")) == &"ghost":
 		var half_width := float(event.get("width", 72.0)) * 0.5 + threat_padding
 		intervals.append({"start": forecast_center - half_width, "end": forecast_center + half_width, "blocked_lanes": int(event.get("blocked_lanes", FLOOR_LANE))})
+		return intervals
+	if StringName(event.get("kind", "")) == &"lava_crack":
+		var half_width := float(event.get("width", 120.0)) * 0.5 + threat_padding
+		intervals.append({"start": forecast_center - half_width, "end": forecast_center + half_width, "blocked_lanes": int(event.get("blocked_lanes", FLOOR_LANE))})
+		return intervals
+	if StringName(event.get("kind", "")) == &"volcano":
+		# Paired ballistic blobs occupy the floor lane across this bounded
+		# approach window. The ceiling remains a deliberately safe route.
+		intervals.append({"start": forecast_center - 470.0, "end": forecast_center + 470.0, "blocked_lanes": FLOOR_LANE})
 		return intervals
 	if not threat_windows.is_empty():
 		for window in threat_windows:

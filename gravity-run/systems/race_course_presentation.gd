@@ -8,6 +8,7 @@ const CoinScene := preload("res://collectibles/coin.tscn")
 const FallingRockScene := preload("res://hazards/falling_rock.tscn")
 const SawBladeScene := preload("res://hazards/saw_blade.tscn")
 const GhostHazardScene := preload("res://hazards/ghost_hazard.tscn")
+const LavaHazardScene := preload("res://hazards/lava_hazard.tscn")
 const LedgeScene := preload("res://terrain/ledge.tscn")
 const SlopeScene := preload("res://terrain/slope.tscn")
 const TrackGapScript := preload("res://terrain/track_gap.gd")
@@ -195,6 +196,13 @@ func load_manifest(course_manifest: Resource) -> String:
 				_tag_presentation_target(ghost, event_id, kind, false)
 				add_child(ghost)
 				event_nodes[event_id] = ghost
+			"lava_crack", "volcano":
+				var lava_hazard := LavaHazardScene.instantiate() as Node2D
+				lava_hazard.call("configure", event, float(manifest.start_x))
+				lava_hazard.name = "Lava_%s" % event_id
+				_tag_presentation_target(lava_hazard, event_id, kind, kind == "volcano")
+				add_child(lava_hazard)
+				event_nodes[event_id] = lava_hazard
 	for collectible in manifest.collectibles:
 		var coin := CoinScene.instantiate() as Node2D
 		var entity_id := str(collectible.get("entity_id", ""))
@@ -273,7 +281,7 @@ func _tag_presentation_target(node: Node2D, stable_id: String, kind: String, mov
 	node.set_meta("presentation_target_id", stable_id)
 	node.set_meta("presentation_target_kind", kind)
 	node.set_meta("presentation_target_moving", moving)
-	node.set_meta("presentation_target_obstacle", kind in ["block", "spikes", "barrel", "rock", "saw", "ghost"])
+	node.set_meta("presentation_target_obstacle", kind in ["block", "spikes", "barrel", "rock", "saw", "ghost", "lava_crack", "volcano"])
 
 func set_camera_left(camera_left: float) -> void:
 	_camera_left = maxf(camera_left, 0.0)
@@ -293,6 +301,14 @@ func take_start_draw_profile() -> Dictionary:
 	return result
 
 func set_world_state(world_state: Dictionary) -> void:
+	var lava: Variant = world_state.get("lava", [])
+	if lava is Array:
+		for lava_state in lava:
+			if not lava_state is Dictionary:
+				continue
+			var lava_node: Variant = event_nodes.get(str(lava_state.get("event_id", "")))
+			if is_instance_valid(lava_node) and lava_node.has_method("apply_world_state"):
+				lava_node.call("apply_world_state", lava_state)
 	var saws: Variant = world_state.get("saws", [])
 	if saws is Array:
 		for saw_state in saws:
@@ -493,8 +509,9 @@ func _draw() -> void:
 		return
 	var draw_started_usec := Time.get_ticks_usec() if _render_profile_enabled else 0
 	var course_start_x := float(manifest.start_x)
-	BiomeRendererScript.draw_backdrop(self, _camera_left, get_viewport_rect().size, BiomeRendererScript.course_distance_at_world_x(_camera_left + course_start_x, course_start_x))
-	CourseSurfaceRenderer.draw_track_cached(self, _camera_left, get_viewport_rect().size, _render_ceiling_gaps, _render_floor_gaps, _render_terrain_boundaries, _render_step_positions, Callable(self, "_surface_y_at"), 0.0, null, BiomeRendererScript.course_distance_at_world_x(course_start_x, 0.0))
+	var generator_version := int(manifest.get("generator_version"))
+	BiomeRendererScript.draw_backdrop(self, _camera_left, get_viewport_rect().size, BiomeRendererScript.course_distance_at_world_x(_camera_left + course_start_x, course_start_x), generator_version)
+	CourseSurfaceRenderer.draw_track_cached(self, _camera_left, get_viewport_rect().size, _render_ceiling_gaps, _render_floor_gaps, _render_terrain_boundaries, _render_step_positions, Callable(self, "_surface_y_at"), 0.0, null, BiomeRendererScript.course_distance_at_world_x(course_start_x, 0.0), generator_version)
 	_draw_rock_warning_markers()
 	_draw_rock_hud_warning()
 	_draw_ghost_hud_warning()

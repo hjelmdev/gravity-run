@@ -31,6 +31,7 @@ const SAW_BLADE_SCENE := preload("res://hazards/saw_blade.tscn")
 const SAW_BLADE_MODEL := preload("res://systems/saw_blade_model.gd")
 const GHOST_HAZARD_SCENE := preload("res://hazards/ghost_hazard.tscn")
 const GHOST_HAZARD_MODEL := preload("res://systems/ghost_hazard_model.gd")
+const LAVA_HAZARD_SCENE := preload("res://hazards/lava_hazard.tscn")
 const COURSE_SURFACE_INDEX_SCRIPT := preload("res://systems/course_surface_index.gd")
 const ROCK_WARNING_ICON_SCRIPT := preload("res://systems/rock_warning_icon.gd")
 const ROCK_WARNING_PULSE_SCRIPT := preload("res://systems/rock_warning_pulse.gd")
@@ -393,6 +394,9 @@ func _physics_process(delta: float) -> void:
 			var barrel_size: Vector2 = obstacle.get("size")
 			_step_start_barrel_centers[obstacle.get_instance_id()] = HAZARD_RULES_SCRIPT.barrel_center(obstacle.global_position, barrel_size.x, barrel_size.y, bool(obstacle.get("from_ceiling")))
 	_singleplayer_simulation_tick += 1
+	for hazard in obstacles:
+		if is_instance_valid(hazard) and hazard.is_in_group("lava_hazards") and hazard.has_method("apply_simulation_tick"):
+			hazard.call("apply_simulation_tick", _singleplayer_simulation_tick, PLAYER_X)
 
 	_render_diagnostic_tick += 1
 	var speed := _run_speed()
@@ -494,6 +498,8 @@ func _physics_process(delta: float) -> void:
 			impact = HAZARD_RULES_SCRIPT.player_impact(player_rect, "barrel", Rect2(), [], barrel_center, HAZARD_RULES_SCRIPT.barrel_radius(barrel_size.x, barrel_size.y))
 		elif obstacle.is_in_group("saw_blades"):
 			impact = _saw_endpoint_impact(player_rect, obstacle)
+		elif obstacle.is_in_group("lava_hazards") and obstacle.has_method("is_lethal_at"):
+			impact = HAZARD_RULES_SCRIPT.PlayerImpact.LETHAL if bool(obstacle.call("is_lethal_at", player_rect, _singleplayer_simulation_tick, PLAYER_X)) else HAZARD_RULES_SCRIPT.PlayerImpact.NONE
 		else:
 			var kind := "edge" if obstacle.is_in_group("blocking_edges") else "rect"
 			impact = HAZARD_RULES_SCRIPT.player_impact(player_rect, kind, obstacle.call("get_hitbox_rect"))
@@ -564,6 +570,12 @@ func _end_run() -> void:
 		run_end_panel.call("show_result", float(run_state.get("distance_m")), int(run_state.get("coins")), ChallengeService.get_challenge_code(), ChallengeService.active, str(run_state.get("last_run_id")))
 
 func retry_run() -> void:
+	if not bool(ChallengeService.get("active")) and _active_seed > 0:
+		ChallengeService.call("start_singleplayer_seed_input", "GR%d-%d" % [_active_seed_version, _active_seed])
+	_start_run()
+
+func new_random_run() -> void:
+	ChallengeService.clear_challenge()
 	_start_run()
 
 func return_to_main_menu() -> void:
@@ -810,8 +822,25 @@ func _spawn_course_event(event: Dictionary) -> void:
 			if _singleplayer_ghost_activation_ticks.has(ghost_id):
 				ghost.call("set_activation_tick", int(_singleplayer_ghost_activation_ticks[ghost_id]))
 				ghost.call("set_simulation_tick", _singleplayer_simulation_tick)
+		&"lava_crack", &"volcano":
+			_spawn_singleplayer_lava_event(event, event_x)
 		_:
 			_spawn_custom_course_event(event, event_x)
+
+func _spawn_singleplayer_lava_event(source_event: Dictionary, target_x: float) -> void:
+	var horizon := ceili(maxf(float(course_distance) + screen_width + 2400.0, float(source_event.get("course_distance", 0.0)) + 1.0))
+	var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", course_generator.get_planned_events(), horizon, _active_seed_version)
+	var source_kind := str(source_event.get("kind", ""))
+	for event in resolved_events:
+		if str(event.get("kind", "")) != source_kind or absf(float(event.get("x", INF)) - target_x) > 0.5:
+			continue
+		var hazard := LAVA_HAZARD_SCENE.instantiate() as Node2D
+		hazard.call("configure", event, PLAYER_X)
+		hazard.call("apply_simulation_tick", _singleplayer_simulation_tick, PLAYER_X)
+		hazard.name = "Lava_%s" % str(event.get("event_id", ""))
+		add_child(hazard)
+		obstacles.append(hazard)
+		return
 
 func _update_hazard_discoveries() -> void:
 	for index in range(_pending_hazard_discoveries.size() - 1, -1, -1):
@@ -1209,6 +1238,8 @@ func _earliest_lethal_contact_fraction(start_rect: Rect2, finish_rect: Rect2) ->
 		var fraction := -1.0
 		if obstacle.is_in_group("falling_rocks") or obstacle.is_in_group("saw_blades"):
 			fraction = float(obstacle.call("swept_contact_fraction", start_rect, finish_rect, maxi(_singleplayer_simulation_tick - 1, 0), _singleplayer_simulation_tick, Vector2(34.0, 44.0)))
+		elif obstacle.is_in_group("lava_hazards") and obstacle.has_method("swept_contact_fraction"):
+			fraction = float(obstacle.call("swept_contact_fraction", start_rect, finish_rect, maxi(_singleplayer_simulation_tick - 1, 0), _singleplayer_simulation_tick, start_rect.size))
 		elif obstacle.is_in_group("spikes") and obstacle.has_method("get_world_triangles"):
 			if immune:
 				continue
@@ -1361,7 +1392,7 @@ func _draw_background() -> void:
 	# The same distance-addressed backdrop renderer is used by MP presentation.
 	# SP world coordinates begin at PLAYER_X, matching manifest.start_x in MP.
 	# Normalize backdrop phase by that same origin so absolute world points match.
-	BIOME_RENDERER_SCRIPT.draw_backdrop(self, view_left, Vector2(screen_width, screen_height), BIOME_RENDERER_SCRIPT.course_distance_at_world_x(view_left + PLAYER_X, PLAYER_X))
+	BIOME_RENDERER_SCRIPT.draw_backdrop(self, view_left, Vector2(screen_width, screen_height), BIOME_RENDERER_SCRIPT.course_distance_at_world_x(view_left + PLAYER_X, PLAYER_X), _active_seed_version)
 
 func _draw_track() -> void:
 	var surface_gaps: Array[Dictionary] = []
@@ -1376,4 +1407,4 @@ func _draw_track() -> void:
 		terrain_boundaries.append(float(terrain.call("get_end_x")))
 		if terrain.has_method("is_terrain_step") and bool(terrain.call("is_terrain_step")):
 			step_positions.append(float(terrain.call("get_start_x")))
-	COURSE_SURFACE_RENDERER.draw_track(self, _render_course_distance, Vector2(screen_width, screen_height), surface_gaps, terrain_boundaries, step_positions, Callable(self, "_surface_y_at"), 0.0, null, BIOME_RENDERER_SCRIPT.course_distance_at_world_x(PLAYER_X, 0.0))
+	COURSE_SURFACE_RENDERER.draw_track(self, _render_course_distance, Vector2(screen_width, screen_height), surface_gaps, terrain_boundaries, step_positions, Callable(self, "_surface_y_at"), 0.0, null, BIOME_RENDERER_SCRIPT.course_distance_at_world_x(PLAYER_X, 0.0), _active_seed_version)
