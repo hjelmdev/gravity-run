@@ -78,38 +78,49 @@ func _draw() -> void:
 		_draw_volcano()
 
 func _draw_crack() -> void:
-	var rect: Rect2 = Model.crack_rect(event)
-	var local_x := rect.position.x - position.x
-	var top := rect.position.y
-	var height := rect.size.y
-	var width := rect.size.x
-	var glow := Color("ff380d")
+	var geometry := crack_art_geometry(event)
+	var glow: Color = Color("ff380d")
 	glow.a = 0.30
-	draw_rect(Rect2(local_x, top - 2.0, width, height + 4.0), glow)
-	var points := PackedVector2Array()
-	var segments := 8
-	for index in range(segments + 1):
-		var x := local_x + width * float(index) / float(segments)
-		var y := top + height * (0.25 if index % 2 == 0 else 0.78)
-		points.append(Vector2(x, y))
+	var glow_rect: Rect2 = geometry.glow
+	glow_rect.position.x -= position.x
+	draw_rect(glow_rect, glow)
+	var points: PackedVector2Array = geometry.zigzag.duplicate()
+	for index in range(points.size()):
+		points[index].x -= position.x
 	draw_polyline(points, Color("ff4a17"), 5.0, true)
 	draw_polyline(points, Color("ffc35b"), 1.5, true)
-	var visual_depth := maxf(float(event.get("visual_depth", 0.0)), 0.0)
-	if visual_depth > 0.0:
-		var direction := -1.0 if from_ceiling else 1.0
-		var branch_color := Color("ff5a1b", 0.86)
-		var core_color := Color("ffc35b", 0.88)
-		for branch_index in range(3):
-			var branch_x := local_x + width * (0.22 + float(branch_index) * 0.28)
-			var branch_span := width * (0.11 + 0.025 * float(branch_index % 2))
-			var outer := PackedVector2Array([
-				Vector2(branch_x, top + direction * 2.0),
-				Vector2(branch_x - branch_span * 0.36, top + direction * visual_depth * 0.38),
-				Vector2(branch_x + branch_span * 0.12, top + direction * visual_depth * 0.64),
-				Vector2(branch_x + branch_span * 0.48, top + direction * visual_depth),
-			])
-			draw_polyline(outer, branch_color, 4.0, true)
-			draw_polyline(outer, core_color, 1.0, true)
+	for world_branch in geometry.branches:
+		var branch: PackedVector2Array = world_branch.duplicate()
+		for index in range(branch.size()):
+			branch[index].x -= position.x
+		draw_polyline(branch, Color("ff5a1b", 0.86), 4.0, true)
+		draw_polyline(branch, Color("ffc35b", 0.88), 1.0, true)
+
+static func crack_art_geometry(crack_event: Dictionary) -> Dictionary:
+	## Artwork is inset into the solid surface. This intentionally differs from
+	## crack_rect(), which remains the existing lethal corridor into the course.
+	var surface_y := float(crack_event.get("y", 0.0))
+	var width := maxf(float(crack_event.get("width", 120.0)), 1.0)
+	var depth := clampf(float(crack_event.get("visual_depth", crack_event.get("hot_depth", 14.0))), 4.0, 30.0)
+	var inward := -1.0 if bool(crack_event.get("from_ceiling", false)) else 1.0
+	var x := float(crack_event.get("x", 0.0)) - width * 0.5
+	var glow := Rect2(Vector2(x, surface_y if inward > 0.0 else surface_y - depth), Vector2(width, depth))
+	var zigzag := PackedVector2Array()
+	for index in range(9):
+		var point_x := x + width * float(index) / 8.0
+		var inset := 0.0 if index % 2 == 0 else depth * 0.72
+		zigzag.append(Vector2(point_x, surface_y + inward * inset))
+	var branches: Array[PackedVector2Array] = []
+	for index in range(3):
+		var branch_x := x + width * (0.22 + float(index) * 0.28)
+		var span := width * (0.11 + 0.025 * float(index % 2))
+		branches.append(PackedVector2Array([
+			Vector2(branch_x, surface_y),
+			Vector2(branch_x - span * 0.36, surface_y + inward * depth * 0.38),
+			Vector2(branch_x + span * 0.12, surface_y + inward * depth * 0.64),
+			Vector2(branch_x + span * 0.48, surface_y + inward * depth),
+		]))
+	return {"glow": glow, "zigzag": zigzag, "branches": branches, "surface_y": surface_y, "inward": inward, "depth": depth}
 
 func _draw_volcano() -> void:
 	var floor_y := float(event.get("floor_y", 460.0))
