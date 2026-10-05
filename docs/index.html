@@ -176,7 +176,7 @@
 		// Retire old Godot workers and cached game exports before loading the iframe.
 		const makeGameUrl = () => {
 			const gameUrl = new URL('./game/index.html', location.href);
-			gameUrl.searchParams.set('build', 'touch-gesture-lifecycle-gen13-838376b-20261005');
+			gameUrl.searchParams.set('build', 'lava-rhythm-gen14-c613998-20261005');
 			const params = new URLSearchParams(location.search);
 			if (params.get('v2_profile') === '1') gameUrl.searchParams.set('v2_profile', '1');
 			if (params.get('v2_render_anchor') === '1') gameUrl.searchParams.set('v2_render_anchor', '1');
