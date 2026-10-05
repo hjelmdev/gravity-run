@@ -15,6 +15,7 @@ const HudLayout := preload("res://ui/multiplayer_v2/v2_hud_layout.gd")
 const SharedRunHudScene := preload("res://ui/shared_run_hud.tscn")
 const ConfirmedCoinPresentationScript := preload("res://systems/confirmed_coin_presentation.gd")
 const MpAchievementResultSectionScript := preload("res://ui/multiplayer_v2/mp_achievement_result_section.gd")
+const TouchGestureLifecycleScript := preload("res://systems/touch_gesture_lifecycle.gd")
 
 const FIXED_DELTA := 1.0 / 60.0
 const CAMERA_PLAYER_X := 250.0
@@ -43,6 +44,7 @@ var _round_aborted := false
 var _world_tick := 0
 var _accumulator := 0.0
 var _pending_flip_direction := 0
+var _pending_flip_source := ""
 var _pending_interaction_id := ""
 var _pending_barrel_contact_entity_id := ""
 var _pending_barrel_contact_usec := -1
@@ -76,8 +78,7 @@ var _frozen_roster: Array[Dictionary] = []
 var _debug_open := false
 var _lobby_navigation_pending := false
 var _export_notice_generation := 0
-var _touch_start := Vector2.ZERO
-var _touch_index := -1
+var _touch_gesture: RefCounted = TouchGestureLifecycleScript.new()
 var _local_start_deadline_usec := -1
 var _first_physics_step_usec := -1
 var _local_pose_history: Array[Dictionary] = []
@@ -130,6 +131,7 @@ var _mp_achievement_hazards: Dictionary = {}
 
 func _ready() -> void:
 	set_process_unhandled_input(true)
+	_touch_gesture.diagnostic.connect(_on_touch_gesture_diagnostic)
 	_configure_profiling()
 	_install_browser_frame_diagnostics()
 	MultiplayerV2Service.room_changed.connect(_on_room_changed_for_abort)
@@ -468,6 +470,7 @@ func _advance_local_to_shared_clock(delta: float, target_usec: int = -1) -> void
 	MultiplayerV2Service.diagnostics.observe_max("max_physics_delta_ms", delta * 1000.0)
 
 func _process(delta: float) -> void:
+	_touch_gesture.call("expire", Time.get_ticks_usec())
 	if _manifest == null or _runner == null or _course_presentation == null:
 		return
 	var callback_begin_usec := Time.get_ticks_usec()
@@ -595,11 +598,18 @@ func _step_local_round_impl() -> void:
 	var gravity_before := int(state.get("gravity_direction", 1))
 	var sequence_before := int(_runner.input_sequence)
 	var flip := _pending_flip_direction
+	var flip_source := _pending_flip_source
 	_pending_flip_direction = 0
+	_pending_flip_source = ""
+	var was_blocked := bool(state.get("blocked", false))
 	_runner.set_blocked(blocked)
 	var sample: Dictionary = _runner.step(flip, float(floor_info.y), float(ceiling_info.y), bool(floor_info.supported), bool(ceiling_info.supported), false, target_x)
+	if was_blocked != blocked:
+		MultiplayerV2Service.diagnostics.record_event("runner_blocked_state", {"round_id": _round_id, "blocked": blocked, "tick": _runner.simulation_tick, "world_x": target_x})
 	if int(_runner.input_sequence) > sequence_before:
-		var audit := {"round_id": _round_id, "owner_peer_id": int(MultiplayerV2Service.session.get("local_peer_id", 1)), "input_seq": _runner.input_sequence, "simulation_tick": _runner.simulation_tick, "kind": "gravity_flip", "requested_direction": flip, "accepted": int(_runner.player_state.get("gravity_direction", gravity_before)) != gravity_before, "gravity_direction": int(_runner.player_state.get("gravity_direction", gravity_before))}
+		var flip_accepted := int(_runner.player_state.get("gravity_direction", gravity_before)) != gravity_before
+		MultiplayerV2Service.diagnostics.record_event("flip_input_resolution", {"round_id": _round_id, "source": flip_source, "accepted": flip_accepted, "reason": "accepted" if flip_accepted else ("blocked_state" if blocked else "cooldown_or_airborne"), "tick": _runner.simulation_tick, "sequence": _runner.input_sequence})
+		var audit := {"round_id": _round_id, "owner_peer_id": int(MultiplayerV2Service.session.get("local_peer_id", 1)), "input_seq": _runner.input_sequence, "simulation_tick": _runner.simulation_tick, "kind": "gravity_flip", "requested_direction": flip, "accepted": flip_accepted, "gravity_direction": int(_runner.player_state.get("gravity_direction", gravity_before))}
 		MultiplayerV2Service.report_input_audit(audit)
 		if bool(audit.accepted):
 			_mp_achievement_flips += 1
@@ -1640,34 +1650,69 @@ func _sync_player_views() -> void:
 	if _profiling_enabled and _round_started and not _start_profile_recorded.has("first_figure_presentation"):
 		_record_start_stage("first_figure_presentation", Time.get_ticks_usec(), {"duration_usec": Time.get_ticks_usec() - started_usec, "player_count": _player_views.size()})
 
+func _input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch and event.canceled:
+		_touch_gesture.call("cancel_finger", event.index, "platform_cancel")
+		return
+	if event is InputEventScreenTouch and not event.pressed:
+		var token := int(_touch_gesture.call("observe_release", event.index, event.position))
+		if token >= 0:
+			call_deferred("_cancel_unhandled_touch_release", token)
+
 func _unhandled_input(event: InputEvent) -> void:
 	if _debug_open:
+		_touch_gesture.cancel("menu_open")
 		return
-	if not _round_started or str(_runner.player_state.get("state", "")) not in ["running", "pending_barrel"]:
+	if not _round_started or _runner == null or str(_runner.player_state.get("state", "")) not in ["running", "pending_barrel"]:
+		_touch_gesture.cancel("runner_not_input_ready")
 		return
 	if event is InputEventScreenTouch:
+		if event.canceled:
+			_touch_gesture.call("cancel_finger", event.index, "platform_cancel")
+			return
 		if PlayerProfile.flip_control not in ["swipe", "tap"]:
+			_touch_gesture.cancel("touch_control_mode_changed")
 			return
 		if event.pressed:
-			if _touch_index == -1:
-				if PlayerProfile.flip_control == "tap":
+			if PlayerProfile.flip_control == "tap":
+				if not _touch_gesture.is_active():
 					_pending_flip_direction = -int(_runner.player_state.get("gravity_direction", 1))
-				else:
-					_touch_index = event.index
-					_touch_start = event.position
-		elif event.index == _touch_index:
-			var swipe: Vector2 = event.position - _touch_start
+					_pending_flip_source = "tap"
+					MultiplayerV2Service.diagnostics.record_event("flip_input_queued", {"round_id": _round_id, "source": "tap", "direction": _pending_flip_direction, "tick": _runner.simulation_tick})
+			else:
+				_touch_gesture.call("begin", event.index, event.position, Time.get_ticks_usec())
+		else:
+			var completion: Dictionary = _touch_gesture.call("consume_release", event.index)
+			if completion.is_empty():
+				return
+			var swipe: Vector2 = completion.get("delta", Vector2.ZERO)
 			if absf(swipe.y) >= 48.0 and absf(swipe.y) > absf(swipe.x) * 1.2:
 				_pending_flip_direction = -1 if swipe.y < 0.0 else 1
-			_touch_index = -1
+				_pending_flip_source = "swipe"
+				MultiplayerV2Service.diagnostics.record_event("flip_input_queued", {"round_id": _round_id, "source": "swipe", "direction": _pending_flip_direction, "tick": _runner.simulation_tick, "dx": swipe.x, "dy": swipe.y})
+			else:
+				MultiplayerV2Service.diagnostics.record_event("touch_gesture_rejected", {"reason": "below_swipe_threshold", "dx": swipe.x, "dy": swipe.y})
 		return
 	if event is InputEventKey and event.pressed and not event.echo and PlayerProfile.flip_control == "keyboard":
+		var requested_direction := 0
 		if event.keycode in [KEY_UP, KEY_W]:
-			_pending_flip_direction = -1
+			requested_direction = -1
 		elif event.keycode in [KEY_DOWN, KEY_S]:
-			_pending_flip_direction = 1
+			requested_direction = 1
+		if requested_direction != 0:
+			_pending_flip_direction = requested_direction
+			_pending_flip_source = "keyboard"
+			MultiplayerV2Service.diagnostics.record_event("flip_input_queued", {"round_id": _round_id, "source": "keyboard", "direction": _pending_flip_direction, "tick": _runner.simulation_tick})
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and PlayerProfile.flip_control == "mouse":
 		_pending_flip_direction = -int(_runner.player_state.get("gravity_direction", 1))
+		_pending_flip_source = "mouse"
+		MultiplayerV2Service.diagnostics.record_event("flip_input_queued", {"round_id": _round_id, "source": "mouse", "direction": _pending_flip_direction, "tick": _runner.simulation_tick})
+
+func _cancel_unhandled_touch_release(token: int) -> void:
+	_touch_gesture.call("cancel_if_release_pending", token, "gui_consumed_release")
+
+func _on_touch_gesture_diagnostic(event_name: String, details: Dictionary) -> void:
+	MultiplayerV2Service.diagnostics.record_event("touch_gesture_%s" % event_name, details)
 
 func _return_to_lobby() -> void:
 	if not MultiplayerV2Service.has_room():
@@ -1748,7 +1793,15 @@ func _toggle_debug_panel() -> void:
 	_debug_panel.visible = _debug_open
 	_debug_toggle.text = tr("Close menu") if _debug_open else tr("Menu")
 	# A menu interaction cannot carry through as a gravity-flip input.
+	_touch_gesture.cancel("menu_toggled")
 	_pending_flip_direction = 0
+	_pending_flip_source = ""
+
+func _notification(what: int) -> void:
+	if what in [NOTIFICATION_APPLICATION_FOCUS_OUT, NOTIFICATION_WM_WINDOW_FOCUS_OUT, NOTIFICATION_PAUSED]:
+		_touch_gesture.cancel("focus_or_tree_pause")
+		_pending_flip_direction = 0
+		_pending_flip_source = ""
 
 func _leave_v2() -> void:
 	if not _mp_achievement_context.is_empty():
