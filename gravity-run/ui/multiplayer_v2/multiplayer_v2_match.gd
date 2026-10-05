@@ -44,6 +44,9 @@ var _world_tick := 0
 var _accumulator := 0.0
 var _pending_flip_direction := 0
 var _pending_interaction_id := ""
+var _pending_barrel_contact_entity_id := ""
+var _pending_barrel_contact_usec := -1
+var _local_death_sfx_diagnostic_recorded := false
 var _pending_coin_claims: Dictionary = {}
 var _remote_tracks: Dictionary = {}
 var _remote_presentation_cache: Dictionary = {}
@@ -478,7 +481,7 @@ func _process(delta: float) -> void:
 		var catchup_started_usec := Time.get_ticks_usec() if _profiling_enabled else 0
 		_advance_local_to_shared_clock(0.0, callback_begin_usec if _render_anchor_experiment_enabled else -1)
 		if not _round_aborted and str(_runner.player_state.get("state", "")) == "dead":
-			SfxController.play_death(_round_id, "local")
+			_play_local_death_sfx("process_terminal_state")
 		if _profiling_enabled:
 			_profile_phase("fixed_step_catchup", catchup_started_usec)
 	_presentation_anchor_usec = callback_begin_usec if _round_started and _render_anchor_experiment_enabled else Time.get_ticks_usec()
@@ -660,10 +663,13 @@ func _request_shared_barrel(contact: Dictionary) -> void:
 		return
 	var local_peer := int(MultiplayerV2Service.session.get("local_peer_id", 1))
 	_pending_interaction_id = Crypto.new().generate_random_bytes(16).hex_encode()
+	_pending_barrel_contact_entity_id = str(contact.get("entity_id", ""))
+	_pending_barrel_contact_usec = Time.get_ticks_usec()
+	_local_death_sfx_diagnostic_recorded = false
 	_runner.set_pending_barrel(true)
 	var request := {"round_id": _round_id, "owner_peer_id": local_peer, "request_id": _pending_interaction_id, "entity_id": str(contact.get("entity_id", "")), "incarnation": int(contact.get("incarnation", 1)), "action": "lethal_contact", "simulation_tick": _runner.simulation_tick, "input_seq": _runner.input_sequence, "known_world_revision": _world.entity_ledger.revision, "world_x": float(_runner.player_state.get("world_x", 0.0)), "y": float(_runner.player_state.get("y", 0.0)), "gravity_direction": int(_runner.player_state.get("gravity_direction", 1))}
+	MultiplayerV2Service.diagnostics.record_event("barrel_contact_pending", {"round_id": _round_id, "entity_id": _pending_barrel_contact_entity_id, "contact_tick": _runner.simulation_tick, "local_contact_usec": _pending_barrel_contact_usec, "role": str(MultiplayerV2Service.session.get("role", ""))})
 	MultiplayerV2Service.submit_local_world_interaction(request)
-	MultiplayerV2Service.diagnostics.record_event("barrel_contact_pending", request)
 
 func _on_remote_sample(peer_id: int, sample: Dictionary) -> void:
 	var sample_started_usec := Time.get_ticks_usec() if _profiling_enabled else 0
@@ -698,7 +704,9 @@ func _on_terminal_report(peer_id: int, report: Dictionary) -> void:
 	if peer_id == int(MultiplayerV2Service.session.get("local_peer_id", 1)):
 		_runner.stop(next_state)
 		if next_state == "dead" and not _round_aborted:
-			SfxController.play_death(_round_id, "local")
+			var received_usec := Time.get_ticks_usec()
+			MultiplayerV2Service.diagnostics.record_event("local_terminal_audio_timing", {"round_id": _round_id, "entity_id": _pending_barrel_contact_entity_id, "state": next_state, "simulation_tick": int(report.get("simulation_tick", -1)), "terminal_contact_tick": float(report.get("terminal_contact_tick", report.get("simulation_tick", -1))), "host_confirmed_at_host_usec": int(report.get("confirmed_at_host_usec", -1)), "local_received_usec": received_usec, "contact_to_terminal_received_usec": maxi(received_usec - _pending_barrel_contact_usec, 0) if _pending_barrel_contact_usec >= 0 else -1})
+			_play_local_death_sfx("terminal_report")
 	else:
 		_remote_terminal[peer_id] = next_state
 		_remote_locomotion[peer_id] = next_state
@@ -731,6 +739,8 @@ func _on_world_commit(commit: Dictionary) -> void:
 	MultiplayerV2Service.diagnostics.record_event("world_commit_presented", {"commit_id": str(commit.get("commit_id", "")), "result": applied, "revision": int(commit.get("world_revision", 0))})
 	var transition: Dictionary = commit.get("linked_player_transition", {})
 	if not transition.is_empty() and int(transition.get("owner_peer_id", -1)) == int(MultiplayerV2Service.session.get("local_peer_id", 1)):
+		var commit_received_usec := Time.get_ticks_usec()
+		MultiplayerV2Service.diagnostics.record_event("barrel_terminal_commit_received", {"round_id": _round_id, "entity_id": _pending_barrel_contact_entity_id, "commit_id": str(commit.get("commit_id", "")), "effective_tick": int(commit.get("effective_tick", -1)), "local_received_usec": commit_received_usec, "contact_to_commit_usec": maxi(commit_received_usec - _pending_barrel_contact_usec, 0) if _pending_barrel_contact_usec >= 0 else -1})
 		_pending_interaction_id = ""
 		_runner.stop("dead")
 		if MultiplayerV2Service.is_room_owner():
@@ -818,6 +828,8 @@ func _on_interaction_resolved(request_id: String, accepted: bool, reason: String
 			return
 	if request_id != _pending_interaction_id:
 		return
+	var resolved_usec := Time.get_ticks_usec()
+	MultiplayerV2Service.diagnostics.record_event("barrel_interaction_resolved", {"round_id": _round_id, "entity_id": _pending_barrel_contact_entity_id, "accepted": accepted, "reason": reason, "local_received_usec": resolved_usec, "contact_to_resolution_usec": maxi(resolved_usec - _pending_barrel_contact_usec, 0) if _pending_barrel_contact_usec >= 0 else -1})
 	_pending_interaction_id = ""
 	if not accepted:
 		if commit is Dictionary and not commit.is_empty():
@@ -905,6 +917,9 @@ func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 	_mp_achievement_hazards.clear()
 	AchievementService.begin_run()
 	_pending_coin_claims.clear()
+	_pending_barrel_contact_entity_id = ""
+	_pending_barrel_contact_usec = -1
+	_local_death_sfx_diagnostic_recorded = false
 	MusicController.start_round(round_id)
 	SfxController.begin_round(round_id)
 	_world_tick = 0
@@ -1762,3 +1777,11 @@ func _show_failure(message: String) -> void:
 
 func status_style(label: Label) -> void:
 	label.add_theme_color_override("font_color", Color("edf3ff"))
+
+func _play_local_death_sfx(source: String) -> void:
+	var played := SfxController.play_death(_round_id, "local")
+	if not played or _local_death_sfx_diagnostic_recorded:
+		return
+	_local_death_sfx_diagnostic_recorded = true
+	var started_usec := Time.get_ticks_usec()
+	MultiplayerV2Service.diagnostics.record_event("local_death_sfx_started", {"round_id": _round_id, "entity_id": _pending_barrel_contact_entity_id, "source": source, "local_sfx_usec": started_usec, "contact_to_sfx_usec": maxi(started_usec - _pending_barrel_contact_usec, 0) if _pending_barrel_contact_usec >= 0 else -1})

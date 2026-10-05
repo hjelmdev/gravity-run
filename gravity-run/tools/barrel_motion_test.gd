@@ -23,6 +23,17 @@ func _run_tests() -> void:
 	_check(is_equal_approx(float(barrel.get("roll_angle")), running_spin), "barrel spin should be the same with a moving or stationary camera")
 	_check(is_equal_approx(running_world_x, 800.0), "barrel world motion should match its configured relative speed while the player runs")
 	_check(is_equal_approx(barrel.position.x, 800.0), "a blocked player should not stop the barrel's own world motion")
+	for spiked in [false, true]:
+		barrel.call("set_spiked", spiked)
+		barrel.position = Vector2(1000.0, 480.0)
+		barrel.set("is_falling", true)
+		barrel.set("fall_velocity", 100.0)
+		barrel.call("advance_motion", 1.0 / 60.0, 500.0 / 60.0, Vector2.ZERO, Callable(self, "_floor_y"), Callable(self, "_surface_angle"))
+		_check(barrel.position.y > 480.0 and bool(barrel.get("is_falling")), "fallen barrel must not snap upward onto the far gap edge (spiked=%s)" % spiked)
+		barrel.position.y = 459.0
+		barrel.set("fall_velocity", 100.0)
+		barrel.call("advance_motion", 1.0 / 60.0, 500.0 / 60.0, Vector2.ZERO, Callable(self, "_floor_y"), Callable(self, "_surface_angle"))
+		_check(is_equal_approx(barrel.position.y, 460.0) and not bool(barrel.get("is_falling")), "barrel approaching supported floor from above must still land (spiked=%s)" % spiked)
 	if failures == 0:
 		print("Barrel motion tests passed.")
 	barrel.queue_free()

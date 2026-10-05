@@ -5,6 +5,8 @@ const Generator := preload("res://systems/course_generator.gd")
 const WorldSimulation := preload("res://systems/multiplayer_v2/v2_world_simulation.gd")
 const DestructibleRules := preload("res://systems/multiplayer_v2/v2_destructible_rules.gd")
 const Presentation := preload("res://systems/race_course_presentation.gd")
+const SurfaceIndex := preload("res://systems/course_surface_index.gd")
+const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 
 var failures: Array[String] = []
 
@@ -16,22 +18,25 @@ func _run() -> void:
 	var selected_barrel: Dictionary = {}
 	var selected_block: Dictionary = {}
 	for seed_value in range(100000001, 100000241):
-		var result: Dictionary = Builder.new().build(seed_value, 100000, Generator.GENERATOR_VERSION_12)
+		var result: Dictionary = Builder.new().build(seed_value, 100000, Generator.GENERATOR_VERSION_13)
 		var manifest: Variant = result.get("manifest")
 		if manifest == null:
 			continue
-		for event in manifest.events:
+		_validate_spiked_support_corridors(manifest)
+		for event_index in range(manifest.events.size()):
+			var event: Dictionary = manifest.events[event_index]
 			if str(event.get("kind", "")) != "barrels" or not bool(event.get("spiked", false)) or float(event.get("motion_speed_multiplier", 1.0)) <= 1.05:
 				continue
-			for target in manifest.events:
-				if str(target.get("kind", "")) != "block" or bool(target.get("from_ceiling", false)):
-					continue
-				var delta := float(event.x) - float(target.x)
-				if delta >= 70.0 and delta <= 240.0:
-					selected = manifest
-					selected_barrel = event
-					selected_block = target
-					break
+			if event_index == 0:
+				continue
+			var target: Dictionary = manifest.events[event_index - 1]
+			if str(target.get("kind", "")) != "block" or bool(target.get("from_ceiling", false)):
+				continue
+			var delta := float(event.x) - float(target.x)
+			if delta >= 70.0 and delta <= 240.0:
+				selected = manifest
+				selected_barrel = event
+				selected_block = target
 			if selected != null:
 				break
 		if selected != null:
@@ -53,7 +58,7 @@ func _run() -> void:
 		var baseline_restored := false
 		var speed_multiplier := float(selected_barrel.get("motion_speed_multiplier", 1.0))
 		var spawn_distance := float(selected_barrel.x) - float(selected_barrel.get("spawn_lead_distance", 820.0)) * (speed_multiplier - 1.0) - float(selected.start_x)
-		var last_tick := mini(2400, ceili(spawn_distance / 500.0 * 60.0) + 300)
+		var last_tick := mini(30000, ceili(spawn_distance / 500.0 * 60.0) + 300)
 		for next_tick in range(1, last_tick + 1):
 			simulation.step_to(next_tick)
 			presentation.set_world_state(simulation.state_snapshot())
@@ -120,12 +125,16 @@ func _run() -> void:
 			if is_instance_valid(barrel_node):
 				presentation.set_world_state(recovered.state_snapshot())
 				_check(not bool(barrel_node.visible) or bool(barrel_node.call("is_destroying_now")), "recovered canonical baseline renders the consumed spiked barrel as gone")
-	var gen11: Variant = Builder.new().build(100000014, 100000, Generator.GENERATOR_VERSION_11).get("manifest")
-	var has_v11_spike := false
-	if gen11 != null:
-		for event in gen11.events:
-			has_v11_spike = has_v11_spike or (str(event.get("kind", "")) == "barrels" and bool(event.get("spiked", false)))
-	_check(not has_v11_spike, "frozen Gen11 barrel catalog does not acquire the new variant")
+	for old_version in [Generator.GENERATOR_VERSION_12, Generator.GENERATOR_VERSION_11]:
+		var old_manifest: Variant = Builder.new().build(100000003, 100000, old_version).get("manifest")
+		var has_old_spike := false
+		if old_manifest != null:
+			for event in old_manifest.events:
+				has_old_spike = has_old_spike or (str(event.get("kind", "")) == "barrels" and bool(event.get("spiked", false)))
+		_check(old_manifest != null and has_old_spike == (old_version == Generator.GENERATOR_VERSION_12), "frozen Gen12/11 variant catalogs are unchanged")
+	var short_manifest: Variant = Builder.new().build(100000003, 45000, Generator.GENERATOR_VERSION_13).get("manifest")
+	var long_manifest: Variant = Builder.new().build(100000003, 100000, Generator.GENERATOR_VERSION_13).get("manifest")
+	_check(short_manifest != null and long_manifest != null and _course_prefix_signature(short_manifest, 45000.0) == _course_prefix_signature(long_manifest, 45000.0), "Gen13 supported-barrel and gap placement is deterministic across finite-course prefix lengths")
 	print("SPIKED_BARREL_SHARED_SIMULATION_TEST failures=%d seed=%s barrel=%s block=%s" % [failures.size(), str(selected.seed_value) if selected != null else "none", str(selected_barrel.get("event_id", "")), str(selected_block.get("event_id", ""))])
 	for failure in failures:
 		push_error(failure)
@@ -135,3 +144,39 @@ func _check(condition: bool, message: String) -> void:
 	if condition:
 		return
 	failures.append(message)
+
+func _validate_spiked_support_corridors(manifest: Resource) -> void:
+	var surface_index := SurfaceIndex.new()
+	surface_index.configure(manifest.events, float(manifest.initial_floor_y), float(manifest.initial_ceiling_y))
+	for index in range(manifest.events.size()):
+		var barrel: Dictionary = manifest.events[index]
+		if str(barrel.get("kind", "")) != "barrels" or not bool(barrel.get("spiked", false)):
+			continue
+		if index == 0 or str(manifest.events[index - 1].get("kind", "")) != "block" or bool(manifest.events[index - 1].get("from_ceiling", false)):
+			_check(false, "Gen13 spiked barrel %s retains its paired floor block" % str(barrel.get("event_id", "")))
+			continue
+		var block: Dictionary = manifest.events[index - 1]
+		var multiplier := maxf(float(barrel.get("motion_speed_multiplier", 1.0)), 1.0)
+		var count := maxi(int(barrel.get("count", 1)), 1)
+		var spacing := float(barrel.get("spacing", HazardRules.BARREL_CHAIN_SPACING))
+		var radius := HazardRules.barrel_radius(float(barrel.get("width", HazardRules.BARREL_WIDTH)), float(barrel.get("height", HazardRules.BARREL_WIDTH)))
+		# These match V2WorldSimulation's first chain barrel and its circle contact with the block.
+		var spawn_x := float(barrel.x) + float(barrel.get("spawn_lead_distance", 820.0)) * (multiplier - 1.0) - float(count - 1) * spacing * 0.5
+		var impact_x := float(block.x) + float(block.get("width", 44.0)) * 0.5 + radius
+		var supported := spawn_x > impact_x
+		var sample_x := impact_x
+		while supported and sample_x <= spawn_x:
+			if not bool(surface_index.surface_at(sample_x, false).get("supported", false)):
+				supported = false
+				break
+			sample_x += 8.0
+		_check(supported, "Gen13 spiked barrel %s stays supported from actual first-chain spawn through block-circle impact" % str(barrel.get("event_id", "")))
+
+func _course_prefix_signature(manifest: Resource, end_x: float) -> String:
+	var signature: Array = []
+	for event in manifest.events:
+		if float(event.get("x", 0.0)) > float(manifest.start_x) + end_x:
+			break
+		if str(event.get("kind", "")) in ["barrels", "gap", "block"]:
+			signature.append([str(event.get("event_id", "")), str(event.get("kind", "")), float(event.get("x", 0.0)), float(event.get("width", 0.0)), bool(event.get("spiked", false)), float(event.get("motion_speed_multiplier", 1.0))])
+	return JSON.stringify(signature)

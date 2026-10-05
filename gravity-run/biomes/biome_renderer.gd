@@ -257,9 +257,14 @@ static func _draw_cave_backdrop(canvas: CanvasItem, left: float, size: Vector2, 
 			var point := points[point_index]
 			if point.x > left and point.x < left + size.x:
 				clipped.insert(clipped.size() - 1, point)
-		clipped.append(Vector2(left + size.x, size.y))
-		clipped.append(Vector2(left, size.y))
-		canvas.draw_colored_polygon(clipped, color)
+		for point_index in range(clipped.size() - 1):
+			var segment := PackedVector2Array([
+				clipped[point_index],
+				clipped[point_index + 1],
+				Vector2(clipped[point_index + 1].x, size.y),
+				Vector2(clipped[point_index].x, size.y),
+			])
+			canvas.draw_colored_polygon(segment, color)
 	var crystal_parallax_left := camera_course_distance * 0.11 + fragment_offset
 	for point in _landmarks_in_course(crystal_parallax_left, crystal_parallax_left + size.x, 193.0, 51):
 		var x := left + float(point.x) - crystal_parallax_left

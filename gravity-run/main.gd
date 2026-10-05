@@ -747,7 +747,7 @@ func _spawn_course_event(event: Dictionary) -> void:
 			# even when a wide desktop viewport requires spawning it much earlier.
 			var early_spawn_offset := maxf(event_spawn_lead - COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE, 0.0) * (motion_speed_multiplier - 1.0)
 			for index in range(count):
-				_spawn_obstacle_scene(BARREL_SCENE, HAZARD_RULES_SCRIPT.BARREL_WIDTH, height, false, event_x + early_spawn_offset - chain_width * 0.5 + float(index) * HAZARD_RULES_SCRIPT.BARREL_CHAIN_SPACING, motion_speed_multiplier)
+				_spawn_obstacle_scene(BARREL_SCENE, HAZARD_RULES_SCRIPT.BARREL_WIDTH, height, false, event_x + early_spawn_offset - chain_width * 0.5 + float(index) * HAZARD_RULES_SCRIPT.BARREL_CHAIN_SPACING, motion_speed_multiplier, bool(event.get("spiked", false)))
 		&"gap":
 			var gap := TRACK_GAP_SCRIPT.new() as TrackGap
 			gap.position = Vector2(event_x, 0.0)

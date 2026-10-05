@@ -3,6 +3,8 @@ extends Node
 const MainScene := preload("res://main.tscn")
 const BarrelScene := preload("res://hazards/barrel.tscn")
 const BlockScene := preload("res://hazards/block.tscn")
+const ManifestBuilder := preload("res://systems/course_manifest_builder.gd")
+const CourseGenerator := preload("res://systems/course_generator.gd")
 
 var failures: Array[String] = []
 
@@ -16,6 +18,27 @@ func _run() -> void:
 	game.set_physics_process(false)
 	await get_tree().process_frame
 	var obstacles: Array = game.get("obstacles")
+	obstacles.clear()
+	var generated_manifest: Resource = ManifestBuilder.new().build(100000003, 100000, CourseGenerator.GENERATOR_VERSION_13).get("manifest")
+	var generated_spiked_event: Dictionary = {}
+	if generated_manifest != null:
+		for event in generated_manifest.events:
+			if str(event.get("kind", "")) == "barrels" and bool(event.get("spiked", false)):
+				generated_spiked_event = event.duplicate(true)
+				generated_spiked_event["course_distance"] = float(event.get("x", 0.0)) - float(generated_manifest.start_x)
+				generated_spiked_event["id"] = str(event.get("event_id", ""))
+				break
+	_check(not generated_spiked_event.is_empty(), "Gen13 challenge seed produces a generated spiked-barrel event for the actual SP spawn path")
+	if not generated_spiked_event.is_empty():
+		game.call("_spawn_course_event", generated_spiked_event)
+		var generated_spawn_is_spiked := false
+		for obstacle in obstacles:
+			if is_instance_valid(obstacle) and obstacle.has_method("set_spiked"):
+				generated_spawn_is_spiked = generated_spawn_is_spiked or bool(obstacle.get("is_spiked"))
+		_check(generated_spawn_is_spiked, "actual main._spawn_course_event forwards generated spiked metadata into the existing barrel scene")
+	for obstacle in obstacles:
+		if is_instance_valid(obstacle):
+			obstacle.queue_free()
 	obstacles.clear()
 	var slopes: Array = game.get("slopes")
 	slopes.clear()

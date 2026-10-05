@@ -36,8 +36,9 @@ const GENERATOR_VERSION_9 := 9
 const GENERATOR_VERSION_10 := 10
 const GENERATOR_VERSION_11 := 11
 const GENERATOR_VERSION_12 := 12
-const PREVIOUS_CURRENT_GENERATOR_VERSION := GENERATOR_VERSION_11
-const GENERATOR_VERSION := GENERATOR_VERSION_12
+const GENERATOR_VERSION_13 := 13
+const PREVIOUS_CURRENT_GENERATOR_VERSION := GENERATOR_VERSION_12
+const GENERATOR_VERSION := GENERATOR_VERSION_13
 const PUBLISHED_SHARED_GENERATOR_VERSION := 5
 const LEGACY_GENERATOR_VERSION := 3
 const PREVIOUS_GENERATOR_VERSION := 4
@@ -56,6 +57,7 @@ var _generator_version := GENERATOR_VERSION
 var _difficulty: Resource
 var _spawn_lead_distance := 0.0
 var _configuration_failed := false
+var _spiked_barrel_corridors: Array[Dictionary] = []
 
 ## Spawn course events fully beyond the viewport so their geometry enters smoothly.
 ## The canonical lead remains a lower bound for stable planning on small screens.
@@ -123,7 +125,7 @@ func set_difficulty_profile(profile: Resource) -> void:
 func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> bool:
 	_configuration_failed = false
 	_generator_version = generator_version
-	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_11, GENERATOR_VERSION_10, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
+	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_12, GENERATOR_VERSION_11, GENERATOR_VERSION_10, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
 		push_error("Unsupported course generator version: %d" % generator_version)
 		return false
 	_profiles.clear()
@@ -167,6 +169,7 @@ func reset(seed: int = 0) -> void:
 	else:
 		_rng.seed = seed
 	_events.clear()
+	_spiked_barrel_corridors.clear()
 	_next_event_distance = 1400.0 if _generator_version >= PUBLISHED_SHARED_GENERATOR_VERSION else 1050.0
 	_next_spawn_index = 0
 
@@ -293,6 +296,9 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 			if _generator_version >= GENERATOR_VERSION_12 and BiomeRenderer.biome_id_at(_next_event_distance) != candidate_biome:
 				break
 			candidate["course_distance"] = _next_event_distance
+			if _candidate_crosses_spiked_barrel_corridor(candidate):
+				_next_event_distance += PLAN_RETRY_SPACING
+				continue
 			candidate["threats"] = profile.build_threat_intervals(candidate)
 			_apply_rock_switch_clearance(candidate, candidate_clearance if candidate_is_rock else 0.0)
 			var trial := _events.duplicate()
@@ -360,19 +366,59 @@ func _try_append_independent_barrel(base_event: Dictionary, clearance: float) ->
 	if _rng.randf() >= barrel_weight / maxf(normal_weight + barrel_weight, 0.001):
 		return
 	var barrel_event := _barrel_profile.create_event(_rng, base_distance, _difficulty, FLOOR_LANE)
-	if _generator_version >= GENERATOR_VERSION_12 and base_kind == &"block" and _rng.randf() < 0.25:
-		barrel_event["spiked"] = true
 	# Put the extra floor-only barrel chain just beyond the base obstacle so it
 	# rolls into that obstacle on screen; its independent roll never replaces it.
 	var chain_width := float(barrel_event.get("width", HazardRules.BARREL_WIDTH)) - HazardRules.BARREL_WIDTH
 	var separation := float(base_event.get("width", HazardRules.BARREL_WIDTH)) * 0.5 + chain_width * 0.5 + HazardRules.BARREL_WIDTH + 24.0
 	barrel_event["course_distance"] = base_distance + separation
+	var spiked_corridor: Dictionary = {}
+	if _generator_version >= GENERATOR_VERSION_12 and base_kind == &"block" and _rng.randf() < 0.25:
+		if _generator_version < GENERATOR_VERSION_13:
+			barrel_event["spiked"] = true
+		else:
+			spiked_corridor = _try_make_supported_spiked_corridor(barrel_event, base_event)
+			if not spiked_corridor.is_empty():
+				barrel_event["spiked"] = true
 	barrel_event["threats"] = _barrel_profile.build_threat_intervals(barrel_event)
 	var trial: Array[Dictionary] = []
 	trial.append_array(_events)
 	trial.append(barrel_event)
 	if is_plan_solvable(trial, clearance):
 		_events.append(barrel_event)
+		if not spiked_corridor.is_empty():
+			_spiked_barrel_corridors.append(spiked_corridor)
+
+func _try_make_supported_spiked_corridor(barrel_event: Dictionary, base_event: Dictionary) -> Dictionary:
+	var multiplier := maxf(float(barrel_event.get("motion_speed_multiplier", 1.0)), 1.0)
+	var count := maxi(int(barrel_event.get("count", 1)), 1)
+	var spacing := float(barrel_event.get("spacing", HazardRules.BARREL_CHAIN_SPACING))
+	# Match V2WorldSimulation's first chain element at its actual spawn pose. It
+	# moves toward decreasing world X and must reach the block before any hole.
+	var spawn_x := float(barrel_event.get("course_distance", 0.0)) + EVENT_SPAWN_LEAD_DISTANCE * (multiplier - 1.0) - float(count - 1) * spacing * 0.5
+	var target_x := float(base_event.get("course_distance", 0.0)) + float(base_event.get("width", HazardRules.BARREL_WIDTH)) * 0.5 + HazardRules.barrel_radius(float(barrel_event.get("width", HazardRules.BARREL_WIDTH)), float(barrel_event.get("height", HazardRules.BARREL_WIDTH)))
+	if not is_finite(spawn_x) or not is_finite(target_x) or spawn_x <= target_x:
+		return {}
+	var corridor := {"start_x": target_x, "end_x": spawn_x}
+	for event in _events:
+		if _floor_unsupported_corridor_overlap(event, corridor):
+			return {}
+	return corridor
+
+func _candidate_crosses_spiked_barrel_corridor(candidate: Dictionary) -> bool:
+	if _generator_version < GENERATOR_VERSION_13 or _spiked_barrel_corridors.is_empty():
+		return false
+	for corridor in _spiked_barrel_corridors:
+		if _floor_unsupported_corridor_overlap(candidate, corridor):
+			return true
+	return false
+
+func _floor_unsupported_corridor_overlap(event: Dictionary, corridor: Dictionary) -> bool:
+	if str(event.get("kind", "")) != "gap" or bool(event.get("from_ceiling", false)):
+		return false
+	var gap_left := float(event.get("course_distance", 0.0)) - float(event.get("width", 0.0)) * 0.5
+	var gap_right := gap_left + float(event.get("width", 0.0))
+	# Treat exact surface boundaries as unsupported too, matching CourseSurfaceIndex.
+	return gap_left <= float(corridor.get("end_x", -INF)) + 0.001 and gap_right >= float(corridor.get("start_x", INF)) - 0.001
 
 func _append_safe_fallback(speed: float, track_height: float) -> void:
 	var clearance := get_switch_clearance_distance(speed, track_height)
@@ -384,6 +430,9 @@ func _append_safe_fallback(speed: float, track_height: float) -> void:
 			var candidate := profile.create_event(_rng, safe_distance, _difficulty, 0)
 			_apply_generator_timing(candidate)
 			candidate["course_distance"] = safe_distance
+			if _candidate_crosses_spiked_barrel_corridor(candidate):
+				safe_distance += PLAN_RETRY_SPACING
+				continue
 			candidate["threats"] = profile.build_threat_intervals(candidate)
 			if is_plan_solvable(_events + [candidate], clearance):
 				_events.append(candidate)

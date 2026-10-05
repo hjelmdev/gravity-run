@@ -60,7 +60,11 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 func _make_multiplayer_ruleset(generator_version: int) -> Resource:
 	var ruleset := CourseRulesetScript.new() as Resource
 	ruleset.set("ruleset_id", &"multiplayer_race")
-	if generator_version >= CourseGenerator.GENERATOR_VERSION_12:
+	if generator_version >= CourseGenerator.GENERATOR_VERSION_13:
+		ruleset.set("revision", 10)
+		ruleset.set("event_density", 1.55)
+		ruleset.set("coin_revision", 2)
+	elif generator_version >= CourseGenerator.GENERATOR_VERSION_12:
 		ruleset.set("revision", 9)
 		ruleset.set("event_density", 1.55)
 		ruleset.set("coin_revision", 2)

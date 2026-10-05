@@ -191,10 +191,13 @@ static func advance_barrel(state: Dictionary, delta: float, movement: float, flo
 	var relative_travel := motion_reference * (multiplier - 1.0)
 	state["x"] = float(state.get("x", 0.0)) - relative_travel
 	if bool(state.get("is_falling", state.get("falling", false))):
+		var previous_y := float(state.get("y", 0.0))
 		var fall_velocity := float(state.get("fall_velocity", 0.0)) + BARREL_FALL_GRAVITY * delta
-		state["y"] = float(state.get("y", 0.0)) + fall_velocity * delta
+		state["y"] = previous_y + fall_velocity * delta
 		state["fall_velocity"] = fall_velocity
-		if floor_supported and float(state["y"]) >= floor_y:
+		# Landing requires crossing the surface from above. A barrel already
+		# below the far edge of a gap must keep falling instead of snapping up.
+		if floor_supported and previous_y <= floor_y and float(state["y"]) >= floor_y:
 			state["y"] = floor_y
 			state["fall_velocity"] = 0.0
 			state["is_falling"] = false
