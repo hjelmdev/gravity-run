@@ -54,33 +54,47 @@ func _run() -> void:
 	_check(not bool(challenge.get("active")), "ordinary selected run is not promoted into a saved challenge")
 	var generator = game.get("course_generator")
 	generator.call("ensure_horizon", 45000.0, 500.0)
-	var lava_source: Dictionary = {}
-	var matching_manifest_event: Dictionary = {}
+	var lava_sources: Dictionary = {}
+	var matching_manifest_events: Dictionary = {}
 	var shared_build: Dictionary = ManifestBuilder.new().build(100000014, 45000, 14)
 	if shared_build.get("manifest") != null:
 		for planned in generator.call("get_planned_events"):
-			if str(planned.get("kind", "")) not in ["lava_crack", "volcano"]:
+			var kind := str(planned.get("kind", ""))
+			if kind not in ["lava_crack", "volcano"] or lava_sources.has(kind):
 				continue
 			for shared_event in shared_build.manifest.get("events"):
-				if str(shared_event.get("kind", "")) == str(planned.get("kind", "")) and is_equal_approx(float(shared_event.get("x", -1.0)), 180.0 + float(planned.get("course_distance", 0.0))):
-					lava_source = planned
-					matching_manifest_event = shared_event
+				if str(shared_event.get("kind", "")) == kind and is_equal_approx(float(shared_event.get("x", -1.0)), 180.0 + float(planned.get("course_distance", 0.0))):
+					lava_sources[kind] = planned
+					matching_manifest_events[kind] = shared_event
 					break
-			if not lava_source.is_empty():
-				break
-	_check(not lava_source.is_empty(), "ordinary selected seed has a lava event accepted in both SP and MP resolved support")
-	if not lava_source.is_empty():
-		_check(not matching_manifest_event.is_empty(), "SP generator event has matching geometry in the shared MP manifest")
-		game.call("_spawn_course_event", lava_source)
-		var found_lava := false
+	_check(lava_sources.has("lava_crack") and lava_sources.has("volcano"), "ordinary selected seed has generated crack and volcano events in both SP and MP-resolved support")
+	game.set("demo_mode", true)
+	for kind in ["lava_crack", "volcano"]:
+		if not lava_sources.has(kind):
+			continue
+		var source: Dictionary = lava_sources[kind]
+		var manifest_event: Dictionary = matching_manifest_events[kind]
+		_check(not manifest_event.is_empty(), "SP %s has matching geometry in the shared MP manifest" % kind)
+		game.call("_spawn_course_event", source)
+		var found_lava: Node2D
 		for obstacle in game.get("obstacles"):
-			if is_instance_valid(obstacle) and obstacle.is_in_group("lava_hazards"):
-				found_lava = true
-		_check(found_lava, "generated SP event resolves through the ordinary spawn route into the shared lava scene")
-		if found_lava and not matching_manifest_event.is_empty():
-			for obstacle in game.get("obstacles"):
-				if is_instance_valid(obstacle) and obstacle.is_in_group("lava_hazards") and str(obstacle.get("event").get("kind", "")) == str(lava_source.get("kind", "")):
-					_check(is_equal_approx(float(obstacle.global_position.x), float(matching_manifest_event.get("x", -1.0))), "SP's shared lava scene is positioned at the exact MP manifest coordinate")
+			if is_instance_valid(obstacle) and obstacle.is_in_group("lava_hazards") and str(obstacle.get("event").get("kind", "")) == kind:
+				found_lava = obstacle
+				break
+		_check(is_instance_valid(found_lava), "generated demo event resolves through the ordinary spawn route into the shared lava scene: %s" % kind)
+		if not is_instance_valid(found_lava):
+			continue
+		_check(bool(found_lava.get("from_ceiling")) == (bool(manifest_event.get("from_ceiling", false)) if kind == "lava_crack" else false), "shared hazard exposes valid demo side metadata for %s" % kind)
+		var hitbox: Rect2 = found_lava.call("get_hitbox_rect")
+		_check(hitbox.size.x > 0.0 and hitbox.size.y > 0.0, "demo risk evaluation receives non-empty collision bounds for %s" % kind)
+		_check(is_equal_approx(float(found_lava.global_position.x), float(manifest_event.get("x", -1.0))), "SP's shared %s scene is positioned at the exact MP manifest coordinate" % kind)
+		var floor_risk := float(game.call("_demo_side_risk", 1))
+		var ceiling_risk := float(game.call("_demo_side_risk", -1))
+		_check(floor_risk >= 0.0 and ceiling_risk >= 0.0, "main demo evaluates both lanes with generated %s without runtime errors" % kind)
+	game.set_physics_process(true)
+	await get_tree().create_timer(0.25).timeout
+	game.set_physics_process(false)
+	game.set("demo_mode", false)
 	var original_audio_round := str(game.get("_singleplayer_audio_round_id"))
 	game.call("retry_run")
 	await get_tree().process_frame

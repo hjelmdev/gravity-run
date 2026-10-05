@@ -36,3 +36,9 @@ Updated 2026-10-05. **Phase: ROOT_APPROVED; scoped commit and release in progres
 ## Current handoff
 
 Root approved the reviewed implementation. The scoped source commit and backend migration are the next release steps; a clean exact-commit Web build and Pages publication follow after backend history verifies the gate.
+
+## Post-release correction (2026-10-05)
+
+The original Gen14 deployment was published, then a runtime defect was identified in the menu demo: `main.gd::_demo_side_risk()` reads `from_ceiling` and `get_hitbox_rect()` from every lava hazard, but the shared `LavaHazard` scene exposed neither valid side metadata nor volcano body bounds. The follow-up adds the side field (cracks inherit their event lane; volcanoes are floor-side) and computes the volcano AABB from the same shared body polygon used by collision. This gives demo lane selection the true body footprint and avoids null-to-bool runtime errors.
+
+The seeded main-scene replay integration test now spawns generated crack and volcano events through the ordinary SP event route, exercises `_demo_side_risk()` in demo mode for both lanes, and checks side metadata, nonempty hitboxes, and exact resolved MP coordinates. This targeted test passed after the correction (Godot exit 0); the environment still prints its known user-log/certificate-store errors and shutdown leak notices. Follow-up source commit, clean-archive test/export, Azure push, and Pages redeployment are pending. The prior published package must not be treated as the final corrected build until those steps and live loader/PCK verification complete.

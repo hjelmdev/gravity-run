@@ -7,6 +7,7 @@ const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 var event: Dictionary = {}
 var simulation_tick := 0.0
 var course_start_x := 0.0
+var from_ceiling := false
 
 func _enter_tree() -> void:
 	add_to_group("lava_hazards")
@@ -14,6 +15,7 @@ func _enter_tree() -> void:
 func configure(event_data: Dictionary, start_x := 180.0) -> void:
 	event = event_data.duplicate(true)
 	course_start_x = start_x
+	from_ceiling = bool(event.get("from_ceiling", false)) if str(event.get("kind", "")) == "lava_crack" else false
 	position = Vector2(float(event.get("x", 0.0)), 0.0)
 	set_meta("event_id", str(event.get("event_id", "")))
 	queue_redraw()
@@ -31,7 +33,23 @@ func is_destroying_now() -> bool:
 	return false
 
 func get_hitbox_rect() -> Rect2:
-	return Model.crack_rect(event) if str(event.get("kind", "")) == "lava_crack" else Rect2()
+	if str(event.get("kind", "")) == "lava_crack":
+		return Model.crack_rect(event)
+	if str(event.get("kind", "")) != "volcano":
+		return Rect2()
+	var polygon: PackedVector2Array = Model.volcano_body_polygon_world(event)
+	if polygon.is_empty():
+		return Rect2()
+	var left := polygon[0].x
+	var right := polygon[0].x
+	var top := polygon[0].y
+	var bottom := polygon[0].y
+	for point in polygon:
+		left = minf(left, point.x)
+		right = maxf(right, point.x)
+		top = minf(top, point.y)
+		bottom = maxf(bottom, point.y)
+	return Rect2(Vector2(left, top), Vector2(right - left, bottom - top))
 
 func is_lethal_at(player_rect: Rect2, tick: int, start_x := -1.0) -> bool:
 	if str(event.get("kind", "")) == "lava_crack":
