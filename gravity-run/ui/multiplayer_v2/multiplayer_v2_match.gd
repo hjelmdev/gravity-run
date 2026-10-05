@@ -1,6 +1,7 @@
 extends Node2D
 
 const ResultsView := preload("res://ui/race_results_view.gd")
+const CameraScript := preload("res://systems/runner_camera.gd")
 
 const LocalRunnerScript := preload("res://systems/multiplayer_v2/v2_local_runner.gd")
 const WorldSimulationScript := preload("res://systems/multiplayer_v2/v2_world_simulation.gd")
@@ -18,7 +19,7 @@ const MpAchievementResultSectionScript := preload("res://ui/multiplayer_v2/mp_ac
 const TouchGestureLifecycleScript := preload("res://systems/touch_gesture_lifecycle.gd")
 
 const FIXED_DELTA := 1.0 / 60.0
-const CAMERA_PLAYER_X := 250.0
+const CAMERA_PLAYER_X := CameraScript.PLAYER_ANCHOR_X
 const MAX_CATCHUP_STEPS := 12
 const START_TRACE_SECONDS := 4.0
 const PRESENTATION_DELAY_TICKS := 1.0
@@ -29,8 +30,6 @@ const FLOW_TRACE_MAX_WINDOWS := 64
 const FLOW_TRACE_MAX_USEFUL_WINDOWS := 8
 const FLOW_TRACE_MIN_USEFUL_FRAMES := 48
 const FLOW_TRACE_MAX_TOTAL_FRAMES := 4096
-
-const CameraScript := preload("res://systems/runner_camera.gd")
 
 var _render_camera: Camera2D
 var _render_fraction := 0.0
@@ -1013,12 +1012,12 @@ func _update_spectator_camera() -> void:
 		_spectator_peer_id = 0
 		var local_peer := int(MultiplayerV2Service.session.get("local_peer_id", 1))
 		var local_pose: Dictionary = _local_presentation_pose if not _local_presentation_pose.is_empty() else _runner.render_state(_render_fraction)
-		_camera_left = maxf(float(local_pose.get("world_x", 0.0)) - CAMERA_PLAYER_X, 0.0)
+		_camera_left = CameraScript.camera_left_for_world_x(float(local_pose.get("world_x", 0.0)))
 		return
 	if _spectator_peer_id != 0 and str(_remote_terminal.get(_spectator_peer_id, "running")) == "running":
 		var current := _remote_track_sample(_spectator_peer_id)
 		if bool(current.get("valid", false)) and not bool(current.get("stale", true)):
-			_camera_left = maxf(float(current.get("world_x", 0.0)) - CAMERA_PLAYER_X, 0.0)
+			_camera_left = CameraScript.camera_left_for_world_x(float(current.get("world_x", 0.0)))
 			return
 	var candidates: Array[Dictionary] = []
 	for peer_id in _remote_tracks.keys():
@@ -1036,7 +1035,7 @@ func _update_spectator_camera() -> void:
 	_spectator_peer_id = int(candidates[0].peer_id) if not candidates.is_empty() else 0
 	if _spectator_peer_id > 0:
 		var selected := _remote_track_sample(_spectator_peer_id)
-		_camera_left = maxf(float(selected.get("world_x", 0.0)) - CAMERA_PLAYER_X, 0.0)
+		_camera_left = CameraScript.camera_left_for_world_x(float(selected.get("world_x", 0.0)))
 	if _spectator_peer_id != _last_spectator_event_peer_id:
 		MultiplayerV2Service.diagnostics.record_event("spectator_target", {"peer_id": _spectator_peer_id, "camera_left": _camera_left})
 		_last_spectator_event_peer_id = _spectator_peer_id
