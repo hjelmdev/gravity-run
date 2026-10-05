@@ -4,6 +4,7 @@ class_name CourseGenerator
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const BiomeRenderer := preload("res://biomes/biome_renderer.gd")
 const BiomeEncounterMixScript := preload("res://systems/biome_encounter_mix.gd")
+const LavaHazardModelScript := preload("res://systems/lava_hazard_model.gd")
 ## Deterministic, data-driven encounter planning with a route-feasibility check.
 ## New hazard profiles register their own blocked-lane forecasts; the planner
 ## rejects overlapping/no-exit patterns and spaces lane changes conservatively.
@@ -38,10 +39,11 @@ const GENERATOR_VERSION_11 := 11
 const GENERATOR_VERSION_12 := 12
 const GENERATOR_VERSION_13 := 13
 const GENERATOR_VERSION_14 := 14
+const GENERATOR_VERSION_15 := 15
 const GEN14_RHYTHM_SPACING_DELTAS := [-120.0, -120.0, 240.0]
 const GEN14_RHYTHM_BASE_SPACING_SCALE := 1.22
-const PREVIOUS_CURRENT_GENERATOR_VERSION := GENERATOR_VERSION_13
-const GENERATOR_VERSION := GENERATOR_VERSION_14
+const PREVIOUS_CURRENT_GENERATOR_VERSION := GENERATOR_VERSION_14
+const GENERATOR_VERSION := GENERATOR_VERSION_15
 const PUBLISHED_SHARED_GENERATOR_VERSION := 5
 const LEGACY_GENERATOR_VERSION := 3
 const PREVIOUS_GENERATOR_VERSION := 4
@@ -129,7 +131,7 @@ func set_difficulty_profile(profile: Resource) -> void:
 func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> bool:
 	_configuration_failed = false
 	_generator_version = generator_version
-	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_13, GENERATOR_VERSION_12, GENERATOR_VERSION_11, GENERATOR_VERSION_10, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
+	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_14, GENERATOR_VERSION_13, GENERATOR_VERSION_12, GENERATOR_VERSION_11, GENERATOR_VERSION_10, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
 		push_error("Unsupported course generator version: %d" % generator_version)
 		return false
 	_profiles.clear()
@@ -156,7 +158,8 @@ func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> b
 		if generator_version >= GENERATOR_VERSION_11:
 			_profiles.append(_make_profile(&"haunted_ghost", &"ghost", 0.85, BOTH_LANES, Vector2(72.0, 96.0), Vector2i(1, 1), PackedFloat32Array([96.0])))
 		if generator_version >= GENERATOR_VERSION_14:
-			_profiles.append(_make_profile(&"lava_crack", &"lava_crack", 1.2, BOTH_LANES, Vector2(104.0, 136.0), Vector2i(1, 1), PackedFloat32Array([18.0])))
+			var crack_width := Vector2(150.0, 176.0) if generator_version >= GENERATOR_VERSION_15 else Vector2(104.0, 136.0)
+			_profiles.append(_make_profile(&"lava_crack", &"lava_crack", 1.2, BOTH_LANES, crack_width, Vector2i(1, 1), PackedFloat32Array([18.0])))
 			_profiles.append(_make_profile(&"lava_volcano", &"volcano", 0.85, FLOOR_LANE, Vector2(104.0, 136.0), Vector2i(1, 1), PackedFloat32Array([72.0])))
 	return true
 
@@ -343,6 +346,13 @@ func _apply_rock_switch_clearance(event: Dictionary, required_distance: float) -
 			threat_value["switch_clearance"] = required_distance
 
 func _apply_generator_timing(event: Dictionary) -> void:
+	if _generator_version >= GENERATOR_VERSION_15:
+		if str(event.get("kind", "")) == "lava_crack":
+			event["lava_crack_revision"] = 1
+			event["visual_depth"] = 32.0
+		elif str(event.get("kind", "")) == "volcano":
+			event["projectile_fan_revision"] = 1
+			event["projectile_arcs"] = LavaHazardModelScript.gen15_fan_arcs()
 	if str(event.get("kind", "")) == "saw" and _generator_version >= GENERATOR_VERSION_10:
 		var variant_roll := _rng.randf()
 		var variant := "floor_embedded"

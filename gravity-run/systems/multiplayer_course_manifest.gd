@@ -6,6 +6,8 @@ const CoinPlanner := preload("res://systems/shared_coin_planner.gd")
 const SawModel := preload("res://systems/saw_blade_model.gd")
 const RunnerMotion := preload("res://systems/runner_motion.gd")
 const BiomeRendererScript := preload("res://biomes/biome_renderer.gd")
+const CourseSurfaceIndexScript := preload("res://systems/course_surface_index.gd")
+const LavaHazardModelScript := preload("res://systems/lava_hazard_model.gd")
 
 @export var protocol_version := 2
 @export var generator_version := 0
@@ -63,7 +65,7 @@ func calculate_hash() -> String:
 
 func load_canonical_dictionary(data: Dictionary, expected_wire_hash := "", wire_payload := PackedByteArray()) -> bool:
 	manifest_version = int(data.get("manifest_version", -1))
-	if manifest_version not in [2, 3, 4, 5, 6, 7] or not data.get("world", {}) is Dictionary:
+	if manifest_version not in [2, 3, 4, 5, 6, 7, 8] or not data.get("world", {}) is Dictionary:
 		return false
 	if not expected_wire_hash.is_empty():
 		if expected_wire_hash.length() != 64 or wire_payload.is_empty():
@@ -125,7 +127,7 @@ func validate() -> String:
 		return "The multiplayer world dimensions are invalid."
 	if events.size() > 4000:
 		return "The multiplayer manifest has too many events."
-	if manifest_version not in [2, 3, 4, 5, 6, 7] or (generator_version >= CourseGenerator.GENERATOR_VERSION_14 and manifest_version != 7) or (generator_version >= CourseGenerator.GENERATOR_VERSION_12 and generator_version < CourseGenerator.GENERATOR_VERSION_14 and manifest_version != 6) or (generator_version >= CourseGenerator.GENERATOR_VERSION_10 and generator_version < CourseGenerator.GENERATOR_VERSION_12 and manifest_version != 5) or (generator_version >= CourseGenerator.GENERATOR_VERSION_9 and generator_version < CourseGenerator.GENERATOR_VERSION_10 and manifest_version != 4) or (generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and generator_version < CourseGenerator.GENERATOR_VERSION_9 and manifest_version != 3) or (generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and manifest_version != 2):
+	if manifest_version not in [2, 3, 4, 5, 6, 7, 8] or (generator_version >= CourseGenerator.GENERATOR_VERSION_15 and manifest_version != 8) or (generator_version == CourseGenerator.GENERATOR_VERSION_14 and manifest_version != 7) or (generator_version >= CourseGenerator.GENERATOR_VERSION_12 and generator_version < CourseGenerator.GENERATOR_VERSION_14 and manifest_version != 6) or (generator_version >= CourseGenerator.GENERATOR_VERSION_10 and generator_version < CourseGenerator.GENERATOR_VERSION_12 and manifest_version != 5) or (generator_version >= CourseGenerator.GENERATOR_VERSION_9 and generator_version < CourseGenerator.GENERATOR_VERSION_10 and manifest_version != 4) or (generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and generator_version < CourseGenerator.GENERATOR_VERSION_9 and manifest_version != 3) or (generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and manifest_version != 2):
 		return "The course generator and manifest versions are incompatible."
 	var previous_x := -INF
 	for event in events:
@@ -182,11 +184,15 @@ func validate() -> String:
 			var crack_width := float(event.get("width", NAN))
 			var hot_depth := float(event.get("hot_depth", NAN))
 			var crack_y := float(event.get("y", NAN))
+			var visual_depth := float(event.get("visual_depth", 0.0))
 			var from_ceiling_value: Variant = event.get("from_ceiling", null)
 			if not (from_ceiling_value is bool):
 				return "The lava crack has invalid versioned geometry or biome."
 			var from_ceiling := bool(from_ceiling_value)
-			if not is_finite(crack_width) or not is_finite(hot_depth) or not is_finite(crack_y) or crack_width < 96.0 or crack_width > 150.0 or hot_depth < 8.0 or hot_depth > 20.0 or crack_y < 40.0 or crack_y > 500.0 or int(event.get("blocked_lanes", 0)) != (2 if from_ceiling else 1) or BiomeRendererScript.biome_id_for_generator(event_x - start_x, generator_version) != "lava":
+			var width_valid := crack_width >= 96.0 and crack_width <= 150.0 if generator_version < CourseGenerator.GENERATOR_VERSION_15 else crack_width >= 150.0 and crack_width <= 180.0
+			var depth_valid := hot_depth >= 8.0 and hot_depth <= 20.0 if generator_version < CourseGenerator.GENERATOR_VERSION_15 else hot_depth >= 12.0 and hot_depth <= 24.0
+			var revision_valid := not event.has("lava_crack_revision") and not event.has("visual_depth") if generator_version < CourseGenerator.GENERATOR_VERSION_15 else int(event.get("lava_crack_revision", -1)) == 1 and visual_depth >= 24.0 and visual_depth <= 44.0
+			if not is_finite(crack_width) or not is_finite(hot_depth) or not is_finite(crack_y) or not is_finite(visual_depth) or not width_valid or not depth_valid or not revision_valid or crack_y < 40.0 or crack_y > 500.0 or int(event.get("blocked_lanes", 0)) != (2 if from_ceiling else 1) or BiomeRendererScript.biome_id_for_generator(event_x - start_x, generator_version) != "lava":
 				return "The lava crack has invalid versioned geometry or biome."
 		if str(event.kind) == "volcano":
 			var volcano_width := float(event.get("width", NAN))
@@ -200,11 +206,41 @@ func validate() -> String:
 			var vertical_speed := float(event.get("projectile_vertical_speed", NAN))
 			var projectile_gravity := float(event.get("projectile_gravity", NAN))
 			var projectile_radius := float(event.get("projectile_radius", NAN))
-			var apex_top := floor_y - volcano_height * 0.78 - vertical_speed * vertical_speed / maxf(2.0 * projectile_gravity, 1.0) - projectile_radius
 			var ceiling_runner_bottom := ceiling_y + RunnerMotion.SIZE.y
-			if not is_finite(volcano_width) or not is_finite(volcano_height) or not is_finite(floor_y) or not is_finite(ceiling_y) or not is_finite(lead) or not is_finite(projectile_speed) or not is_finite(vertical_speed) or not is_finite(projectile_gravity) or not is_finite(projectile_radius) or volcano_width < 100.0 or volcano_width > 150.0 or volcano_height < 56.0 or volcano_height > 96.0 or floor_y - ceiling_y < 300.0 or lead < 1200.0 or lead > 2400.0 or period < 120 or period > 220 or lifetime < 40 or lifetime > 70 or projectile_speed < 200.0 or projectile_speed > 420.0 or vertical_speed < 400.0 or vertical_speed > 430.0 or projectile_gravity < 900.0 or projectile_gravity > 1200.0 or projectile_radius < 10.0 or projectile_radius > 18.0 or apex_top < ceiling_runner_bottom + 24.0 or int(event.get("blocked_lanes", 0)) != 1 or BiomeRendererScript.biome_id_for_generator(event_x - start_x, generator_version) != "lava":
+			var common_volcano_valid := is_finite(volcano_width) and is_finite(volcano_height) and is_finite(floor_y) and is_finite(ceiling_y) and is_finite(lead) and is_finite(projectile_speed) and is_finite(vertical_speed) and is_finite(projectile_gravity) and is_finite(projectile_radius) and volcano_width >= 100.0 and volcano_width <= 150.0 and volcano_height >= 56.0 and volcano_height <= 96.0 and floor_y - ceiling_y >= 300.0 and lead >= 1200.0 and lead <= 2400.0 and period >= 120 and period <= 220 and lifetime >= 40 and lifetime <= 70 and int(event.get("blocked_lanes", 0)) == 1 and BiomeRendererScript.biome_id_for_generator(event_x - start_x, generator_version) == "lava"
+			var trajectory_valid := true
+			if generator_version < CourseGenerator.GENERATOR_VERSION_15:
+				var legacy_apex_top := floor_y - volcano_height * 0.78 - vertical_speed * vertical_speed / maxf(2.0 * projectile_gravity, 1.0) - projectile_radius
+				trajectory_valid = not event.has("projectile_fan_revision") and not event.has("projectile_arcs") and projectile_speed >= 200.0 and projectile_speed <= 420.0 and vertical_speed >= 400.0 and vertical_speed <= 430.0 and projectile_gravity >= 900.0 and projectile_gravity <= 1200.0 and projectile_radius >= 10.0 and projectile_radius <= 18.0 and legacy_apex_top >= ceiling_runner_bottom + 24.0
+			else:
+				var fan_revision: Variant = event.get("projectile_fan_revision", null)
+				var raw_arcs: Variant = event.get("projectile_arcs", null)
+				trajectory_valid = fan_revision is int and int(fan_revision) == 1 and raw_arcs is Array and raw_arcs.size() == 3 and lifetime == 60
+				if trajectory_valid:
+					for arc_value in raw_arcs:
+						if not arc_value is Dictionary:
+							trajectory_valid = false
+							break
+						var arc: Dictionary = arc_value
+						var arc_speed := float(arc.get("horizontal_speed", NAN))
+						var arc_vertical := float(arc.get("vertical_speed", NAN))
+						var arc_gravity := float(arc.get("gravity", NAN))
+						var arc_radius := float(arc.get("radius", NAN))
+						var arc_lifetime := int(arc.get("lifetime_ticks", -1))
+						var arc_apex := floor_y - volcano_height * 0.78 - arc_vertical * arc_vertical / maxf(2.0 * arc_gravity, 1.0) - arc_radius
+						if not is_finite(arc_speed) or not is_finite(arc_vertical) or not is_finite(arc_gravity) or not is_finite(arc_radius) or arc_speed < 180.0 or arc_speed > 480.0 or arc_vertical < 350.0 or arc_vertical > 620.0 or arc_gravity < 850.0 or arc_gravity > 1250.0 or arc_radius < 9.0 or arc_radius > 18.0 or arc_lifetime < 40 or arc_lifetime > 70 or arc_apex < ceiling_runner_bottom + 24.0:
+							trajectory_valid = false
+							break
+					trajectory_valid = trajectory_valid and absf(projectile_speed - 450.0) < 0.01 and absf(vertical_speed - 580.0) < 0.01 and absf(projectile_gravity - 1100.0) < 0.01 and absf(projectile_radius - 15.0) < 0.01
+			if not common_volcano_valid or not trajectory_valid:
 				return "The volcano has invalid versioned geometry, projectile timing, or biome."
 		previous_x = event_x
+	if generator_version >= CourseGenerator.GENERATOR_VERSION_15:
+		var surface_index := CourseSurfaceIndexScript.new()
+		surface_index.configure(events, initial_floor_y, initial_ceiling_y)
+		for event in events:
+			if str(event.get("kind", "")) == "volcano" and not LavaHazardModelScript.gen15_ceiling_route_is_supported(event, surface_index, start_x):
+				return "The Gen15 volcano fan has an unsupported or unsafe ceiling route across its projectile envelope."
 	var seen_collectibles: Dictionary = {}
 	if collectibles.size() > CoinPlanner.MAX_PLANNED_COINS or (manifest_version == 2 and not collectibles.is_empty()):
 		return "The multiplayer manifest has an invalid collectible set."

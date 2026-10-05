@@ -18,12 +18,17 @@ func _run() -> void:
 	var hub := HubScene.instantiate() as Control
 	get_tree().root.add_child(hub)
 	await get_tree().process_frame
+	_check(not bool(hub.get("_status_label").visible), "routine account sync/guest status is hidden in the compact hub")
+	_check(not bool(hub.get("_seed_label").visible), "technical seed label does not consume hub layout space")
+	_check(str(hub.get("_seed_edit").placeholder_text).contains("blank = random") and not str(hub.get("_seed_edit").placeholder_text).contains("GR-"), "seed field keeps a short human placeholder and leaves code guidance to its tooltip")
 	hub.start_run_requested.connect(_on_start_requested)
 	var seed_edit := hub.get("_seed_edit") as LineEdit
 	seed_edit.text = "not a seed"
 	hub.call("_start_run")
 	_check(start_count == 0, "invalid ordinary input cannot start a run")
+	_check(bool(hub.get("_status_label").visible), "seed validation errors remain visible after routine account copy is removed")
 	seed_edit.text = "GR13-100000003"
+	_check(not bool(hub.get("_status_label").visible), "editing the seed clears the stale validation error")
 	hub.call("_start_run")
 	print("seed_hub_start_count=%d version=%d active=%s" % [start_count, int(challenge.get("generation_version")), str(challenge.get("active"))])
 	_check(start_count == 1 and int(challenge.get("generation_version")) == 13 and not bool(challenge.get("active")), "hub uses the old GR parser for an ordinary frozen Gen13 replay")
@@ -38,14 +43,14 @@ func _run() -> void:
 	challenge.call("clear_challenge")
 	seed_edit.text = "100000014"
 	hub.call("_start_run")
-	_check(start_count == 3 and int(challenge.get("seed_value")) == 100000014 and int(challenge.get("generation_version")) == 14 and not bool(challenge.get("active")), "numeric ordinary input selects the current generator without challenge mode")
+	_check(start_count == 3 and int(challenge.get("seed_value")) == 100000014 and int(challenge.get("generation_version")) == 15 and not bool(challenge.get("active")), "numeric ordinary input selects current Gen15 without challenge mode")
 	seed_edit.text = ""
 	challenge.call("clear_challenge")
 	hub.call("_start_run")
 	_check(start_count == 4 and scene_started, "blank seed input continues through the ordinary random-run path")
 	hub.queue_free()
 	await get_tree().process_frame
-	_check(bool(challenge.call("start_singleplayer_seed_input", "GR14-100000014")), "current Gen14 seed code is accepted for ordinary play")
+	_check(bool(challenge.call("start_singleplayer_seed_input", "GR14-100000014")), "frozen Gen14 seed code remains accepted for ordinary play")
 	var game := MainScene.instantiate() as Node
 	get_tree().root.add_child(game)
 	await get_tree().process_frame

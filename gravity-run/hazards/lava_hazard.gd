@@ -94,6 +94,22 @@ func _draw_crack() -> void:
 		points.append(Vector2(x, y))
 	draw_polyline(points, Color("ff4a17"), 5.0, true)
 	draw_polyline(points, Color("ffc35b"), 1.5, true)
+	var visual_depth := maxf(float(event.get("visual_depth", 0.0)), 0.0)
+	if visual_depth > 0.0:
+		var direction := -1.0 if from_ceiling else 1.0
+		var branch_color := Color("ff5a1b", 0.86)
+		var core_color := Color("ffc35b", 0.88)
+		for branch_index in range(3):
+			var branch_x := local_x + width * (0.22 + float(branch_index) * 0.28)
+			var branch_span := width * (0.11 + 0.025 * float(branch_index % 2))
+			var outer := PackedVector2Array([
+				Vector2(branch_x, top + direction * 2.0),
+				Vector2(branch_x - branch_span * 0.36, top + direction * visual_depth * 0.38),
+				Vector2(branch_x + branch_span * 0.12, top + direction * visual_depth * 0.64),
+				Vector2(branch_x + branch_span * 0.48, top + direction * visual_depth),
+			])
+			draw_polyline(outer, branch_color, 4.0, true)
+			draw_polyline(outer, core_color, 1.0, true)
 
 func _draw_volcano() -> void:
 	var floor_y := float(event.get("floor_y", 460.0))
@@ -107,6 +123,24 @@ func _draw_volcano() -> void:
 	for projectile in Model.projectiles_at(event, course_start_x, simulation_tick):
 		var center := Vector2(float(projectile.get("x", 0.0)) - position.x, float(projectile.get("y", 0.0)))
 		var radius := float(projectile.get("radius", 14.0))
-		draw_circle(center, radius * 1.35, Color(1.0, 0.20, 0.04, 0.26))
-		draw_circle(center, radius, Color("ff5a18"))
-		draw_circle(center + Vector2(-radius * 0.18, -radius * 0.20), radius * 0.48, Color("ffd05a"))
+		if int(event.get("projectile_fan_revision", 0)) == Model.GEN15_FAN_REVISION:
+			_draw_fan_fireball(center, radius, Vector2(float(projectile.get("vx", 0.0)), float(projectile.get("vy", 0.0))))
+		else:
+			draw_circle(center, radius * 1.35, Color(1.0, 0.20, 0.04, 0.26))
+			draw_circle(center, radius, Color("ff5a18"))
+			draw_circle(center + Vector2(-radius * 0.18, -radius * 0.20), radius * 0.48, Color("ffd05a"))
+
+func _draw_fan_fireball(center: Vector2, radius: float, velocity: Vector2) -> void:
+	var motion := velocity.normalized() if velocity.length_squared() > 0.001 else Vector2.UP
+	var side := Vector2(-motion.y, motion.x)
+	draw_circle(center, radius * 1.45, Color(1.0, 0.20, 0.04, 0.24))
+	var flame := PackedVector2Array([
+		center + motion * radius * 1.12,
+		center + motion * radius * 0.45 + side * radius * 0.72,
+		center - motion * radius * 1.65 + side * radius * 0.30,
+		center - motion * radius * 1.12,
+		center - motion * radius * 1.65 - side * radius * 0.30,
+		center + motion * radius * 0.45 - side * radius * 0.72,
+	])
+	draw_colored_polygon(flame, Color("ff4a12"))
+	draw_circle(center + motion * radius * 0.10, radius * 0.56, Color("ffd35a"))

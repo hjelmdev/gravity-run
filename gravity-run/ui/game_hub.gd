@@ -28,8 +28,8 @@ func _build() -> void:
 	panel.anchor_right = 0.5
 	panel.anchor_top = 0.5
 	panel.anchor_bottom = 0.5
-	var panel_width := minf(560.0, get_viewport_rect().size.x - 32.0)
-	var panel_height := minf(500.0, get_viewport_rect().size.y - 28.0)
+	var panel_width := minf(560.0, get_viewport_rect().size.x - 24.0)
+	var panel_height := minf(468.0, get_viewport_rect().size.y - 24.0)
 	panel.offset_left = -panel_width * 0.5
 	panel.offset_right = panel_width * 0.5
 	panel.offset_top = -panel_height * 0.5
@@ -44,29 +44,33 @@ func _build() -> void:
 	panel.add_child(scroll)
 	var layout := VBoxContainer.new()
 	layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	layout.add_theme_constant_override("separation", 8)
+	layout.add_theme_constant_override("separation", 6)
 	scroll.add_child(layout)
 	var title := Label.new()
 	title.text = tr("GAME HUB")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 24)
+	title.add_theme_font_size_override("font_size", 22)
 	title.add_theme_color_override("font_color", Color("edf3ff"))
 	layout.add_child(title)
 	_status_label = Label.new()
 	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_status_label.add_theme_font_size_override("font_size", 12)
 	_status_label.add_theme_color_override("font_color", Color("b8c7dc"))
+	_status_label.visible = false
 	layout.add_child(_status_label)
 	_seed_label = Label.new()
-	_seed_label.text = tr("Optional seed: number or GR-version-seed code")
+	_seed_label.text = ""
 	_seed_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_seed_label.add_theme_font_size_override("font_size", 12)
 	_seed_label.add_theme_color_override("font_color", Color("b8c7dc"))
+	_seed_label.visible = false
 	layout.add_child(_seed_label)
 	_seed_edit = LineEdit.new()
-	_seed_edit.placeholder_text = tr("Leave blank for a random course")
+	_seed_edit.placeholder_text = tr("Seed (optional; blank = random)")
+	_seed_edit.tooltip_text = tr("Enter a number or a GR-version-seed challenge code.")
 	_seed_edit.max_length = 32
 	_seed_edit.clear_button_enabled = true
+	_seed_edit.text_changed.connect(_on_seed_input_changed)
 	layout.add_child(_seed_edit)
 	_balance_label = Label.new()
 	_balance_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -101,7 +105,7 @@ func _build() -> void:
 	layout.add_child(equipment_row)
 	equipment_row.add_child(_make_icon_action("inventory", tr("Character and inventory"), tr("Character / Inventory"), character_requested.emit))
 	equipment_row.add_child(_make_icon_action("shop", tr("Shop"), tr("Shop"), shop_requested.emit))
-	var main_menu_button := _make_button(tr("Main menu"), 32.0)
+	var main_menu_button := _make_button(tr("Main menu"), 30.0)
 	main_menu_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	main_menu_button.pressed.connect(main_menu_requested.emit)
 	layout.add_child(main_menu_button)
@@ -114,7 +118,7 @@ func _make_icon_action(icon_name: String, accessible_name: String, caption: Stri
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 3)
 	var button := Button.new()
-	button.custom_minimum_size = Vector2(76.0, 64.0)
+	button.custom_minimum_size = Vector2(62.0, 48.0)
 	button.tooltip_text = accessible_name
 	button.accessibility_name = accessible_name
 	var icon := Control.new()
@@ -149,12 +153,14 @@ func _make_button(text_value: String, height: float) -> Button:
 func _update_account_summary() -> void:
 	if not is_instance_valid(_status_label):
 		return
-	_status_label.text = tr("Signed in · inventory is synced") if AuthService.is_authenticated else tr("Guest · sign in to save inventory")
+	# Keep routine account state out of the launch form. This label is reserved
+	# for actionable validation/status messages set by the relevant interaction.
+	_status_label.visible = not _status_label.text.is_empty()
 	_balance_label.text = tr("Coins: %d") % AccountProgress.wallet_coins if AuthService.is_authenticated else tr("Coins: —")
 	if is_instance_valid(_start_button):
 		_start_button.text = tr("Start challenge") if ChallengeService.active else tr("Start run")
 	if is_instance_valid(_seed_label):
-		_seed_label.visible = not ChallengeService.active
+		_seed_label.visible = false
 	if is_instance_valid(_seed_edit):
 		_seed_edit.visible = not ChallengeService.active
 		_seed_edit.editable = not ChallengeService.active
@@ -166,8 +172,16 @@ func _start_run() -> void:
 	var seed_input := _seed_edit.text.strip_edges() if is_instance_valid(_seed_edit) and not ChallengeService.active else ""
 	if not seed_input.is_empty() and not bool(ChallengeService.call("start_singleplayer_seed_input", seed_input)):
 		_status_label.text = tr(str(ChallengeService.get("last_error")))
+		_status_label.visible = true
 		return
+	_status_label.text = ""
+	_status_label.visible = false
 	start_run_requested.emit()
+
+func _on_seed_input_changed(_new_text: String) -> void:
+	if is_instance_valid(_status_label):
+		_status_label.text = ""
+		_status_label.visible = false
 
 func _on_account_changed(_authenticated: bool, _email: String) -> void:
 	_update_account_summary()
@@ -186,6 +200,6 @@ func _panel_style() -> StyleBoxFlat:
 	style.set_corner_radius_all(14)
 	style.content_margin_left = 18.0
 	style.content_margin_right = 18.0
-	style.content_margin_top = 15.0
-	style.content_margin_bottom = 15.0
+	style.content_margin_top = 12.0
+	style.content_margin_bottom = 12.0
 	return style

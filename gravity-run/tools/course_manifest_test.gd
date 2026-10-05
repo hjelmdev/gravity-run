@@ -67,7 +67,7 @@ func _run() -> void:
 		var current: Resource = current_result.manifest
 		var repeated: Resource = current_repeat.manifest
 		var coins: Array = current.get("collectibles")
-		_check(int(current.get("manifest_version")) == 7, "current generator should use lava-enabled manifest version 7")
+		_check(int(current.get("manifest_version")) == 8, "current generator should use the versioned lava-fan manifest v8")
 		_check(not coins.is_empty(), "current manifest should contain shared coins")
 		var saw_count := 0
 		for event in current.get("events"):

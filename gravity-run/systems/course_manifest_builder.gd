@@ -9,6 +9,8 @@ const ManifestScript := preload("res://systems/multiplayer_course_manifest.gd")
 const CoinPlanner := preload("res://systems/shared_coin_planner.gd")
 const SawBladeModel := preload("res://systems/saw_blade_model.gd")
 const BiomeRendererScript := preload("res://biomes/biome_renderer.gd")
+const LavaHazardModel := preload("res://systems/lava_hazard_model.gd")
+const CourseSurfaceIndexScript := preload("res://systems/course_surface_index.gd")
 
 const PLAYER_START_X := 180.0
 const WORLD_WIDTH := 960.0
@@ -41,7 +43,7 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 	var source_events: Array[Dictionary] = generator.get_planned_events()
 	var manifest := ManifestScript.new() as MultiplayerCourseManifest
 	manifest.generator_version = generator_version
-	manifest.manifest_version = 7 if generator_version >= CourseGenerator.GENERATOR_VERSION_14 else (6 if generator_version >= CourseGenerator.GENERATOR_VERSION_12 else (5 if generator_version >= CourseGenerator.GENERATOR_VERSION_10 else (4 if generator_version >= CourseGenerator.GENERATOR_VERSION_9 else (3 if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION else 2))))
+	manifest.manifest_version = 8 if generator_version >= CourseGenerator.GENERATOR_VERSION_15 else (7 if generator_version >= CourseGenerator.GENERATOR_VERSION_14 else (6 if generator_version >= CourseGenerator.GENERATOR_VERSION_12 else (5 if generator_version >= CourseGenerator.GENERATOR_VERSION_10 else (4 if generator_version >= CourseGenerator.GENERATOR_VERSION_9 else (3 if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION else 2)))))
 	manifest.course_identity = str(definition.call("get_course_identity"))
 	manifest.seed_value = seed_value
 	manifest.course_length_px = course_length_px
@@ -49,6 +51,8 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 	manifest.finish_x = PLAYER_START_X + float(course_length_px)
 	manifest.ruleset_fingerprint = str(ruleset.call("get_fingerprint"))
 	manifest.events = _resolve_events(source_events, course_length_px, generator_version)
+	if generator_version >= CourseGenerator.GENERATOR_VERSION_15:
+		manifest.events = filter_unsafe_gen15_volcanoes(manifest.events, manifest.start_x)
 	if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION:
 		manifest.collectibles = CoinPlanner.plan(seed_value, manifest.start_x, manifest.finish_x, manifest.events, FLOOR_START_Y, CEILING_START_Y, int(ruleset.get("coin_revision")), float(ruleset.get("coin_density")))
 	manifest.manifest_hash = manifest.calculate_hash()
@@ -57,10 +61,24 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 		return {"manifest": null, "error": manifest_error}
 	return {"manifest": manifest, "error": ""}
 
+func filter_unsafe_gen15_volcanoes(events: Array[Dictionary], course_start_x: float) -> Array[Dictionary]:
+	var surface_index := CourseSurfaceIndexScript.new()
+	surface_index.configure(events, FLOOR_START_Y, CEILING_START_Y)
+	var filtered: Array[Dictionary] = []
+	for event in events:
+		if str(event.get("kind", "")) == "volcano" and not LavaHazardModel.gen15_ceiling_route_is_supported(event, surface_index, course_start_x):
+			continue
+		filtered.append(event)
+	return filtered
+
 func _make_multiplayer_ruleset(generator_version: int) -> Resource:
 	var ruleset := CourseRulesetScript.new() as Resource
 	ruleset.set("ruleset_id", &"multiplayer_race")
-	if generator_version >= CourseGenerator.GENERATOR_VERSION_14:
+	if generator_version >= CourseGenerator.GENERATOR_VERSION_15:
+		ruleset.set("revision", 12)
+		ruleset.set("event_density", 1.55)
+		ruleset.set("coin_revision", 2)
+	elif generator_version >= CourseGenerator.GENERATOR_VERSION_14:
 		ruleset.set("revision", 11)
 		ruleset.set("event_density", 1.55)
 		ruleset.set("coin_revision", 2)
@@ -337,16 +355,20 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 				if floor_surface_y - ceiling_surface_y < 190.0:
 					event_index += 1
 					continue
-				resolved.append({
+				var crack_event := {
 					"event_id": event_prefix,
 					"kind": "lava_crack",
 					"x": event_x,
 					"y": surface_y,
-					"width": clampf(float(source.get("width", 120.0)), 96.0, 150.0),
-					"hot_depth": clampf(float(source.get("hot_depth", 14.0)), 8.0, 20.0),
+					"width": clampf(float(source.get("width", 120.0)), 96.0, 150.0) if generator_version < CourseGenerator.GENERATOR_VERSION_15 else clampf(float(source.get("width", 164.0)), 150.0, 180.0),
+					"hot_depth": clampf(float(source.get("hot_depth", 14.0)), 8.0, 20.0) if generator_version < CourseGenerator.GENERATOR_VERSION_15 else clampf(float(source.get("hot_depth", 18.0)), 12.0, 24.0),
 					"from_ceiling": from_ceiling,
 					"blocked_lanes": CourseGenerator.CEILING_LANE if from_ceiling else CourseGenerator.FLOOR_LANE,
-				})
+				}
+				if generator_version >= CourseGenerator.GENERATOR_VERSION_15:
+					crack_event["lava_crack_revision"] = int(source.get("lava_crack_revision", 1))
+					crack_event["visual_depth"] = clampf(float(source.get("visual_depth", 32.0)), 24.0, 44.0)
+				resolved.append(crack_event)
 			"volcano":
 				if generator_version < CourseGenerator.GENERATOR_VERSION_14 or BiomeRendererScript.biome_id_for_generator(course_distance, generator_version) != "lava":
 					event_index += 1
@@ -354,7 +376,7 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 				if floor_surface_y - ceiling_surface_y < 300.0:
 					event_index += 1
 					continue
-				resolved.append({
+				var volcano_event := {
 					"event_id": event_prefix,
 					"kind": "volcano",
 					"x": event_x,
@@ -364,13 +386,22 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 					"height": clampf(float(source.get("height", 76.0)), 56.0, 96.0),
 					"eruption_lead": int(source.get("eruption_lead", 1800)),
 					"eruption_period_ticks": int(source.get("eruption_period_ticks", 156)),
-					"projectile_lifetime_ticks": int(source.get("projectile_lifetime_ticks", 58)),
+					"projectile_lifetime_ticks": int(source.get("projectile_lifetime_ticks", 58)) if generator_version < CourseGenerator.GENERATOR_VERSION_15 else 60,
 					"projectile_speed": float(source.get("projectile_speed", 330.0)),
 					"projectile_vertical_speed": float(source.get("projectile_vertical_speed", 570.0)),
 					"projectile_gravity": float(source.get("projectile_gravity", 1200.0)),
 					"projectile_radius": float(source.get("projectile_radius", 14.0)),
 					"blocked_lanes": CourseGenerator.FLOOR_LANE,
-				})
+				}
+				if generator_version >= CourseGenerator.GENERATOR_VERSION_15:
+					volcano_event["projectile_fan_revision"] = int(source.get("projectile_fan_revision", LavaHazardModel.GEN15_FAN_REVISION))
+					var arcs: Variant = source.get("projectile_arcs", LavaHazardModel.gen15_fan_arcs())
+					volcano_event["projectile_arcs"] = (arcs as Array).duplicate(true) if arcs is Array else []
+					volcano_event["projectile_speed"] = 450.0
+					volcano_event["projectile_vertical_speed"] = 580.0
+					volcano_event["projectile_gravity"] = 1100.0
+					volcano_event["projectile_radius"] = 15.0
+				resolved.append(volcano_event)
 			_:
 				push_error("Unsupported multiplayer course event kind '%s'." % kind)
 		event_index += 1

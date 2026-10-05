@@ -13,6 +13,8 @@ func _run_tests() -> void:
 	_check(str(TranslationServer.translate("New Game")) == "Nytt spel", "Swedish menu translation should load")
 	_check(str(TranslationServer.translate("GAME HUB")) == "SPEL", "Swedish game hub translation should load")
 	_check(str(TranslationServer.translate("Start run")) == "Starta runda", "Swedish run action should load")
+	_check(str(TranslationServer.translate("Seed (optional; blank = random)")) == "Bana (valfritt; tomt = slumpad)", "Swedish optional seed placeholder should load")
+	_check(str(TranslationServer.translate("Enter a number or a GR-version-seed challenge code.")) == "Ange ett tal eller en GR-versionskod för utmaningen.", "Swedish challenge-code guidance should load")
 	_check(str(TranslationServer.translate("Character / Inventory")) == "Karaktär / väska", "Swedish inventory action should load")
 	_check(str(TranslationServer.translate("Bag · 24 slots per page")) == "Väska · 24 platser per sida", "Swedish inventory grid label should load")
 	_check(str(TranslationServer.translate("Coins: %d") % 250) == "Mynt: 250", "Swedish wallet label should load")

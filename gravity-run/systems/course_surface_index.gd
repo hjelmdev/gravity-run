@@ -45,6 +45,40 @@ func surface_at(x: float, ceiling: bool) -> Dictionary:
 	var weight := clampf((x - start_x) / maxf(end_x - start_x, 0.000001), 0.0, 1.0)
 	return {"y": lerpf(float(starts[index]), float(ends[index]), weight), "supported": bool(supports[index])}
 
+func support_boundaries(ceiling: bool) -> Array[float]:
+	var profile: Dictionary = _ceiling_profile if ceiling else _floor_profile
+	var result: Array[float] = []
+	for value in profile.get("boundaries", []):
+		result.append(float(value))
+	return result
+
+func interval_is_supported(start_x: float, end_x: float, ceiling: bool) -> bool:
+	var left := minf(start_x, end_x)
+	var right := maxf(start_x, end_x)
+	for event_value in _events:
+		if not event_value is Dictionary:
+			continue
+		var event: Dictionary = event_value
+		if str(event.get("kind", "")) != "gap" or bool(event.get("from_ceiling", false)) != ceiling:
+			continue
+		var gap_left := float(event.get("x", 0.0)) - float(event.get("width", 0.0)) * 0.5
+		var gap_right := gap_left + float(event.get("width", 0.0))
+		if right >= gap_left and left <= gap_right:
+			return false
+	return bool(surface_at(left, ceiling).get("supported", false)) and bool(surface_at(right, ceiling).get("supported", false))
+
+func lowest_surface_y_over_interval(start_x: float, end_x: float, ceiling: bool) -> float:
+	var left := minf(start_x, end_x)
+	var right := maxf(start_x, end_x)
+	var lowest_y := maxf(float(surface_at(left, ceiling).get("y", 0.0)), float(surface_at(right, ceiling).get("y", 0.0)))
+	for boundary in support_boundaries(ceiling):
+		if boundary < left or boundary > right:
+			continue
+		for sample_x in [boundary - BOUNDARY_EPSILON * 2.0, boundary, boundary + BOUNDARY_EPSILON * 2.0]:
+			if sample_x >= left and sample_x <= right:
+				lowest_y = maxf(lowest_y, float(surface_at(sample_x, ceiling).get("y", lowest_y)))
+	return lowest_y
+
 func _build_profile(ceiling: bool) -> Dictionary:
 	var boundaries: Array[float] = []
 	for event_value in _events:

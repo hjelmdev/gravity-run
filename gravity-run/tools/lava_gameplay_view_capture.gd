@@ -2,10 +2,12 @@ extends Node
 ## Non-interactive visual evidence from the real main.tscn SP route and HUD.
 
 const OUTPUT_DIR := "E:/Utveckling/Gravity Run/.codex-lava-review"
-const SEED := 100000918
 const GENERATOR := preload("res://systems/course_generator.gd")
 const LAVA_MODEL := preload("res://systems/lava_hazard_model.gd")
 const RunnerMotion := preload("res://systems/runner_motion.gd")
+const ManifestBuilder := preload("res://systems/course_manifest_builder.gd")
+const WorldSimulation := preload("res://systems/multiplayer_v2/v2_world_simulation.gd")
+const Presentation := preload("res://systems/race_course_presentation.gd")
 
 var main: Node2D
 var failed := false
@@ -27,11 +29,12 @@ func _capture() -> void:
 	get_tree().quit(1 if failed else 0)
 
 func _capture_one(dimensions: Vector2i, kind: String) -> void:
-	if not bool(ChallengeService.call("start_singleplayer_seed_input", "GR%d-%d" % [GENERATOR.GENERATOR_VERSION_14, SEED])):
+	var seed_value: int = 100000034 if kind == "volcano" else 100000014
+	if not bool(ChallengeService.call("start_singleplayer_seed_input", "GR%d-%d" % [GENERATOR.GENERATOR_VERSION_15, seed_value])):
 		push_error("Could not configure the documented seeded ordinary SP capture run.")
 		failed = true
 		return
-	seed(SEED)
+	seed(seed_value)
 	main = load("res://main.tscn").instantiate() as Node2D
 	main.set("demo_mode", false)
 	main.set_physics_process(false)
@@ -42,7 +45,7 @@ func _capture_one(dimensions: Vector2i, kind: String) -> void:
 	main.call("_sync_screen_size")
 	var generator: Object = main.get("course_generator")
 	generator.call("ensure_horizon", 45000.0, 500.0, 900.0, 1100.0)
-	var resolved_events: Array[Dictionary] = main.get("_manifest_builder").call("_resolve_events", generator.call("get_planned_events"), 45000, 14)
+	var resolved_events: Array[Dictionary] = main.get("_manifest_builder").call("_resolve_events", generator.call("get_planned_events"), 45000, GENERATOR.GENERATOR_VERSION_15)
 	var chosen: Dictionary = {}
 	for resolved in resolved_events:
 		if str(resolved.get("kind", "")) != kind:
@@ -112,8 +115,54 @@ func _capture_one(dimensions: Vector2i, kind: String) -> void:
 			push_error("Failed to save actual SP capture %s" % path)
 			failed = true
 		else:
-			print("LAVA_MAIN_CAPTURE kind=%s viewport=%s course_distance=%.1f y=%.2f resolved=%.2f support=%s path=%s" % [kind, str(dimensions), course_distance, actual_surface, resolved_surface, str(supported), path])
+			print("LAVA_MAIN_CAPTURE gen=15 seed=%d kind=%s viewport=%s course_distance=%.1f y=%.2f resolved=%.2f support=%s path=%s" % [seed_value, kind, str(dimensions), course_distance, actual_surface, resolved_surface, str(supported), path])
+		await _capture_mp(dimensions, seed_value, course_distance, tick, kind, aspect)
 	main.queue_free()
+	await get_tree().process_frame
+
+func _capture_mp(dimensions: Vector2i, seed_value: int, camera_left: float, tick: int, kind: String, aspect: String) -> void:
+	var built: Dictionary = ManifestBuilder.new().build(seed_value, 45000, GENERATOR.GENERATOR_VERSION_15)
+	if built.get("manifest") == null:
+		push_error("MP capture could not build the same Gen15 manifest")
+		failed = true
+		return
+	var viewport := SubViewport.new()
+	viewport.size = dimensions
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	get_tree().root.add_child(viewport)
+	var camera := Camera2D.new()
+	camera.position = Vector2(camera_left + float(dimensions.x) * 0.5, float(dimensions.y) * 0.5)
+	viewport.add_child(camera)
+	camera.make_current()
+	var presentation := Presentation.new() as Node2D
+	viewport.add_child(presentation)
+	var world := WorldSimulation.new()
+	var manifest: Resource = built.manifest
+	if not str(world.configure(manifest)).is_empty():
+		push_error("MP capture shared-world model rejected its Gen15 manifest")
+		failed = true
+		viewport.queue_free()
+		await get_tree().process_frame
+		return
+	world.tick = tick
+	if not str(presentation.call("load_manifest", manifest)).is_empty():
+		push_error("MP presentation rejected the same Gen15 manifest")
+		failed = true
+		viewport.queue_free()
+		await get_tree().process_frame
+		return
+	presentation.call("set_camera_left", camera_left)
+	presentation.call("set_world_state", world.render_state(0.0))
+	presentation.queue_redraw()
+	await RenderingServer.frame_post_draw
+	var image := viewport.get_texture().get_image()
+	var path := OUTPUT_DIR.path_join("lava_mp_%s_%s.png" % [kind, aspect])
+	if image == null or image.is_empty() or image.save_png(path) != OK:
+		push_error("Failed to save MP capture %s" % path)
+		failed = true
+	else:
+		print("LAVA_MP_CAPTURE gen=15 seed=%d kind=%s tick=%d viewport=%s path=%s" % [seed_value, kind, tick, str(dimensions), path])
+	viewport.queue_free()
 	await get_tree().process_frame
 
 func _place_main_at(course_distance: float) -> void:

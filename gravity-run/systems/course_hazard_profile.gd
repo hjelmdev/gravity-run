@@ -154,9 +154,10 @@ func build_threat_intervals(event: Dictionary) -> Array[Dictionary]:
 		intervals.append({"start": forecast_center - half_width, "end": forecast_center + half_width, "blocked_lanes": int(event.get("blocked_lanes", FLOOR_LANE))})
 		return intervals
 	if StringName(event.get("kind", "")) == &"volcano":
-		# Paired ballistic blobs occupy the floor lane across this bounded
-		# approach window. The ceiling remains a deliberately safe route.
-		intervals.append({"start": forecast_center - 470.0, "end": forecast_center + 470.0, "blocked_lanes": FLOOR_LANE})
+		# The envelope grows only in the Gen15 fan variant. The ceiling remains
+		# the authored safe lane, validated against every arc and runner clearance.
+		var reach := 540.0 if int(event.get("projectile_fan_revision", 0)) == 1 else 470.0
+		intervals.append({"start": forecast_center - reach, "end": forecast_center + reach, "blocked_lanes": FLOOR_LANE})
 		return intervals
 	if not threat_windows.is_empty():
 		for window in threat_windows:
