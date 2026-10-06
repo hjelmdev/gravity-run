@@ -1,7 +1,14 @@
 # Gen16 audio, coin and stall follow-up
 
-Status: REVIEW_READY for root review. No commit, backend change or publication has been made.
+Status: RELEASE_COMPLETE. Scoped source and Pages publication are verified; no backend migration was required.
 
+## Published release (2026-10-06)
+
+- Azure source branch `codex/current-prototype`: feature commit `84f59c1e245eae6942d61603ee5d6641a5532b4c`, build metadata commit `79c1b36062db56ba4b021c08c0bae2f9b95f38cf`; remote head verified at `79c1b36062db56ba4b021c08c0bae2f9b95f38cf` before this report-only follow-up.
+- Clean archive: exact source commit `79c1b36062db56ba4b021c08c0bae2f9b95f38cf`, exported with Godot 4.7.2 Web preset. Pages commit `eba426a744bc1c015f41624275f85beace5ea438` on `main`; workflow [37491539016](https://github.com/hjelmdev/gravity-run/actions/runs/37491539016) completed successfully for that exact head.
+- Build ID in both `docs/BUILD_ID` and `docs/game/BUILD_ID`: `audio-diagnostics-84f59c1-20261006`; root wrapper points to the matching game loader and loader mainPack is `index.audio-diagnostics-84f59c1-20261006.pck`.
+- Local and public PCK: 3,463,008 bytes, SHA-256 `BA366B8CD017525912159EC159C0EE513FA989AE7FBCFB28FAF37E86327DC31C`. Public versioned PCK returned HTTP 200. Root and game BUILD_ID and loader returned HTTP 200 after deployment.
+- No database migration, API version or gameplay generator change was included.
 ## Confirmed SP/MP audio routing correction
 
 A real SP scene probe reproduced a barrel that destroyed a block well outside the camera still starting `barrel_destroy`. The existing MP presentation callback already culled this event by camera range. Both paths now use `SfxAudibilityRules.is_world_x_audible`: camera-left world coordinate, viewport width, and the same inclusive 64 px margin (with a 0.001 px float-edge tolerance). Visible collision sounds remain enabled; events outside the shared interval are suppressed. The test drives an actual barrel destruction signal in `main.tscn`, and calls the MP presentation callback for matching positions.
@@ -20,12 +27,12 @@ AudioContext state/output timestamp is not currently available through Godot 4.7
 
 ## Verification run (2026-10-06)
 
-- `tools/singleplayer_barrel_audio_visibility_test.tscn`: PASS, `failures=0 starts=4` (latest run PID 69836 exited 0). Actual `main.tscn`/barrel destruction path; visible sound, outside-range silence, inclusive edge parity with MP, the game's own audio-capture start seam and callback/coin hooks, actual seed/challenge state preserved, parsed JSON export, visible download-button rect/touch with unchanged gravity, and menu-demo startup blocked from creating/starting the capture.
+- `tools/singleplayer_barrel_audio_visibility_test.tscn`: PASS, `failures=0 starts=4` (latest clean-archive run PID 45664 exited 0). Actual `main.tscn`/barrel destruction path; visible sound, outside-range silence, inclusive edge parity with MP, the game's own audio-capture start seam and callback/coin hooks, actual seed/challenge state preserved, parsed JSON export, visible download-button rect/touch with unchanged gravity, and menu-demo startup blocked from creating/starting the capture.
 - `tools/sfx_shared_pool_test.tscn`: PASS, `failures=0 starts=4`. Existing pool/dedup plus opt-in bounds, event request timing, callback gap and coin contact sample.
 - `tools/multiplayer_v2/right_edge_capture_match_integration_test.tscn`: PASS, `failures=0` (rerun log `../.codex-audio-analysis/mp-audio-final9.stdout.log`, exit 0). Actual MP match scene; touch/release over the visible audio control does not queue a flip, the action handler starts the 50 ms test capture and closes the overlay, tracing continues while play resumes, and Save diagnostics emits parseable JSON with no screenshot payload/readback. The product default is 12 seconds. `MP_AUDIO_TOUCH_DISPATCHED` records whether the headless runner routed the synthetic touch to the Button; the test does not claim device-level touch dispatch.
 - `tools/multiplayer_v2/right_edge_capture_contract_test.tscn`: PASS with real OpenGL renderer, 29 validated PNG frames in the ZIP, 29 readbacks, then cleared capture. This was re-run non-headless because headless cannot deliver `frame_post_draw`/GPU readback.
 - Godot 4.7.2 editor parse/import: PASS, exit 0; `SfxAudibilityRules` loaded. The known isolated-profile `Failed to read the root certificate store` warning is environmental.
-- All test-owned Godot PIDs exited normally (latest MP 74496, SP 69836, SFX pool 66696); an earlier parse-failure process PID 11408 was explicitly stopped. I did not terminate the user's editor. A final full process enumeration was denied by the host, so this only certifies the processes started by these checks.
+- All test-owned Godot PIDs exited normally (clean-archive MP 71896, SP 45664, SFX pool 28384, GPU capture 38428); an earlier parse-failure process PID 11408 was explicitly stopped. I did not terminate the user's editor. A final full process enumeration was denied by the host, so this only certifies the processes started by these checks.
 
 ## Still unresolved
 
