@@ -27,4 +27,7 @@ Root inspected the corrected variant-specific legacy ghost path, clamped icicle 
 
 Root viewed the updated pointed-ice phase image and actual main haunted gameplay image with HUD/runner/biome. Pool/chaser have actual main captures; icicle remains covered by phase views and real-time route/model tests. Connected MP, real phone keyboard/paste/cancel, and portrait actual gameplay are not independently verified. This limited visual evidence is accepted for this release, without claiming device validation. Existing mobile parent-page entry implementation is reused, with SP GR parsing and MP integer validation retained.
 
-All concrete correctness findings above are resolved. Publish only feature-scoped hunks and reviewed .002 migration. Root will independently verify final workflow/head, BUILD_ID/loaders and downloaded public PCK hash before announcing completion.
+All concrete correctness findings above are resolved. Publish only feature-scoped hunks and reviewed .002 migration. Release verified: workflow 37528383927 completed/success for Pages head 4333b4b0d82c809782267ef59e1e97d518f3f602; both BUILD_ID markers and root/game loaders use biome-chaser-icicles-gen17-a219fa7-20261006. Public PCK is 3,533,324 bytes, SHA-256 8829701B162DE096F44D4A5DEDDDE98A0A4EE94BAB8AEFDB3304AFCE57344845, matching the clean exact-commit export.
+
+
+Azure source commit a219fa78d1011307bb050d1ee9fbff535b989aa3 and live migration 202610060002 are confirmed. The docs/game active Pages bundle and root loader were published in Pages commit 4333b4b0d82c809782267ef59e1e97d518f3f602. No online connected match or physical phone keyboard test is claimed.
