@@ -71,6 +71,9 @@ def coin():
 def flip():
     duration = 0.28
     data = []
+    # Keep the original gain reference while omitting the rejected air layer.
+    # This preserves the accepted tone's phase, envelope and level exactly.
+    original_mix = []
     rng = random.Random(42)
     air = 0.0
     for i in range(round(duration * RATE)):
@@ -78,8 +81,10 @@ def flip():
         phase = TAU * (240 * t + 1100 * t * t)
         air = 0.65 * air + 0.35 * rng.uniform(-1, 1)
         envelope = math.sin(math.pi * t / duration) ** 2
-        data.append((0.7 * math.sin(phase) + 0.3 * air) * envelope)
-    return soften(data)
+        original_mix.append((0.7 * math.sin(phase) + 0.3 * air) * envelope)
+        data.append(0.7 * math.sin(phase) * envelope)
+    reference_peak = max(abs(x) for x in original_mix) or 1
+    return [x * 0.18 / reference_peak for x in data]
 
 
 def impact():
