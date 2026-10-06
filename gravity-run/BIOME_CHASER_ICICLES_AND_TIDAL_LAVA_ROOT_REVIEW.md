@@ -31,3 +31,8 @@ All concrete correctness findings above are resolved. Publish only feature-scope
 
 
 Azure source commit a219fa78d1011307bb050d1ee9fbff535b989aa3 and live migration 202610060002 are confirmed. The docs/game active Pages bundle and root loader were published in Pages commit 4333b4b0d82c809782267ef59e1e97d518f3f602. No online connected match or physical phone keyboard test is claimed.
+
+## Independent root publication verification
+
+Root independently verified workflow 37528383927 completed/success at exact Pages head 4333b4b0d82c809782267ef59e1e97d518f3f602. Root and game BUILD_ID plus both loaders returned HTTP 200 and the expected biome-chaser-icicles-gen17-a219fa7-20261006 marker. Independently downloaded public PCK is 3,533,324 bytes with SHA256 8829701B162DE096F44D4A5DEDDDE98A0A4EE94BAB8AEFDB3304AFCE57344845, identical to the clean export. Azure remote head was verified at documentation commit 76bf47e5e8b84ff4dfcb449b9f842230c5757878. Follow-up automation paused on completion. User device input testing remains as documented.
+
