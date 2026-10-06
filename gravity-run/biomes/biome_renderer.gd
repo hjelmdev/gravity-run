@@ -249,32 +249,11 @@ static func _draw_classic_backdrop(canvas: CanvasItem, left: float, size: Vector
 		canvas.draw_circle(Vector2(screen_x, y), radius, color)
 
 static func _draw_cave_backdrop(canvas: CanvasItem, left: float, size: Vector2, camera_course_distance: float, fragment_offset: float, biome: BiomeDefinition) -> void:
-	var ridge_samples := cave_ridge_diagnostic_samples(camera_course_distance, fragment_offset, size.x, size.y)
 	for layer in range(3):
-		var amplitude := size.y * (0.13 + 0.055 * float(layer))
-		var base_y := size.y * (0.32 + 0.18 * float(layer))
-		var points := PackedVector2Array()
-		var spacing := 48.0
-		var sample: Dictionary = ridge_samples[layer]
-		var layer_parallax_left := float(sample.get("phase_left", 0.0))
-		var first_sample := floori(layer_parallax_left / spacing)
-		var last_sample := ceili((layer_parallax_left + size.x) / spacing)
-		for i in range(first_sample, last_sample + 1):
-			var course_x := float(i) * spacing
-			var x := left + course_x - layer_parallax_left
-			var phase := course_x * 0.003
-			var ridge_y := clampf(base_y + sin(phase) * amplitude + cos(phase * 0.37) * amplitude * 0.4, size.y * 0.04, size.y * 0.94)
-			points.append(Vector2(x, ridge_y))
-		if points.is_empty():
+		var clipped := cave_clipped_ridge_vertices(left, camera_course_distance, fragment_offset, size.x, size.y, layer)
+		if clipped.size() < 2:
 			continue
-		points.append(Vector2(left + size.x, size.y))
-		points.append(Vector2(left, size.y))
 		var color := biome.layer_colors[layer % biome.layer_colors.size()]
-		var clipped := PackedVector2Array([Vector2(left, float(sample.get("left_y", 0.0))), Vector2(left + size.x, float(sample.get("right_y", 0.0)))])
-		for point_index in range(points.size()):
-			var point := points[point_index]
-			if point.x > left and point.x < left + size.x:
-				clipped.insert(clipped.size() - 1, point)
 		for point_index in range(clipped.size() - 1):
 			var segment := PackedVector2Array([
 				clipped[point_index],
@@ -293,6 +272,35 @@ static func _draw_cave_backdrop(canvas: CanvasItem, left: float, size: Vector2, 
 		crystal.a = 0.68
 		canvas.draw_colored_polygon(PackedVector2Array([Vector2(x, y - 6.0), Vector2(x + 5.0, y), Vector2(x, y + 8.0), Vector2(x - 5.0, y)]), crystal)
 		canvas.draw_line(Vector2(x, y + 8.0), Vector2(x, y + 12.0), crystal, 1.2, true)
+
+static func cave_clipped_ridge_vertices(left: float, camera_course_distance: float, fragment_offset: float, fragment_width: float, logical_height: float, layer: int) -> PackedVector2Array:
+	## Return only the upper ridge contour. Fill quads add their own bottom corners
+	## after clipping; mixing those corners into this float32 array can make them
+	## round just inside a high-precision clip edge and self-intersect the contour.
+	if fragment_width <= 0.0 or logical_height <= 0.0 or layer < 0 or layer >= 3:
+		return PackedVector2Array()
+	var samples := cave_ridge_diagnostic_samples(camera_course_distance, fragment_offset, fragment_width, logical_height)
+	var phase_left := float(samples[layer].get("phase_left", 0.0))
+	var spacing := 48.0
+	var first_sample := floori(phase_left / spacing)
+	var last_sample := ceili((phase_left + fragment_width) / spacing)
+	var candidates := PackedVector2Array()
+	var amplitude := logical_height * (0.13 + 0.055 * float(layer))
+	var base_y := logical_height * (0.32 + 0.18 * float(layer))
+	for i in range(first_sample, last_sample + 1):
+		var course_x := float(i) * spacing
+		var x := left + course_x - phase_left
+		var phase := course_x * 0.003
+		var ridge_y := clampf(base_y + sin(phase) * amplitude + cos(phase * 0.37) * amplitude * 0.4, logical_height * 0.04, logical_height * 0.94)
+		candidates.append(Vector2(x, ridge_y))
+	var clipped := PackedVector2Array([
+		Vector2(left, _cave_ridge_y(phase_left, logical_height, layer)),
+		Vector2(left + fragment_width, _cave_ridge_y(phase_left + fragment_width, logical_height, layer)),
+	])
+	for point in candidates:
+		if point.x > left and point.x < left + fragment_width:
+			clipped.insert(clipped.size() - 1, point)
+	return clipped
 
 static func _cave_ridge_y(parallax_x: float, viewport_height: float, layer: int) -> float:
 	var amplitude := viewport_height * (0.13 + 0.055 * float(layer))

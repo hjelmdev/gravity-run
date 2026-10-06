@@ -1,0 +1,7 @@
+# Root review — actual user cave float-clipping defect
+
+2026-10-06: **APPROVED for scoped visual release.** Root read the actual shared renderer diff and regression fixture, and inspected `after_00_5211.718.png`. Bottom fill vertices are no longer mixed into upper ridge candidates; top contour construction otherwise preserves phases, endpoint equations, spacing and per-segment fill quads. Shared SP/MP code changes no gameplay/API/generator/database contract.
+
+Root independently diagnosed the original 24-image user ZIP: all exact capture bounds wrongly admit one float32 bottom closure corner in the old strict clipping test. The new regression exercises those 24 coordinates, confirms the prior bad admission and asserts genuine top contours remain ordered with no bottom vertices. Actual GPU evidence for six representative coordinates removes the diagonal cutouts. The user capture is within the cave interior, and applied/requested camera error is under 0.00025px.
+
+Proceed scoped source/test/docs Azure push and clean exact-commit Web/Pages publication. Inspect a Web after-render at the captured fractional coordinates when available; retain native-versus-browser verification limits. Final acceptance requires workflow/head, both BUILD_ID/loaders and independent public PCK hash verification. Keep capture available so user can validate the actual browser fix. Preserve all unrelated dirty files and bounded owned-process cleanup.
