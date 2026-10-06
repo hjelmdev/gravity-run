@@ -47,6 +47,8 @@ func start_capture(viewport: Viewport, context: Dictionary, frame_context_provid
 		return false
 	completion_reason = ""
 	_capture_context = context.duplicate(true)
+	if bool(_capture_context.get("capture_audio_diagnostics", false)):
+		SfxController.begin_diagnostic_capture()
 	_images.clear()
 	_frame_metadata.clear()
 	_raw_bytes = 0
@@ -176,6 +178,7 @@ func _capture_burst(viewport: Viewport, frame_context_provider: Callable, strip_
 		state_changed.emit("capturing", _images.size(), "Captured frame %d/%d." % [_images.size(), frame_limit])
 	if _cancel_requested:
 		var completed_reason := _cancel_reason
+		_finish_audio_diagnostics()
 		clear_capture()
 		_capturing = false
 		completion_reason = completed_reason
@@ -183,6 +186,7 @@ func _capture_burst(viewport: Viewport, frame_context_provider: Callable, strip_
 		capture_finished.emit(false, 0, completed_reason)
 		return
 	_capturing = false
+	_finish_audio_diagnostics()
 	if _images.is_empty():
 		completion_reason = "no_frames"
 		state_changed.emit("unavailable", 0, tr("No rendered frames were available."))
@@ -231,6 +235,12 @@ func _write_package(path: String) -> Error:
 func _package_metadata(encoded_png_bytes: int) -> Dictionary:
 	return {"format": "gravity_run_right_edge_capture_v1", "capture": {"started_context": _capture_context.duplicate(true), "duration_limit_usec": MAX_DURATION_USEC, "frame_limit": MAX_FRAMES, "effective_frame_limit": _max_frames_for_run, "completion_reason": completion_reason, "max_raw_image_bytes": MAX_RAW_IMAGE_BYTES, "max_package_bytes": MAX_PACKAGE_BYTES, "raw_image_bytes": _raw_bytes, "encoded_png_bytes": encoded_png_bytes, "frame_count": _images.size()}, "frames": _frame_metadata.duplicate(true)}
 
+func _finish_audio_diagnostics() -> void:
+	if not bool(_capture_context.get("capture_audio_diagnostics", false)):
+		return
+	_capture_context["audio_diagnostics"] = SfxController.finish_diagnostic_capture()
+	_capture_context["capture_audio_diagnostics"] = false
+
 func _remove_user_file(path: String) -> void:
 	var global_path := ProjectSettings.globalize_path(path)
 	if FileAccess.file_exists(path):
@@ -248,5 +258,6 @@ func _exit_tree() -> void:
 		_cancel_requested = true
 		_cancel_reason = "scene_exit"
 		_capturing = false
+	_finish_audio_diagnostics()
 	_images.clear()
 	_frame_metadata.clear()

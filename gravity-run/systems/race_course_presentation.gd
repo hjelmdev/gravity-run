@@ -19,6 +19,7 @@ const SurfaceIndexScript := preload("res://systems/course_surface_index.gd")
 const FallingRockModel := preload("res://systems/falling_rock_model.gd")
 const RockWarningIcon := preload("res://systems/rock_warning_icon.gd")
 const RockWarningPulseScript := preload("res://systems/rock_warning_pulse.gd")
+const SfxAudibilityRules := preload("res://systems/sfx_audibility_rules.gd")
 const GhostWarningPulseScript := preload("res://systems/ghost_warning_pulse.gd")
 const BiomeRendererScript := preload("res://biomes/biome_renderer.gd")
 
@@ -249,16 +250,16 @@ func _on_coin_visual_collection_started(entity_id: String, event_key: String) ->
 		return
 	var coin_x := float(coin.position.x)
 	var view_width := get_viewport_rect().size.x
-	var audible := coin_x >= _camera_left - 64.0 and coin_x <= _camera_left + view_width + 64.0
+	var audible := SfxAudibilityRules.is_world_x_audible(coin_x, _camera_left, view_width)
 	SfxController.play_event("coin", event_key, audible)
 
 func _on_barrel_destruction_started(barrel: Node2D) -> void:
-	var audible := barrel.position.x >= _camera_left - 64.0 and barrel.position.x <= _camera_left + get_viewport_rect().size.x + 64.0
+	var audible := is_instance_valid(barrel) and SfxAudibilityRules.is_world_x_audible(barrel.position.x, _camera_left, get_viewport_rect().size.x)
 	SfxController.play_event("barrel_destroy", "%s|barrel|%s" % [_audio_round_id, str(barrel.get_meta("presentation_target_id", barrel.name))], audible)
 
 func _on_rock_impact_started(event_id: String) -> void:
 	var rock: Variant = event_nodes.get(event_id)
-	var audible := is_instance_valid(rock) and float(rock.position.x) >= _camera_left - 64.0 and float(rock.position.x) <= _camera_left + get_viewport_rect().size.x + 64.0
+	var audible := is_instance_valid(rock) and SfxAudibilityRules.is_world_x_audible(float(rock.position.x), _camera_left, get_viewport_rect().size.x)
 	SfxController.play_event("rock_impact", "%s|rock|%s" % [_audio_round_id, event_id], audible)
 
 func _on_ghost_phase_changed(event_id: String, phase: String) -> void:
@@ -271,7 +272,7 @@ func _on_ghost_phase_changed(event_id: String, phase: String) -> void:
 	_ghost_warning_pulse.call("observe_warning", event_id, bool(event.get("from_ceiling", false)))
 	queue_redraw()
 	var event_x := float(event.get("x", 0.0))
-	var audible := event_x >= _camera_left - 64.0 and event_x <= _camera_left + get_viewport_rect().size.x + 64.0
+	var audible := SfxAudibilityRules.is_world_x_audible(event_x, _camera_left, get_viewport_rect().size.x)
 	SfxController.play_event("ghost_warning", "%s|ghost_warning|%s" % [_audio_round_id, event_id], audible)
 
 func _tag_presentation_target(node: Node2D, stable_id: String, kind: String, moving: bool) -> void:

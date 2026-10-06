@@ -46,6 +46,8 @@ const TRACK_GAP_SCRIPT := preload("res://terrain/track_gap.gd")
 const COURSE_SURFACE_RENDERER := preload("res://systems/course_surface_renderer.gd")
 const BIOME_RENDERER_SCRIPT := preload("res://biomes/biome_renderer.gd")
 const CoursePresentation := preload("res://systems/race_course_presentation.gd")
+const SfxAudibilityRules := preload("res://systems/sfx_audibility_rules.gd")
+const SfxAudioDiagnosticCapture := preload("res://systems/sfx_audio_diagnostic_capture.gd")
 
 @onready var player: Node2D = $Player
 @onready var run_state: Node = $RunState
@@ -73,6 +75,7 @@ var _shared_coin_planner: RefCounted
 var _shared_coin_planned_until := -INF
 var _singleplayer_simulation_tick := 0
 var _singleplayer_audio_round_id := ""
+var _sfx_audio_diagnostic_capture: Node
 var _rock_warning_pulse: RefCounted = ROCK_WARNING_PULSE_SCRIPT.new()
 var _ghost_warning_pulse: RefCounted = GHOST_WARNING_PULSE_SCRIPT.new()
 var _rock_warning_accessibility_button: Button
@@ -146,6 +149,20 @@ func _ready() -> void:
 		hud.visible = false
 		$PauseMenu.visible = false
 	_start_run()
+	if not demo_mode and SfxAudioDiagnosticCapture.is_requested():
+		_start_singleplayer_audio_diagnostic_capture()
+
+func _start_singleplayer_audio_diagnostic_capture(duration_seconds := 12.0) -> bool:
+	if demo_mode or is_instance_valid(_sfx_audio_diagnostic_capture):
+		return false
+	var capture := SfxAudioDiagnosticCapture.new()
+	capture.name = "SfxAudioDiagnosticCapture"
+	add_child(capture)
+	if not bool(capture.call("start_capture", _active_seed, _active_seed_version, duration_seconds)):
+		capture.queue_free()
+		return false
+	_sfx_audio_diagnostic_capture = capture
+	return true
 func _start_run() -> void:
 	_rock_warning_pulse.call("reset")
 	_ghost_warning_pulse.call("reset")
@@ -274,6 +291,8 @@ func _unhandled_input(event: InputEvent) -> void:
 func _process(delta: float) -> void:
 	if not is_instance_valid(player):
 		return
+	if is_instance_valid(_sfx_audio_diagnostic_capture):
+		_sfx_audio_diagnostic_capture.call("record_callback_timing", "sp_process", delta, _singleplayer_simulation_tick)
 	var callback_started_usec := Time.get_ticks_usec()
 	if render_diagnostics_enabled and not _render_diagnostic_frames.is_empty():
 		var previous_frame: Dictionary = _render_diagnostic_frames.back()
@@ -380,6 +399,8 @@ func _render_diagnostic_transform(value: Transform2D) -> Dictionary:
 	return {"x": _render_diagnostic_vector(value.x), "y": _render_diagnostic_vector(value.y), "origin": _render_diagnostic_vector(value.origin)}
 
 func _physics_process(delta: float) -> void:
+	if is_instance_valid(_sfx_audio_diagnostic_capture):
+		_sfx_audio_diagnostic_capture.call("record_callback_timing", "sp_physics", delta, _singleplayer_simulation_tick)
 	if game_over:
 		if demo_mode:
 			demo_restart_timer += delta
@@ -538,6 +559,11 @@ func _physics_process(delta: float) -> void:
 				continue
 			var center := coin.global_position
 			var fraction := HAZARD_RULES_SCRIPT.swept_rect_circle_fraction(previous_player_rect, final_player_rect.position - previous_player_rect.position, center, 13.0)
+			if is_instance_valid(_sfx_audio_diagnostic_capture) and bool(_sfx_audio_diagnostic_capture.call("is_capture_active")):
+				var coin_rect: Rect2 = coin.call("get_hitbox_rect")
+				var broadphase := previous_player_rect.merge(final_player_rect).grow(24.0)
+				if fraction >= 0.0 or broadphase.intersects(coin_rect):
+					_sfx_audio_diagnostic_capture.call("record_coin_sweep", {"tick": _singleplayer_simulation_tick, "swept_fraction": fraction, "survives_terminal": fraction >= 0.0 and fraction < lethal_fraction - 0.000001, "player_rect_start": [previous_player_rect.position.x, previous_player_rect.position.y, previous_player_rect.size.x, previous_player_rect.size.y], "player_rect_end": [final_player_rect.position.x, final_player_rect.position.y, final_player_rect.size.x, final_player_rect.size.y], "coin_center": [center.x, center.y], "coin_rect": [coin_rect.position.x, coin_rect.position.y, coin_rect.size.x, coin_rect.size.y], "run_coins_before": int(run_state.get("coins"))})
 			if fraction >= 0.0 and fraction < lethal_fraction - 0.000001:
 				coin.call("collect")
 		for pickup in loot_pickups:
@@ -1079,7 +1105,7 @@ func _spawn_obstacle_scene(scene: PackedScene, width: float, height: float, from
 	var obstacle := CoursePresentation.create_hazard(scene, Vector2(x, _ceiling_surface_y(x) if from_ceiling else _floor_surface_y(x)), Vector2(width, height), from_ceiling, _surface_angle_at(x, from_ceiling))
 	obstacle.connect("destroyed", Callable(self, "_on_obstacle_destroyed"))
 	if obstacle.is_in_group("barrels") and obstacle.has_signal("destruction_started"):
-		obstacle.connect("destruction_started", Callable(self, "_on_barrel_destruction_started"))
+		_connect_barrel_audio(obstacle)
 	if obstacle.has_method("set_motion_speed_multiplier"):
 		obstacle.call("set_motion_speed_multiplier", motion_speed_multiplier)
 	if obstacle.has_method("set_spiked"):
@@ -1091,7 +1117,21 @@ func _on_obstacle_destroyed(obstacle: Node2D) -> void:
 	obstacles.erase(obstacle)
 
 func _on_barrel_destruction_started(obstacle: Node2D) -> void:
-	_play_singleplayer_sfx("barrel_destroy", "%s|barrel_destroy|%d" % [_singleplayer_audio_round_id, obstacle.get_instance_id()])
+	var audible := is_instance_valid(obstacle) and _is_singleplayer_event_audible(obstacle.global_position.x)
+	_play_singleplayer_sfx("barrel_destroy", "%s|barrel_destroy|%d" % [_singleplayer_audio_round_id, obstacle.get_instance_id()], audible)
+
+func _connect_barrel_audio(obstacle: Node) -> void:
+	if is_instance_valid(obstacle) and obstacle.has_signal("destruction_started"):
+		var callback := Callable(self, "_on_barrel_destruction_started")
+		if not obstacle.is_connected("destruction_started", callback):
+			obstacle.connect("destruction_started", callback)
+
+func _is_singleplayer_event_audible(world_x: float) -> bool:
+	var camera_left := float(camera.get("left")) if is_instance_valid(camera) else course_distance
+	var view_width := screen_width
+	if is_instance_valid(camera):
+		view_width = float(camera.get("view_size").x)
+	return SfxAudibilityRules.is_world_x_audible(world_x, camera_left, view_width)
 
 func _on_rock_impact_started(event_id: String) -> void:
 	_play_singleplayer_sfx("rock_impact", "%s|rock_impact|%s" % [_singleplayer_audio_round_id, event_id])

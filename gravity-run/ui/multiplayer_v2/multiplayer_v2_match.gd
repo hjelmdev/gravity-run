@@ -25,6 +25,7 @@ const FIXED_DELTA := 1.0 / 60.0
 const CAMERA_PLAYER_X := CameraScript.PLAYER_ANCHOR_X
 const MAX_CATCHUP_STEPS := 12
 const START_TRACE_SECONDS := 4.0
+const AUDIO_TIMING_CAPTURE_SECONDS := 12.0
 const PRESENTATION_DELAY_TICKS := 1.0
 const LOCAL_POSE_HISTORY := 256
 const COUNTDOWN_START_FLASH_USEC := 350_000
@@ -93,6 +94,12 @@ var _last_remote_watch_poses: Dictionary = {}
 var _last_cadence_window_usec := -1
 var _last_process_usec := -1
 var _diagnostics_export_in_progress := false
+var _audio_timing_capture_active := false
+var _audio_timing_capture_generation := 0
+var _audio_timing_capture_duration_seconds := AUDIO_TIMING_CAPTURE_SECONDS
+var _audio_timing_capture_snapshot: Dictionary = {}
+var _audio_timing_capture_button: Button
+var _audio_timing_capture_status: Label
 var _right_edge_capture: Node
 var _right_edge_start_button: Button
 var _right_edge_cancel_button: Button
@@ -207,6 +214,8 @@ func _configure_profiling() -> void:
 		_render_anchor_experiment_enabled = OS.get_cmdline_user_args().has("--v2-render-anchor")
 
 func _exit_tree() -> void:
+	if _audio_timing_capture_active:
+		_finish_audio_timing_capture(_audio_timing_capture_generation, "scene_exit")
 	_close_barrel_frame_trace("match_scene_exit")
 	_close_flow_trace("match_scene_exit")
 	if MultiplayerV2Service.coin_contact_presented.is_connected(_on_verified_coin_contact):
@@ -267,6 +276,15 @@ func _build_overlay() -> void:
 	export_button.text = tr("Save diagnostics")
 	export_button.pressed.connect(_save_diagnostics)
 	tools.add_child(export_button)
+	_audio_timing_capture_button = Button.new()
+	_audio_timing_capture_button.text = tr("Capture audio timing (12 s)")
+	_audio_timing_capture_button.pressed.connect(_start_audio_timing_capture)
+	tools.add_child(_audio_timing_capture_button)
+	_audio_timing_capture_status = Label.new()
+	_audio_timing_capture_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_audio_timing_capture_status.add_theme_font_size_override("font_size", 12)
+	_audio_timing_capture_status.visible = false
+	tools.add_child(_audio_timing_capture_status)
 	var capture_row := HBoxContainer.new()
 	tools.add_child(capture_row)
 	_right_edge_start_button = Button.new()
@@ -490,6 +508,8 @@ func _build_peer_slots() -> void:
 		_course_root.move_child(local_runner_view, _course_root.get_child_count() - 1)
 
 func _physics_process(delta: float) -> void:
+	if SfxController.diagnostic_capture_active():
+		SfxController.record_callback_timing("mp_physics", delta, _runner.simulation_tick if _runner != null else -1)
 	if _manifest == null or _runner == null:
 		return
 	if not _round_started:
@@ -527,6 +547,8 @@ func _advance_local_to_shared_clock(delta: float, target_usec: int = -1) -> void
 	MultiplayerV2Service.diagnostics.observe_max("max_physics_delta_ms", delta * 1000.0)
 
 func _process(delta: float) -> void:
+	if SfxController.diagnostic_capture_active():
+		SfxController.record_callback_timing("mp_process", delta, _runner.simulation_tick if _runner != null else -1)
 	_touch_gesture.call("expire", Time.get_ticks_usec())
 	if _manifest == null or _runner == null or _course_presentation == null:
 		return
@@ -713,7 +735,11 @@ func _submit_coin_claims(previous_state: Dictionary, proposed_state: Dictionary,
 		if float(contact.get("fraction", 2.0)) >= terminal_fraction:
 			continue
 		var entity_id := str(contact.get("entity_id", ""))
-		if entity_id.is_empty() or _pending_coin_claims.has(entity_id):
+		if entity_id.is_empty():
+			_record_coin_contact_diagnostic(contact, previous_state, proposed_state, false, "missing_entity_id")
+			continue
+		if _pending_coin_claims.has(entity_id):
+			_record_coin_contact_diagnostic(contact, previous_state, proposed_state, false, "claim_already_pending")
 			continue
 		var request_id := Crypto.new().generate_random_bytes(16).hex_encode()
 		var incarnation := int(contact.get("incarnation", 1))
@@ -724,6 +750,12 @@ func _submit_coin_claims(previous_state: Dictionary, proposed_state: Dictionary,
 		if predicted:
 			MultiplayerV2Service.diagnostics.record_event("coin_visual_prediction", {"round_id": _round_id, "entity_id": entity_id, "incarnation": incarnation, "contact_to_visual_usec": maxi(Time.get_ticks_usec() - contact_usec, 0), "contact_tick": contact_tick})
 		MultiplayerV2Service.submit_local_world_interaction({"round_id": _round_id, "owner_peer_id": int(MultiplayerV2Service.session.get("local_peer_id", 1)), "request_id": request_id, "entity_id": entity_id, "incarnation": int(contact.get("incarnation", 1)), "action": "collect", "simulation_tick": _runner.simulation_tick, "input_seq": _runner.input_sequence, "known_world_revision": _world.entity_ledger.revision})
+		_record_coin_contact_diagnostic(contact, previous_state, proposed_state, true, "")
+
+func _record_coin_contact_diagnostic(contact: Dictionary, previous_state: Dictionary, proposed_state: Dictionary, request_sent: bool, rejection_reason: String) -> void:
+	if not SfxController.diagnostic_capture_active():
+		return
+	SfxController.record_coin_sweep("multiplayer", {"tick": _runner.simulation_tick, "contact_fraction": float(contact.get("fraction", -1.0)), "entity_id": str(contact.get("entity_id", "")), "incarnation": int(contact.get("incarnation", 1)), "player_start": {"world_x": float(previous_state.get("world_x", 0.0)), "y": float(previous_state.get("y", 0.0)), "gravity_direction": int(previous_state.get("gravity_direction", 1))}, "player_end": {"world_x": float(proposed_state.get("world_x", 0.0)), "y": float(proposed_state.get("y", 0.0)), "gravity_direction": int(proposed_state.get("gravity_direction", 1))}, "request_sent": request_sent, "rejection_reason": rejection_reason})
 
 func _request_shared_barrel(contact: Dictionary) -> void:
 	if not _pending_interaction_id.is_empty():
@@ -1797,9 +1829,13 @@ func _save_diagnostics() -> void:
 	if _diagnostics_export_in_progress:
 		return
 	_diagnostics_export_in_progress = true
+	if _audio_timing_capture_active:
+		_finish_audio_timing_capture(_audio_timing_capture_generation, "saved_early")
 	var report := MultiplayerV2Service.diagnostics.export_report()
 	report["current_state"] = MultiplayerV2Service.current_diagnostic_state()
 	report["course_presentation_snapshot"] = _course_presentation_diagnostic_snapshot()
+	if not _audio_timing_capture_snapshot.is_empty():
+		report["sfx_audio_diagnostics"] = _audio_timing_capture_snapshot.duplicate(true)
 	if not _result.is_empty():
 		report["frozen_result"] = _result.duplicate(true)
 		report["frozen_roster"] = _frozen_roster.duplicate(true)
@@ -1815,11 +1851,53 @@ func _save_diagnostics() -> void:
 			_export_confirmation.visible = false
 	)
 
+func _start_audio_timing_capture() -> void:
+	if _audio_timing_capture_active:
+		return
+	if _right_edge_capture != null and _right_edge_capture.is_capturing:
+		_audio_timing_capture_status.text = tr("Finish the screen capture before starting audio timing capture.")
+		_audio_timing_capture_status.visible = true
+		return
+	_audio_timing_capture_generation += 1
+	_audio_timing_capture_snapshot.clear()
+	_audio_timing_capture_active = true
+	SfxController.begin_diagnostic_capture()
+	if is_instance_valid(_audio_timing_capture_button):
+		_audio_timing_capture_button.disabled = true
+		_audio_timing_capture_button.text = tr("Capturing audio timing…")
+	if is_instance_valid(_audio_timing_capture_status):
+		_audio_timing_capture_status.text = tr("Audio timing is being recorded for 12 seconds. No screenshots are captured.")
+		_audio_timing_capture_status.visible = true
+	var generation := _audio_timing_capture_generation
+	get_tree().create_timer(_audio_timing_capture_duration_seconds, true, false, true).timeout.connect(_finish_audio_timing_capture.bind(generation, "duration_complete"))
+	if _debug_open:
+		_toggle_debug_panel()
+	_touch_gesture.cancel("audio_timing_capture_started")
+	_pending_flip_direction = 0
+	_pending_flip_source = ""
+
+func _finish_audio_timing_capture(generation: int, reason: String) -> void:
+	if not _audio_timing_capture_active or generation != _audio_timing_capture_generation:
+		return
+	_audio_timing_capture_active = false
+	_audio_timing_capture_snapshot = SfxController.finish_diagnostic_capture()
+	_audio_timing_capture_snapshot["capture_reason"] = reason
+	if is_instance_valid(_audio_timing_capture_button):
+		_audio_timing_capture_button.disabled = false
+		_audio_timing_capture_button.text = tr("Capture audio timing (12 s)")
+	if is_instance_valid(_audio_timing_capture_status):
+		_audio_timing_capture_status.text = tr("Audio timing ready. Use Save diagnostics to export it; no screenshots were captured.")
+		_audio_timing_capture_status.visible = true
+
 func _start_right_edge_capture() -> void:
 	if _right_edge_capture == null or _right_edge_capture.is_capturing:
 		return
+	if _audio_timing_capture_active:
+		_audio_timing_capture_status.text = tr("Finish audio timing capture before starting a screen capture.")
+		_audio_timing_capture_status.visible = true
+		return
 	var session := {"round_id": _round_id, "role": str(MultiplayerV2Service.session.get("role", "client")), "local_peer_id": int(MultiplayerV2Service.session.get("local_peer_id", 0))}
-	var context := {"round_id": _round_id, "session": session, "build_id": str(ProjectSettings.get_setting("application/config/version", "unknown")), "game_api_version": MultiplayerV2Service.V2_GAME_VERSION, "seed": int(_manifest.get("seed_value")) if _manifest != null else -1, "generator_version": int(_manifest.get("generator_version")) if _manifest != null else -1, "manifest_hash": str(_manifest.get("manifest_hash")) if _manifest != null else "", "capture_started_usec": Time.get_ticks_usec()}
+	var context := {"round_id": _round_id, "session": session, "build_id": str(ProjectSettings.get_setting("application/config/version", "unknown")), "game_api_version": MultiplayerV2Service.V2_GAME_VERSION, "seed": int(_manifest.get("seed_value")) if _manifest != null else -1, "generator_version": int(_manifest.get("generator_version")) if _manifest != null else -1, "manifest_hash": str(_manifest.get("manifest_hash")) if _manifest != null else "", "capture_started_usec": Time.get_ticks_usec(), "capture_audio_diagnostics": true}
 	if not _right_edge_capture.start_capture(get_viewport(), context, Callable(self, "_right_edge_frame_context")):
 		return
 	if _debug_open:

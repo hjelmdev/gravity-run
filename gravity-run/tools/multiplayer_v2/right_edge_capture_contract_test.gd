@@ -86,10 +86,15 @@ func _test_cancel_and_restart() -> void:
 func _test_capture_and_zip() -> void:
 	_reset_completion()
 	_provider_call_count = 0
-	var context := {"round_id": "zip-round", "mode": "mp", "seed": 100000014, "generator_version": 15, "session": {"role": "host", "local_peer_id": 1}}
+	var context := {"round_id": "zip-round", "mode": "mp", "seed": 100000014, "generator_version": 15, "session": {"role": "host", "local_peer_id": 1}, "capture_audio_diagnostics": true}
 	_assert(_capture.start_capture(get_viewport(), context, Callable(self, "_frame_context")), "capture restarts after cancellation")
+	SfxController.play_event("coin", "zip-round|capture-test-audio")
 	await _wait_for_finish()
 	_assert(_finish_success, "capture completes")
+	var captured_context: Dictionary = _capture.get("_capture_context")
+	var audio_diagnostics: Dictionary = captured_context.get("audio_diagnostics", {})
+	_assert(bool(audio_diagnostics.get("enabled", false)) and not bool(captured_context.get("capture_audio_diagnostics", true)), "completed MP visual burst closes its opt-in audio trace into the ZIP context")
+	_assert(not audio_diagnostics.get("events", []).is_empty(), "MP ZIP context contains bounded event request timing")
 	_assert(_finish_frames > 0 and _finish_frames <= CaptureScript.MAX_FRAMES, "capture respects frame bound")
 	_zip_frame_count = _finish_frames
 	_assert(_capture.readback_count == _finish_frames, "at most one readback is performed per captured frame")
@@ -147,6 +152,9 @@ func _validate_zip(path: String, expected_frames: int) -> void:
 	_assert(metadata_variant is Dictionary, "metadata JSON is valid")
 	if metadata_variant is Dictionary:
 		_assert(int(metadata_variant.get("capture", {}).get("frame_count", -1)) == expected_frames, "metadata frame count matches archive")
+		var started_context: Dictionary = metadata_variant.get("capture", {}).get("started_context", {})
+		var audio_diagnostics: Dictionary = started_context.get("audio_diagnostics", {})
+		_assert(bool(audio_diagnostics.get("enabled", false)) and not audio_diagnostics.get("events", []).is_empty(), "exported ZIP contains bounded SFX event timing from the opt-in capture")
 		_assert(int(metadata_variant.get("capture", {}).get("effective_frame_limit", 0)) >= expected_frames, "metadata records the effective resolution-based frame cap")
 		var frames: Array = metadata_variant.get("frames", [])
 		_assert(frames.size() == expected_frames, "metadata has one timing/camera row per PNG")
