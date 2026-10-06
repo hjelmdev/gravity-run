@@ -34,12 +34,12 @@ func _run() -> void:
 	var floor_count := 0
 	var ceiling_count := 0
 	for seed in range(1, 121):
-		var built: Dictionary = Builder.new().build(seed, 45000, CourseGeneratorScript.GENERATOR_VERSION)
+		var built: Dictionary = Builder.new().build(seed, 45000, CourseGeneratorScript.GENERATOR_VERSION_11)
 		var manifest: Variant = built.get("manifest")
 		_check(manifest != null, "gen11 manifest seed %d builds: %s" % [seed, str(built.get("error", ""))])
 		if manifest == null:
 			continue
-		var rebuilt: Dictionary = Builder.new().build(seed, 45000, CourseGeneratorScript.GENERATOR_VERSION)
+		var rebuilt: Dictionary = Builder.new().build(seed, 45000, CourseGeneratorScript.GENERATOR_VERSION_11)
 		_check(str(manifest.manifest_hash) == str(rebuilt.manifest.manifest_hash), "ghost manifest is deterministic for seed %d" % seed)
 		for event in manifest.events:
 			if str(event.get("kind", "")) == "ghost":
@@ -66,7 +66,7 @@ func _has_ghost(seed: int, version: int) -> bool:
 
 func _shared_world_contact() -> bool:
 	for seed in range(1, 121):
-		var built: Dictionary = Builder.new().build(seed, 45000, CourseGeneratorScript.GENERATOR_VERSION)
+		var built: Dictionary = Builder.new().build(seed, 45000, CourseGeneratorScript.GENERATOR_VERSION_11)
 		var manifest: Variant = built.get("manifest")
 		if manifest == null:
 			continue

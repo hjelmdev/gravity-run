@@ -43,14 +43,15 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 	var source_events: Array[Dictionary] = generator.get_planned_events()
 	var manifest := ManifestScript.new() as MultiplayerCourseManifest
 	manifest.generator_version = generator_version
-	manifest.manifest_version = 8 if generator_version >= CourseGenerator.GENERATOR_VERSION_15 else (7 if generator_version >= CourseGenerator.GENERATOR_VERSION_14 else (6 if generator_version >= CourseGenerator.GENERATOR_VERSION_12 else (5 if generator_version >= CourseGenerator.GENERATOR_VERSION_10 else (4 if generator_version >= CourseGenerator.GENERATOR_VERSION_9 else (3 if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION else 2)))))
+	manifest.manifest_version = 9 if generator_version >= CourseGenerator.GENERATOR_VERSION_16 else (8 if generator_version >= CourseGenerator.GENERATOR_VERSION_15 else (7 if generator_version >= CourseGenerator.GENERATOR_VERSION_14 else (6 if generator_version >= CourseGenerator.GENERATOR_VERSION_12 else (5 if generator_version >= CourseGenerator.GENERATOR_VERSION_10 else (4 if generator_version >= CourseGenerator.GENERATOR_VERSION_9 else (3 if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION else 2))))))
 	manifest.course_identity = str(definition.call("get_course_identity"))
 	manifest.seed_value = seed_value
 	manifest.course_length_px = course_length_px
 	manifest.start_x = PLAYER_START_X
 	manifest.finish_x = PLAYER_START_X + float(course_length_px)
 	manifest.ruleset_fingerprint = str(ruleset.call("get_fingerprint"))
-	manifest.events = _resolve_events(source_events, course_length_px, generator_version)
+	var biome_start_offset := BiomeRendererScript.start_biome_offset_for_seed(seed_value, generator_version)
+	manifest.events = _resolve_events(source_events, course_length_px, generator_version, biome_start_offset)
 	if generator_version >= CourseGenerator.GENERATOR_VERSION_15:
 		manifest.events = filter_unsafe_gen15_volcanoes(manifest.events, manifest.start_x)
 	if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION:
@@ -74,7 +75,11 @@ func filter_unsafe_gen15_volcanoes(events: Array[Dictionary], course_start_x: fl
 func _make_multiplayer_ruleset(generator_version: int) -> Resource:
 	var ruleset := CourseRulesetScript.new() as Resource
 	ruleset.set("ruleset_id", &"multiplayer_race")
-	if generator_version >= CourseGenerator.GENERATOR_VERSION_15:
+	if generator_version == CourseGenerator.GENERATOR_VERSION_16:
+		ruleset.set("revision", 13)
+		ruleset.set("event_density", 1.9)
+		ruleset.set("coin_revision", 2)
+	elif generator_version == CourseGenerator.GENERATOR_VERSION_15:
 		ruleset.set("revision", 12)
 		ruleset.set("event_density", 1.55)
 		ruleset.set("coin_revision", 2)
@@ -121,7 +126,7 @@ func _make_multiplayer_ruleset(generator_version: int) -> Resource:
 	ruleset.set("include_all_profiles", true)
 	return ruleset
 
-func _resolve_events(source_events: Array[Dictionary], course_length_px: int, generator_version: int) -> Array[Dictionary]:
+func _resolve_events(source_events: Array[Dictionary], course_length_px: int, generator_version: int, biome_start_offset: float = 0.0) -> Array[Dictionary]:
 	var resolved: Array[Dictionary] = []
 	var source_terrain_distances: Array[float] = []
 	for planned_source in source_events:
@@ -325,7 +330,7 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 					saw_record["roof_gap_width"] = gap_width
 				resolved.append(saw_record)
 			"ghost":
-				if generator_version < CourseGenerator.GENERATOR_VERSION_11 or BiomeRendererScript.biome_id_for_generator(course_distance, generator_version) != "haunted":
+				if generator_version < CourseGenerator.GENERATOR_VERSION_11 or BiomeRendererScript.biome_id_for_generator(course_distance + biome_start_offset, generator_version) != "haunted":
 					event_index += 1
 					continue
 				var ghost_width := float(source.get("width", 72.0))
@@ -333,7 +338,7 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 				if floor_surface_y - ceiling_surface_y < ghost_height + 72.0:
 					event_index += 1
 					continue
-				resolved.append({
+				var ghost_event := {
 					"event_id": event_prefix,
 					"kind": "ghost",
 					"x": event_x,
@@ -347,9 +352,12 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 					"warning_ticks": int(source.get("warning_ticks", 120)),
 					"danger_ticks": int(source.get("danger_ticks", 500)),
 					"fade_ticks": int(source.get("fade_ticks", 45)),
-				})
+				}
+				if generator_version >= CourseGenerator.GENERATOR_VERSION_16:
+					ghost_event["skin_variant"] = int(source.get("skin_variant", 0))
+				resolved.append(ghost_event)
 			"lava_crack":
-				if generator_version < CourseGenerator.GENERATOR_VERSION_14 or BiomeRendererScript.biome_id_for_generator(course_distance, generator_version) != "lava":
+				if generator_version < CourseGenerator.GENERATOR_VERSION_14 or BiomeRendererScript.biome_id_for_generator(course_distance + biome_start_offset, generator_version) != "lava":
 					event_index += 1
 					continue
 				if floor_surface_y - ceiling_surface_y < 190.0:
@@ -370,7 +378,7 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 					crack_event["visual_depth"] = clampf(float(source.get("visual_depth", 32.0)), 24.0, 44.0)
 				resolved.append(crack_event)
 			"volcano":
-				if generator_version < CourseGenerator.GENERATOR_VERSION_14 or BiomeRendererScript.biome_id_for_generator(course_distance, generator_version) != "lava":
+				if generator_version < CourseGenerator.GENERATOR_VERSION_14 or BiomeRendererScript.biome_id_for_generator(course_distance + biome_start_offset, generator_version) != "lava":
 					event_index += 1
 					continue
 				if floor_surface_y - ceiling_surface_y < 300.0:

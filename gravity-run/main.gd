@@ -606,7 +606,7 @@ func _demo_side_risk(side: int) -> float:
 	for obstacle in obstacles:
 		if not is_instance_valid(obstacle) or bool(obstacle.call("is_destroying_now")):
 			continue
-		var obstacle_side := -1 if bool(obstacle.get("from_ceiling")) else 1
+		var obstacle_side := -1 if _demo_obstacle_from_ceiling(obstacle) else 1
 		if obstacle.is_in_group("barrels"):
 			obstacle_side = 1
 		if obstacle_side != side:
@@ -637,6 +637,19 @@ func _demo_side_risk(side: int) -> float:
 		risk += (0.25 + proximity) * step_weight
 	return risk
 
+func _demo_obstacle_from_ceiling(obstacle: Node) -> bool:
+	for property_info in obstacle.get_property_list():
+		if str(property_info.get("name", "")) != "from_ceiling":
+			continue
+		var direct_value: Variant = obstacle.get("from_ceiling")
+		if direct_value is bool:
+			return direct_value
+		break
+	var event_value: Variant = obstacle.get("event")
+	if event_value is Dictionary:
+		var event_side: Variant = event_value.get("from_ceiling", false)
+		return event_side if event_side is bool else false
+	return false
 func _update_moving_nodes(nodes: Array[Node2D], movement: float, delta: float = 0.0) -> void:
 	for node in nodes:
 		if not is_instance_valid(node):
@@ -829,7 +842,8 @@ func _spawn_course_event(event: Dictionary) -> void:
 
 func _spawn_singleplayer_lava_event(source_event: Dictionary, target_x: float) -> void:
 	var horizon := ceili(maxf(float(course_distance) + screen_width + 2400.0, float(source_event.get("course_distance", 0.0)) + 1.0))
-	var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", course_generator.get_planned_events(), horizon, _active_seed_version)
+	var biome_start_offset := BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(_active_seed, _active_seed_version)
+	var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", course_generator.get_planned_events(), horizon, _active_seed_version, biome_start_offset)
 	var source_kind := str(source_event.get("kind", ""))
 	for event in resolved_events:
 		if str(event.get("kind", "")) != source_kind or absf(float(event.get("x", INF)) - target_x) > 0.5:
@@ -889,7 +903,8 @@ func _resolve_singleplayer_saw_event(source_event: Dictionary) -> Dictionary:
 	var source_distance := float(source_event.get("course_distance", 0.0))
 	var support_horizon := source_distance + SAW_BLADE_MODEL.START_OFFSET + 3000.0
 	course_generator.ensure_horizon(support_horizon, _run_speed(), screen_height, COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE)
-	var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", course_generator.get_planned_events(), ceili(support_horizon), _active_seed_version)
+	var biome_start_offset := BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(_active_seed, _active_seed_version)
+	var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", course_generator.get_planned_events(), ceili(support_horizon), _active_seed_version, biome_start_offset)
 	var target_x := PLAYER_X + source_distance
 	for resolved_event in resolved_events:
 		if str(resolved_event.get("kind", "")) == "saw" and absf(float(resolved_event.get("x", INF)) - target_x) < 0.5:
@@ -907,7 +922,8 @@ func _resolve_singleplayer_ghost_event(source_event: Dictionary) -> Dictionary:
 	var source_distance := float(source_event.get("course_distance", 0.0))
 	var support_horizon := source_distance + 200.0
 	course_generator.ensure_horizon(support_horizon, _run_speed(), screen_height, COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE)
-	var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", course_generator.get_planned_events(), ceili(support_horizon), _active_seed_version)
+	var biome_start_offset := BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(_active_seed, _active_seed_version)
+	var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", course_generator.get_planned_events(), ceili(support_horizon), _active_seed_version, biome_start_offset)
 	var target_x := PLAYER_X + source_distance
 	for resolved_event in resolved_events:
 		if str(resolved_event.get("kind", "")) == "ghost" and absf(float(resolved_event.get("x", INF)) - target_x) < 0.5:
@@ -1106,7 +1122,8 @@ func _spawn_shared_coins() -> void:
 	var horizon := course_distance + screen_width + 1400.0
 	if PLAYER_X + horizon >= _shared_coin_planned_until + 100.0:
 		var source_events: Array[Dictionary] = course_generator.get_planned_events()
-		var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", source_events, ceili(horizon), _active_seed_version)
+		var biome_start_offset := BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(_active_seed, _active_seed_version)
+		var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", source_events, ceili(horizon), _active_seed_version, biome_start_offset)
 		var planned: Array[Dictionary] = _shared_coin_planner.extend(PLAYER_X + horizon, resolved_events, WORLD_HEIGHT - 80.0, 80.0, 0)
 		_pending_shared_coins.append_array(planned)
 		_shared_coin_planned_until = PLAYER_X + horizon
@@ -1392,7 +1409,8 @@ func _draw_background() -> void:
 	# The same distance-addressed backdrop renderer is used by MP presentation.
 	# SP world coordinates begin at PLAYER_X, matching manifest.start_x in MP.
 	# Normalize backdrop phase by that same origin so absolute world points match.
-	BIOME_RENDERER_SCRIPT.draw_backdrop(self, view_left, Vector2(screen_width, screen_height), BIOME_RENDERER_SCRIPT.course_distance_at_world_x(view_left + PLAYER_X, PLAYER_X), _active_seed_version)
+	var biome_start_offset := BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(_active_seed, _active_seed_version)
+	BIOME_RENDERER_SCRIPT.draw_backdrop(self, view_left, Vector2(screen_width, screen_height), BIOME_RENDERER_SCRIPT.course_distance_at_world_x(view_left + PLAYER_X, PLAYER_X) + biome_start_offset, _active_seed_version)
 
 func _draw_track() -> void:
 	var surface_gaps: Array[Dictionary] = []
@@ -1407,4 +1425,5 @@ func _draw_track() -> void:
 		terrain_boundaries.append(float(terrain.call("get_end_x")))
 		if terrain.has_method("is_terrain_step") and bool(terrain.call("is_terrain_step")):
 			step_positions.append(float(terrain.call("get_start_x")))
-	COURSE_SURFACE_RENDERER.draw_track(self, _render_course_distance, Vector2(screen_width, screen_height), surface_gaps, terrain_boundaries, step_positions, Callable(self, "_surface_y_at"), 0.0, null, BIOME_RENDERER_SCRIPT.course_distance_at_world_x(PLAYER_X, 0.0), _active_seed_version)
+	var biome_start_offset := BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(_active_seed, _active_seed_version)
+	COURSE_SURFACE_RENDERER.draw_track(self, _render_course_distance, Vector2(screen_width, screen_height), surface_gaps, terrain_boundaries, step_positions, Callable(self, "_surface_y_at"), 0.0, null, BIOME_RENDERER_SCRIPT.course_distance_at_world_x(PLAYER_X, 0.0) - biome_start_offset, _active_seed_version)

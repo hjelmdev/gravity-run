@@ -65,7 +65,7 @@ func calculate_hash() -> String:
 
 func load_canonical_dictionary(data: Dictionary, expected_wire_hash := "", wire_payload := PackedByteArray()) -> bool:
 	manifest_version = int(data.get("manifest_version", -1))
-	if manifest_version not in [2, 3, 4, 5, 6, 7, 8] or not data.get("world", {}) is Dictionary:
+	if manifest_version not in [2, 3, 4, 5, 6, 7, 8, 9] or not data.get("world", {}) is Dictionary:
 		return false
 	if not expected_wire_hash.is_empty():
 		if expected_wire_hash.length() != 64 or wire_payload.is_empty():
@@ -127,8 +127,9 @@ func validate() -> String:
 		return "The multiplayer world dimensions are invalid."
 	if events.size() > 4000:
 		return "The multiplayer manifest has too many events."
-	if manifest_version not in [2, 3, 4, 5, 6, 7, 8] or (generator_version >= CourseGenerator.GENERATOR_VERSION_15 and manifest_version != 8) or (generator_version == CourseGenerator.GENERATOR_VERSION_14 and manifest_version != 7) or (generator_version >= CourseGenerator.GENERATOR_VERSION_12 and generator_version < CourseGenerator.GENERATOR_VERSION_14 and manifest_version != 6) or (generator_version >= CourseGenerator.GENERATOR_VERSION_10 and generator_version < CourseGenerator.GENERATOR_VERSION_12 and manifest_version != 5) or (generator_version >= CourseGenerator.GENERATOR_VERSION_9 and generator_version < CourseGenerator.GENERATOR_VERSION_10 and manifest_version != 4) or (generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and generator_version < CourseGenerator.GENERATOR_VERSION_9 and manifest_version != 3) or (generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and manifest_version != 2):
+	if manifest_version not in [2, 3, 4, 5, 6, 7, 8, 9] or (generator_version >= CourseGenerator.GENERATOR_VERSION_16 and manifest_version != 9) or (generator_version == CourseGenerator.GENERATOR_VERSION_15 and manifest_version != 8) or (generator_version == CourseGenerator.GENERATOR_VERSION_14 and manifest_version != 7) or (generator_version >= CourseGenerator.GENERATOR_VERSION_12 and generator_version < CourseGenerator.GENERATOR_VERSION_14 and manifest_version != 6) or (generator_version >= CourseGenerator.GENERATOR_VERSION_10 and generator_version < CourseGenerator.GENERATOR_VERSION_12 and manifest_version != 5) or (generator_version >= CourseGenerator.GENERATOR_VERSION_9 and generator_version < CourseGenerator.GENERATOR_VERSION_10 and manifest_version != 4) or (generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and generator_version < CourseGenerator.GENERATOR_VERSION_9 and manifest_version != 3) or (generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and manifest_version != 2):
 		return "The course generator and manifest versions are incompatible."
+	var biome_start_offset := BiomeRendererScript.start_biome_offset_for_seed(seed_value, generator_version)
 	var previous_x := -INF
 	for event in events:
 		if not event is Dictionary or not event.has("event_id") or not event.has("kind") or not event.has("x"):
@@ -178,7 +179,9 @@ func validate() -> String:
 			var warning_ticks := int(event.get("warning_ticks", -1))
 			var danger_ticks := int(event.get("danger_ticks", -1))
 			var fade_ticks := int(event.get("fade_ticks", -1))
-			if not is_finite(ghost_width) or not is_finite(ghost_height) or not is_finite(trigger_lead) or ghost_width < 56.0 or ghost_width > 100.0 or ghost_height < 72.0 or ghost_height > 120.0 or trigger_lead < 1600.0 or trigger_lead > 3200.0 or warning_ticks < 90 or warning_ticks > 180 or danger_ticks < 180 or danger_ticks > 600 or fade_ticks < 20 or fade_ticks > 90 or int(event.get("blocked_lanes", 0)) not in [1, 2] or BiomeRendererScript.biome_id_for_generator(event_x - start_x, generator_version) != "haunted":
+			var legacy_ghost_timing := generator_version < CourseGenerator.GENERATOR_VERSION_16 and trigger_lead >= 1600.0 and trigger_lead <= 3200.0 and warning_ticks >= 90 and warning_ticks <= 180 and danger_ticks >= 180 and danger_ticks <= 600 and not event.has("skin_variant")
+			var gen16_ghost_timing := generator_version == CourseGenerator.GENERATOR_VERSION_16 and is_equal_approx(trigger_lead, 1250.0) and warning_ticks == 60 and danger_ticks == 300 and event.get("skin_variant") is int and int(event.get("skin_variant")) in [0, 1, 2]
+			if not is_finite(ghost_width) or not is_finite(ghost_height) or not is_finite(trigger_lead) or ghost_width < 56.0 or ghost_width > 100.0 or ghost_height < 72.0 or ghost_height > 120.0 or not (legacy_ghost_timing or gen16_ghost_timing) or fade_ticks < 20 or fade_ticks > 90 or int(event.get("blocked_lanes", 0)) not in [1, 2] or BiomeRendererScript.biome_id_for_generator(event_x - start_x + biome_start_offset, generator_version) != "haunted":
 				return "The ghost hazard has invalid versioned geometry, timing, or biome."
 		if str(event.kind) == "lava_crack":
 			var crack_width := float(event.get("width", NAN))
@@ -192,7 +195,7 @@ func validate() -> String:
 			var width_valid := crack_width >= 96.0 and crack_width <= 150.0 if generator_version < CourseGenerator.GENERATOR_VERSION_15 else crack_width >= 150.0 and crack_width <= 180.0
 			var depth_valid := hot_depth >= 8.0 and hot_depth <= 20.0 if generator_version < CourseGenerator.GENERATOR_VERSION_15 else hot_depth >= 12.0 and hot_depth <= 24.0
 			var revision_valid := not event.has("lava_crack_revision") and not event.has("visual_depth") if generator_version < CourseGenerator.GENERATOR_VERSION_15 else int(event.get("lava_crack_revision", -1)) == 1 and visual_depth >= 24.0 and visual_depth <= 44.0
-			if not is_finite(crack_width) or not is_finite(hot_depth) or not is_finite(crack_y) or not is_finite(visual_depth) or not width_valid or not depth_valid or not revision_valid or crack_y < 40.0 or crack_y > 500.0 or int(event.get("blocked_lanes", 0)) != (2 if from_ceiling else 1) or BiomeRendererScript.biome_id_for_generator(event_x - start_x, generator_version) != "lava":
+			if not is_finite(crack_width) or not is_finite(hot_depth) or not is_finite(crack_y) or not is_finite(visual_depth) or not width_valid or not depth_valid or not revision_valid or crack_y < 40.0 or crack_y > 500.0 or int(event.get("blocked_lanes", 0)) != (2 if from_ceiling else 1) or BiomeRendererScript.biome_id_for_generator(event_x - start_x + biome_start_offset, generator_version) != "lava":
 				return "The lava crack has invalid versioned geometry or biome."
 		if str(event.kind) == "volcano":
 			var volcano_width := float(event.get("width", NAN))
@@ -207,7 +210,7 @@ func validate() -> String:
 			var projectile_gravity := float(event.get("projectile_gravity", NAN))
 			var projectile_radius := float(event.get("projectile_radius", NAN))
 			var ceiling_runner_bottom := ceiling_y + RunnerMotion.SIZE.y
-			var common_volcano_valid := is_finite(volcano_width) and is_finite(volcano_height) and is_finite(floor_y) and is_finite(ceiling_y) and is_finite(lead) and is_finite(projectile_speed) and is_finite(vertical_speed) and is_finite(projectile_gravity) and is_finite(projectile_radius) and volcano_width >= 100.0 and volcano_width <= 150.0 and volcano_height >= 56.0 and volcano_height <= 96.0 and floor_y - ceiling_y >= 300.0 and lead >= 1200.0 and lead <= 2400.0 and period >= 120 and period <= 220 and lifetime >= 40 and lifetime <= 70 and int(event.get("blocked_lanes", 0)) == 1 and BiomeRendererScript.biome_id_for_generator(event_x - start_x, generator_version) == "lava"
+			var common_volcano_valid := is_finite(volcano_width) and is_finite(volcano_height) and is_finite(floor_y) and is_finite(ceiling_y) and is_finite(lead) and is_finite(projectile_speed) and is_finite(vertical_speed) and is_finite(projectile_gravity) and is_finite(projectile_radius) and volcano_width >= 100.0 and volcano_width <= 150.0 and volcano_height >= 56.0 and volcano_height <= 96.0 and floor_y - ceiling_y >= 300.0 and lead >= 1200.0 and lead <= 2400.0 and period >= 120 and period <= 220 and lifetime >= 40 and lifetime <= 70 and int(event.get("blocked_lanes", 0)) == 1 and BiomeRendererScript.biome_id_for_generator(event_x - start_x + biome_start_offset, generator_version) == "lava"
 			var trajectory_valid := true
 			if generator_version < CourseGenerator.GENERATOR_VERSION_15:
 				var legacy_apex_top := floor_y - volcano_height * 0.78 - vertical_speed * vertical_speed / maxf(2.0 * projectile_gravity, 1.0) - projectile_radius

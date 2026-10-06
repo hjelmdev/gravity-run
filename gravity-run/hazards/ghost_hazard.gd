@@ -3,6 +3,11 @@ class_name GhostHazard
 
 const Model := preload("res://systems/ghost_hazard_model.gd")
 const TEXTURE: Texture2D = preload("res://hazards/ghost.svg")
+const SKINS: Array[Texture2D] = [
+	TEXTURE,
+	preload("res://hazards/ghost_wisp.svg"),
+	preload("res://hazards/ghost_grim.svg"),
+]
 
 signal phase_changed(event_id: String, phase: String)
 
@@ -11,6 +16,7 @@ var activation_tick := -1
 var simulation_tick := 0
 var phase := Model.DORMANT
 var _visual_time := 0.0
+var skin_variant := 0
 
 func _process(delta: float) -> void:
 	if visible:
@@ -27,6 +33,7 @@ func configure(value: Dictionary) -> void:
 	simulation_tick = 0
 	phase = Model.DORMANT
 	_visual_time = 0.0
+	skin_variant = clampi(int(event.get("skin_variant", 0)), 0, SKINS.size() - 1)
 	global_position = Model.center(event)
 	name = "Ghost_%s" % str(event.get("event_id", "ghost"))
 	add_to_group("ghost_hazards")
@@ -84,7 +91,7 @@ func _draw() -> void:
 	elif phase == Model.FADING:
 		tint = Color("bdc9e3", 0.28)
 	draw_set_transform(visual_offset(), sin(_visual_time * TAU / 4.0) * 0.025)
-	draw_texture_rect(TEXTURE, Rect2(-size * 0.5, size), false, tint)
+	draw_texture_rect(SKINS[skin_variant], Rect2(-size * 0.5, size), false, tint)
 	draw_set_transform(Vector2.ZERO)
 	if phase == Model.WARNING:
 		var pulse := 0.65 + 0.25 * sin(float(simulation_tick % 24) * TAU / 24.0)

@@ -7,6 +7,7 @@ const CAVE: BiomeDefinition = preload("res://assets/biomes/definitions/cave.tres
 const HAUNTED: BiomeDefinition = preload("res://assets/biomes/definitions/haunted.tres")
 const LAVA: BiomeDefinition = preload("res://assets/biomes/definitions/lava.tres")
 const GENERATOR_VERSION_14 := 14
+const GENERATOR_VERSION_16 := 16
 const THEME_LENGTH := 4800.0
 const CYCLE_LENGTH := THEME_LENGTH * 3.0
 const GEN14_CYCLE_LENGTH := THEME_LENGTH * 4.0
@@ -24,6 +25,21 @@ static func definition_for_generator(distance: float, generator_version: int) ->
 		2: return HAUNTED
 		3: return LAVA if generator_version >= GENERATOR_VERSION_14 else CLASSIC
 		_: return CLASSIC
+
+static func start_biome_slot_for_seed(seed_value: int, generator_version: int) -> int:
+	if generator_version < GENERATOR_VERSION_16 or seed_value <= 0:
+		return 0
+	var context := HashingContext.new()
+	context.start(HashingContext.HASH_SHA256)
+	context.update(str(seed_value).to_utf8_buffer())
+	var digest := context.finish()
+	return int(digest[0] & 3)
+
+static func start_biome_offset_for_seed(seed_value: int, generator_version: int) -> float:
+	return float(start_biome_slot_for_seed(seed_value, generator_version)) * THEME_LENGTH
+
+static func biome_id_for_seed(seed_value: int, distance: float, generator_version: int) -> String:
+	return biome_id_for_generator(distance + start_biome_offset_for_seed(seed_value, generator_version), generator_version)
 
 static func biome_id_at(distance: float) -> String:
 	return String(definition_at(distance).biome_id)

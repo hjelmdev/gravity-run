@@ -1910,16 +1910,18 @@ func _right_edge_frame_context() -> Dictionary:
 	var applied_right := (inverse * Vector2(viewport_size.x, center_y)).x
 	var course_start_x := float(_manifest.get("start_x"))
 	var course_left := BiomeRendererScript.course_distance_at_world_x(_camera_left + course_start_x, course_start_x)
+	var biome_start_offset := BiomeRendererScript.start_biome_offset_for_seed(int(_manifest.get("seed_value")), int(_manifest.get("generator_version")))
 	var course_right := course_left + viewport_size.x
 	var fragments: Array[Dictionary] = []
 	var cycle_length := BiomeRendererScript.cycle_length_for_generator(int(_manifest.get("generator_version")))
 	var cursor := course_left
 	while cursor < course_right and fragments.size() < 8:
-		var slot := int(floor(fposmod(maxf(cursor, 0.0), cycle_length) / BiomeRendererScript.THEME_LENGTH))
-		var cycle_start := floorf(maxf(cursor, 0.0) / cycle_length) * cycle_length
+		var biome_cursor := cursor + biome_start_offset
+		var slot := int(floor(fposmod(maxf(biome_cursor, 0.0), cycle_length) / BiomeRendererScript.THEME_LENGTH))
+		var cycle_start := floorf(maxf(biome_cursor, 0.0) / cycle_length) * cycle_length
 		var fragment_start := cycle_start + float(slot) * BiomeRendererScript.THEME_LENGTH
-		var fragment_end := minf(course_right, fragment_start + BiomeRendererScript.THEME_LENGTH)
-		fragments.append({"biome": BiomeRendererScript.biome_id_for_generator(cursor, int(_manifest.get("generator_version"))), "course_start": maxf(cursor, fragment_start), "course_end": fragment_end})
+		var fragment_end := minf(course_right, cursor + fragment_start + BiomeRendererScript.THEME_LENGTH - biome_cursor)
+		fragments.append({"biome": BiomeRendererScript.biome_id_for_generator(biome_cursor, int(_manifest.get("generator_version"))), "course_start": maxf(cursor, cursor + fragment_start - biome_cursor), "course_end": fragment_end})
 		cursor = fragment_end
 	var metadata := {"round_id": _round_id, "render_callback_index": _render_callback_index, "round_phase": "results" if not _result.is_empty() else ("running" if _round_started else "preparing"), "presentation_tick": _last_presentation_tick, "shared_world_tick": _world.tick, "runner_course_distance": float(_local_presentation_pose.get("world_x", _runner.player_state.get("world_x", course_start_x))) - course_start_x, "requested_camera_left": _camera_left, "camera_node_position": _render_camera.global_position.x if is_instance_valid(_render_camera) else -1.0, "applied_canvas_left": applied_left, "applied_canvas_right": applied_right, "presentation_clip_left": float(_course_presentation.get("_camera_left")), "presentation_clip_right": float(_course_presentation.get("_camera_left")) + viewport_size.x, "course_left": course_left, "course_right": course_right, "biome_fragments": fragments}
 	if fragments.any(func(fragment: Dictionary) -> bool: return str(fragment.get("biome", "")) == "cave"):

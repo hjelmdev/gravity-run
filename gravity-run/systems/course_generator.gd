@@ -5,6 +5,7 @@ const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const BiomeRenderer := preload("res://biomes/biome_renderer.gd")
 const BiomeEncounterMixScript := preload("res://systems/biome_encounter_mix.gd")
 const LavaHazardModelScript := preload("res://systems/lava_hazard_model.gd")
+const RunnerMotionScript := preload("res://systems/runner_motion.gd")
 ## Deterministic, data-driven encounter planning with a route-feasibility check.
 ## New hazard profiles register their own blocked-lane forecasts; the planner
 ## rejects overlapping/no-exit patterns and spaces lane changes conservatively.
@@ -40,10 +41,13 @@ const GENERATOR_VERSION_12 := 12
 const GENERATOR_VERSION_13 := 13
 const GENERATOR_VERSION_14 := 14
 const GENERATOR_VERSION_15 := 15
+const GENERATOR_VERSION_16 := 16
 const GEN14_RHYTHM_SPACING_DELTAS := [-120.0, -120.0, 240.0]
 const GEN14_RHYTHM_BASE_SPACING_SCALE := 1.22
+const GEN16_RHYTHM_SPACING_DELTAS := [-90.0, -90.0, 180.0]
+const GEN16_RHYTHM_BASE_SPACING_SCALE := 0.98
 const PREVIOUS_CURRENT_GENERATOR_VERSION := GENERATOR_VERSION_14
-const GENERATOR_VERSION := GENERATOR_VERSION_15
+const GENERATOR_VERSION := GENERATOR_VERSION_16
 const PUBLISHED_SHARED_GENERATOR_VERSION := 5
 const LEGACY_GENERATOR_VERSION := 3
 const PREVIOUS_GENERATOR_VERSION := 4
@@ -60,10 +64,13 @@ var _next_spawn_index := 0
 var _rhythm_event_index := 0
 var _seed := 0
 var _generator_version := GENERATOR_VERSION
+var _biome_start_offset := 0.0
 var _difficulty: Resource
 var _spawn_lead_distance := 0.0
 var _configuration_failed := false
 var _spiked_barrel_corridors: Array[Dictionary] = []
+var _gen16_barrel_meeting_windows: Array[Dictionary] = []
+var _generation_stats := {"candidate_attempts": 0, "route_rejections": 0, "biome_rejections": 0, "accepted_events": 0, "fallback_events": 0}
 
 ## Spawn course events fully beyond the viewport so their geometry enters smoothly.
 ## The canonical lead remains a lower bound for stable planning on small screens.
@@ -131,7 +138,7 @@ func set_difficulty_profile(profile: Resource) -> void:
 func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> bool:
 	_configuration_failed = false
 	_generator_version = generator_version
-	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_14, GENERATOR_VERSION_13, GENERATOR_VERSION_12, GENERATOR_VERSION_11, GENERATOR_VERSION_10, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
+	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_15, GENERATOR_VERSION_14, GENERATOR_VERSION_13, GENERATOR_VERSION_12, GENERATOR_VERSION_11, GENERATOR_VERSION_10, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
 		push_error("Unsupported course generator version: %d" % generator_version)
 		return false
 	_profiles.clear()
@@ -174,12 +181,15 @@ func register_profile(profile: CourseHazardProfile) -> void:
 
 func reset(seed: int = 0) -> void:
 	_seed = seed
+	_biome_start_offset = BiomeRenderer.start_biome_offset_for_seed(seed, _generator_version)
+	_generation_stats = {"candidate_attempts": 0, "route_rejections": 0, "biome_rejections": 0, "accepted_events": 0, "fallback_events": 0}
 	if seed == 0:
 		_rng.randomize()
 	else:
 		_rng.seed = seed
 	_events.clear()
 	_spiked_barrel_corridors.clear()
+	_gen16_barrel_meeting_windows.clear()
 	_next_event_distance = 1400.0 if _generator_version >= PUBLISHED_SHARED_GENERATOR_VERSION else 1050.0
 	_next_spawn_index = 0
 	_rhythm_event_index = 0
@@ -206,6 +216,9 @@ func pop_events_until(spawn_line_distance: float) -> Array[Dictionary]:
 
 func get_planned_events() -> Array[Dictionary]:
 	return _events.duplicate()
+
+func get_generation_stats() -> Dictionary:
+	return _generation_stats.duplicate(true)
 
 func get_switch_clearance_distance(speed: float, track_height: float = 540.0) -> float:
 	var travel_distance := maxf(track_height - 112.0 - 44.0, 0.0)
@@ -279,13 +292,15 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 	var spacing := BASE_EVENT_SPACING
 	var clearance := get_switch_clearance_distance(speed, track_height)
 	for _attempt in range(64):
-		var candidate_biome := BiomeRenderer.biome_id_for_generator(_next_event_distance, _generator_version) if _generator_version >= GENERATOR_VERSION_12 else ""
+		_generation_stats["candidate_attempts"] = int(_generation_stats.get("candidate_attempts", 0)) + 1
+		var candidate_biome := _biome_id_at(_next_event_distance) if _generator_version >= GENERATOR_VERSION_12 else ""
 		var profile := _pick_profile(_next_event_distance)
 		if profile == null:
 			break
 		var candidate := profile.create_event(_rng, _next_event_distance, _difficulty, _preferred_lane())
 		_apply_generator_timing(candidate)
-		if str(candidate.get("kind", "")) == "ghost" and BiomeRenderer.biome_id_for_generator(float(candidate.get("course_distance", 0.0)), _generator_version) != "haunted":
+		if str(candidate.get("kind", "")) == "ghost" and _biome_id_at(float(candidate.get("course_distance", 0.0))) != "haunted":
+			_generation_stats["biome_rejections"] = int(_generation_stats.get("biome_rejections", 0)) + 1
 			_next_event_distance += PLAN_RETRY_SPACING
 			spacing += PLAN_RETRY_SPACING
 			continue
@@ -299,12 +314,14 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 		intrinsic_probe["threats"] = profile.build_threat_intervals(intrinsic_probe)
 		_apply_rock_switch_clearance(intrinsic_probe, candidate_clearance if candidate_is_rock else 0.0)
 		if not is_plan_solvable([intrinsic_probe], clearance):
+			_generation_stats["route_rejections"] = int(_generation_stats.get("route_rejections", 0)) + 1
 			# A profile whose own phases leave no route cannot be repaired by
 			# shifting it; skip it instead of creating an arbitrary empty stretch.
 			spacing += PLAN_RETRY_SPACING
 			continue
 		for _shift in range(128):
-			if _generator_version >= GENERATOR_VERSION_12 and BiomeRenderer.biome_id_for_generator(_next_event_distance, _generator_version) != candidate_biome:
+			if _generator_version >= GENERATOR_VERSION_12 and _biome_id_at(_next_event_distance) != candidate_biome:
+				_generation_stats["biome_rejections"] = int(_generation_stats.get("biome_rejections", 0)) + 1
 				break
 			candidate["course_distance"] = _next_event_distance
 			if _candidate_crosses_spiked_barrel_corridor(candidate):
@@ -319,11 +336,15 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 				if _generator_version >= GENERATOR_VERSION_14:
 					candidate["rhythm_phase"] = phase
 				_events.append(candidate)
+				_generation_stats["accepted_events"] = int(_generation_stats.get("accepted_events", 0)) + 1
 				var widest := 0.0
 				for threat in candidate["threats"]:
 					widest = maxf(widest, float(threat["end"]) - float(threat["start"]))
 				var conservative_spacing := maxf(spacing, widest + candidate_clearance)
-				if _generator_version >= GENERATOR_VERSION_14:
+				if _generator_version == GENERATOR_VERSION_16:
+					conservative_spacing = maxf(BASE_EVENT_SPACING, conservative_spacing * GEN16_RHYTHM_BASE_SPACING_SCALE + GEN16_RHYTHM_SPACING_DELTAS[phase])
+					_rhythm_event_index += 1
+				elif _generator_version >= GENERATOR_VERSION_14:
 					conservative_spacing = maxf(BASE_EVENT_SPACING, conservative_spacing * GEN14_RHYTHM_BASE_SPACING_SCALE + GEN14_RHYTHM_SPACING_DELTAS[phase])
 					_rhythm_event_index += 1
 				_next_event_distance += get_density_adjusted_spacing(conservative_spacing)
@@ -353,6 +374,11 @@ func _apply_generator_timing(event: Dictionary) -> void:
 		elif str(event.get("kind", "")) == "volcano":
 			event["projectile_fan_revision"] = 1
 			event["projectile_arcs"] = LavaHazardModelScript.gen15_fan_arcs()
+	if _generator_version == GENERATOR_VERSION_16 and str(event.get("kind", "")) == "ghost":
+		event["trigger_lead"] = 1250.0
+		event["warning_ticks"] = 60
+		event["danger_ticks"] = 300
+		event["skin_variant"] = posmod(posmod(_seed, 3) + posmod(roundi(float(event.get("course_distance", 0.0)) / BASE_EVENT_SPACING), 3), 3)
 	if str(event.get("kind", "")) == "saw" and _generator_version >= GENERATOR_VERSION_10:
 		var variant_roll := _rng.randf()
 		var variant := "floor_embedded"
@@ -395,6 +421,10 @@ func _try_append_independent_barrel(base_event: Dictionary, clearance: float) ->
 	var chain_width := float(barrel_event.get("width", HazardRules.BARREL_WIDTH)) - HazardRules.BARREL_WIDTH
 	var separation := float(base_event.get("width", HazardRules.BARREL_WIDTH)) * 0.5 + chain_width * 0.5 + HazardRules.BARREL_WIDTH + 24.0
 	barrel_event["course_distance"] = base_distance + separation
+	barrel_event["threats"] = _barrel_profile.build_threat_intervals(barrel_event)
+	if _generator_version == GENERATOR_VERSION_16 and _gen16_barrel_meeting_conflicts_with_ceiling(barrel_event):
+		_generation_stats["route_rejections"] = int(_generation_stats.get("route_rejections", 0)) + 1
+		return
 	var spiked_corridor: Dictionary = {}
 	if _generator_version >= GENERATOR_VERSION_12 and base_kind == &"block" and _rng.randf() < 0.25:
 		if _generator_version < GENERATOR_VERSION_13:
@@ -403,14 +433,59 @@ func _try_append_independent_barrel(base_event: Dictionary, clearance: float) ->
 			spiked_corridor = _try_make_supported_spiked_corridor(barrel_event, base_event)
 			if not spiked_corridor.is_empty():
 				barrel_event["spiked"] = true
-	barrel_event["threats"] = _barrel_profile.build_threat_intervals(barrel_event)
 	var trial: Array[Dictionary] = []
 	trial.append_array(_events)
 	trial.append(barrel_event)
 	if is_plan_solvable(trial, clearance):
 		_events.append(barrel_event)
+		if _generator_version == GENERATOR_VERSION_16:
+			_gen16_barrel_meeting_windows.append_array(_barrel_meeting_windows(barrel_event))
 		if not spiked_corridor.is_empty():
 			_spiked_barrel_corridors.append(spiked_corridor)
+
+func _barrel_meeting_windows(barrel_event: Dictionary) -> Array[Dictionary]:
+	var windows: Array[Dictionary] = []
+	var start_x := 180.0
+	var lead := float(barrel_event.get("spawn_lead_distance", EVENT_SPAWN_LEAD_DISTANCE))
+	var multiplier := float(barrel_event.get("motion_speed_multiplier", BARREL_SPEED_MULTIPLIER))
+	var course_distance := float(barrel_event.get("course_distance", 0.0))
+	var count := clampi(int(barrel_event.get("count", 1)), 1, 6)
+	var spacing := float(barrel_event.get("spacing", HazardRules.BARREL_CHAIN_SPACING))
+	var spawn_time := maxf(0.0, (course_distance - lead) / RunnerMotionScript.BASE_RUN_SPEED)
+	var barrel_velocity := RunnerMotionScript.BASE_RUN_SPEED * (multiplier - 1.0)
+	var barrel_height := float(barrel_event.get("height", HazardRules.BARREL_WIDTH))
+	var encounter_radius := RunnerMotionScript.SIZE.x * 0.5 + HazardRules.barrel_radius(HazardRules.BARREL_WIDTH, barrel_height)
+	for barrel_index in range(count):
+		var chain_offset := -float(count - 1) * spacing * 0.5 + float(barrel_index) * spacing
+		var barrel_start_x: float = start_x + course_distance + lead * (multiplier - 1.0) + chain_offset
+		for runner_speed in [250.0, 500.0, 750.0]:
+			var runner_spawn_x: float = start_x + runner_speed * spawn_time
+			var center_distance := barrel_start_x - runner_spawn_x
+			var relative_speed := maxf(runner_speed + barrel_velocity, 1.0)
+			var entry_time: float = spawn_time + maxf(center_distance - encounter_radius, 0.0) / relative_speed
+			var exit_time: float = spawn_time + (center_distance + encounter_radius) / relative_speed
+			var entry_x: float = start_x + runner_speed * entry_time - start_x
+			var exit_x: float = start_x + runner_speed * exit_time - start_x
+			# Threat intervals are already expanded for the runner body; retain the
+			# complete actual barrel-contact interval without adding an unmeasured
+			# full flip-cooldown margin that would reject unrelated encounters.
+			windows.append({"start": entry_x, "end": exit_x, "speed": runner_speed, "barrel_index": barrel_index})
+	return windows
+
+func _gen16_barrel_meeting_conflicts_with_ceiling(barrel_event: Dictionary) -> bool:
+	for window in _barrel_meeting_windows(barrel_event):
+		for existing in _events:
+			var profile: Variant = existing.get("profile")
+			var threats: Array = existing.get("threats", [])
+			if threats.is_empty() and profile != null and profile.has_method("build_threat_intervals"):
+				threats = profile.build_threat_intervals(existing)
+			for threat_value in threats:
+				if not threat_value is Dictionary:
+					continue
+				var threat: Dictionary = threat_value
+				if (int(threat.get("blocked_lanes", 0)) & CEILING_LANE) != 0 and float(threat.get("start", INF)) <= float(window.end) and float(threat.get("end", -INF)) >= float(window.start):
+					return true
+	return false
 
 func _try_make_supported_spiked_corridor(barrel_event: Dictionary, base_event: Dictionary) -> Dictionary:
 	var multiplier := maxf(float(barrel_event.get("motion_speed_multiplier", 1.0)), 1.0)
@@ -429,11 +504,97 @@ func _try_make_supported_spiked_corridor(barrel_event: Dictionary, base_event: D
 	return corridor
 
 func _candidate_crosses_spiked_barrel_corridor(candidate: Dictionary) -> bool:
-	if _generator_version < GENERATOR_VERSION_13 or _spiked_barrel_corridors.is_empty():
+	if _generator_version < GENERATOR_VERSION_13:
 		return false
+	var safety_candidate := candidate
+	if _generator_version == GENERATOR_VERSION_16:
+		var profile: Variant = candidate.get("profile")
+		if profile != null and profile.has_method("build_threat_intervals"):
+			safety_candidate = candidate.duplicate(true)
+			safety_candidate["threats"] = profile.build_threat_intervals(safety_candidate)
 	for corridor in _spiked_barrel_corridors:
-		if _floor_unsupported_corridor_overlap(candidate, corridor):
+		if _floor_unsupported_corridor_overlap(safety_candidate, corridor):
 			return true
+		if _generator_version >= GENERATOR_VERSION_16 and _opposing_hazard_overlaps_spiked_barrel_corridor(safety_candidate, corridor):
+			return true
+	if _generator_version == GENERATOR_VERSION_16 and _candidate_overlaps_gen16_barrel_meeting_window(safety_candidate):
+		return true
+	if _generator_version == GENERATOR_VERSION_16 and _candidate_creates_too_short_lava_lane_return(safety_candidate):
+		return true
+	return false
+
+func _candidate_creates_too_short_lava_lane_return(candidate: Dictionary) -> bool:
+	# A floor crack followed closely by a ceiling crack requires two legal
+	# lane changes around the pair. Reserve one full flight plus the real flip
+	# cooldown and reaction margin between their padded contact windows.
+	if str(candidate.get("kind", "")) != "lava_crack":
+		return false
+	var candidate_threats: Array = candidate.get("threats", [])
+	if candidate_threats.is_empty():
+		return false
+	var return_gap := get_switch_clearance_distance(MAX_RUN_SPEED, REFERENCE_TRACK_HEIGHT) + MAX_RUN_SPEED * PLAYER_FLIP_COOLDOWN
+	for candidate_value in candidate_threats:
+		if not candidate_value is Dictionary:
+			continue
+		var candidate_threat: Dictionary = candidate_value
+		var candidate_mask := int(candidate_threat.get("blocked_lanes", 0)) & BOTH_LANES
+		if candidate_mask != FLOOR_LANE and candidate_mask != CEILING_LANE:
+			continue
+		for existing in _events:
+			if str(existing.get("kind", "")) != "lava_crack":
+				continue
+			var existing_mask := int(existing.get("blocked_lanes", 0)) & BOTH_LANES
+			if existing_mask != FLOOR_LANE and existing_mask != CEILING_LANE or existing_mask == candidate_mask:
+				continue
+			var existing_threats: Array = existing.get("threats", [])
+			for existing_value in existing_threats:
+				if not existing_value is Dictionary:
+					continue
+				var existing_threat: Dictionary = existing_value
+				var interval_gap := maxf(
+					float(candidate_threat.get("start", 0.0)) - float(existing_threat.get("end", 0.0)),
+					float(existing_threat.get("start", 0.0)) - float(candidate_threat.get("end", 0.0))
+				)
+				if interval_gap < return_gap:
+					return true
+	return false
+
+func _opposing_hazard_overlaps_spiked_barrel_corridor(candidate: Dictionary, corridor: Dictionary) -> bool:
+	# A rolling barrel's supported travel corridor needs an available lane for
+	# the runner to leave the floor obstacle and return after the barrel passes.
+	# The ordinary event-space forecast is calibrated around base speed; Gen16
+	# conservatively rejects an opposing-lane hazard whose full padded footprint
+	# intrudes into that corridor, including the barrel/runner transition margins.
+	var profile: Variant = candidate.get("profile")
+	var threats: Array = candidate.get("threats", [])
+	if threats.is_empty() and profile != null and profile.has_method("build_threat_intervals"):
+		threats = profile.build_threat_intervals(candidate)
+	if threats.is_empty():
+		return false
+	var corridor_start: float = float(corridor.get("start_x", INF)) - RunnerMotionScript.SIZE.x
+	var corridor_end: float = float(corridor.get("end_x", -INF)) + RunnerMotionScript.SIZE.x
+	for threat_value in threats:
+		if not threat_value is Dictionary:
+			continue
+		var threat: Dictionary = threat_value
+		if (int(threat.get("blocked_lanes", 0)) & CEILING_LANE) == 0:
+			continue
+		if float(threat.get("start", INF)) <= corridor_end and float(threat.get("end", -INF)) >= corridor_start:
+			return true
+	return false
+
+func _candidate_overlaps_gen16_barrel_meeting_window(candidate: Dictionary) -> bool:
+	var threats: Array = candidate.get("threats", [])
+	var profile: Variant = candidate.get("profile")
+	if threats.is_empty() and profile != null and profile.has_method("build_threat_intervals"):
+		threats = profile.build_threat_intervals(candidate)
+	for window in _gen16_barrel_meeting_windows:
+		for threat_value in threats:
+			if not threat_value is Dictionary:
+				continue
+			var threat: Dictionary = threat_value
+			if (int(threat.get("blocked_lanes", 0)) & CEILING_LANE) != 0 and float(threat.get("start", INF)) <= float(window.end) and float(threat.get("end", -INF)) >= float(window.start):
+				return true
 	return false
 
 func _floor_unsupported_corridor_overlap(event: Dictionary, corridor: Dictionary) -> bool:
@@ -462,12 +623,17 @@ func _append_safe_fallback(speed: float, track_height: float) -> void:
 				if _generator_version >= GENERATOR_VERSION_14:
 					candidate["rhythm_phase"] = _rhythm_event_index % GEN14_RHYTHM_SPACING_DELTAS.size()
 				_events.append(candidate)
+				_generation_stats["accepted_events"] = int(_generation_stats.get("accepted_events", 0)) + 1
+				_generation_stats["fallback_events"] = int(_generation_stats.get("fallback_events", 0)) + 1
 				var widest := 0.0
 				for threat in candidate["threats"]:
 					widest = maxf(widest, float(threat["end"]) - float(threat["start"]))
 				var fallback_spacing := maxf(BASE_EVENT_SPACING, widest + clearance)
 				if _generator_version >= GENERATOR_VERSION_14:
-					fallback_spacing = maxf(BASE_EVENT_SPACING, fallback_spacing + GEN14_RHYTHM_SPACING_DELTAS[_rhythm_event_index % GEN14_RHYTHM_SPACING_DELTAS.size()])
+					if _generator_version == GENERATOR_VERSION_16:
+						fallback_spacing = maxf(BASE_EVENT_SPACING, fallback_spacing * GEN16_RHYTHM_BASE_SPACING_SCALE + GEN16_RHYTHM_SPACING_DELTAS[_rhythm_event_index % GEN16_RHYTHM_SPACING_DELTAS.size()])
+					else:
+						fallback_spacing = maxf(BASE_EVENT_SPACING, fallback_spacing + GEN14_RHYTHM_SPACING_DELTAS[_rhythm_event_index % GEN14_RHYTHM_SPACING_DELTAS.size()])
 					_rhythm_event_index += 1
 				_next_event_distance = safe_distance + get_density_adjusted_spacing(fallback_spacing)
 				return
@@ -495,8 +661,11 @@ func _get_versioned_profile_weight(profile: CourseHazardProfile, course_distance
 	var base_weight := profile.weight * _get_profile_weight_multiplier(profile.profile_id)
 	if base_weight <= 0.0 or _generator_version < GENERATOR_VERSION_12:
 		return base_weight
-	var biome := BiomeRenderer.biome_id_for_generator(course_distance, _generator_version)
+	var biome := _biome_id_at(course_distance)
 	return base_weight * BiomeEncounterMixScript.multiplier(_generator_version, biome, profile.profile_id)
+
+func _biome_id_at(course_distance: float) -> String:
+	return BiomeRenderer.biome_id_for_generator(course_distance + _biome_start_offset, _generator_version)
 
 func _get_profile_weight_multiplier(profile_id: StringName) -> float:
 	if _difficulty == null:

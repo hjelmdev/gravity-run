@@ -510,8 +510,9 @@ func _draw() -> void:
 	var draw_started_usec := Time.get_ticks_usec() if _render_profile_enabled else 0
 	var course_start_x := float(manifest.start_x)
 	var generator_version := int(manifest.get("generator_version"))
-	BiomeRendererScript.draw_backdrop(self, _camera_left, get_viewport_rect().size, BiomeRendererScript.course_distance_at_world_x(_camera_left + course_start_x, course_start_x), generator_version)
-	CourseSurfaceRenderer.draw_track_cached(self, _camera_left, get_viewport_rect().size, _render_ceiling_gaps, _render_floor_gaps, _render_terrain_boundaries, _render_step_positions, Callable(self, "_surface_y_at"), 0.0, null, BiomeRendererScript.course_distance_at_world_x(course_start_x, 0.0), generator_version)
+	var biome_start_offset := BiomeRendererScript.start_biome_offset_for_seed(int(manifest.get("seed_value")), generator_version)
+	BiomeRendererScript.draw_backdrop(self, _camera_left, get_viewport_rect().size, BiomeRendererScript.course_distance_at_world_x(_camera_left + course_start_x, course_start_x) + biome_start_offset, generator_version)
+	CourseSurfaceRenderer.draw_track_cached(self, _camera_left, get_viewport_rect().size, _render_ceiling_gaps, _render_floor_gaps, _render_terrain_boundaries, _render_step_positions, Callable(self, "_surface_y_at"), 0.0, null, BiomeRendererScript.course_distance_at_world_x(course_start_x, 0.0) - biome_start_offset, generator_version)
 	_draw_rock_warning_markers()
 	_draw_rock_hud_warning()
 	_draw_ghost_hud_warning()
