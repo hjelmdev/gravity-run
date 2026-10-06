@@ -1,8 +1,8 @@
 # Web right-edge PNG capture status
 
-## State: REVIEW_READY
+## State: RELEASE_COMPLETE
 
-The bounded capture, multiplayer diagnostics-menu integration, native scene tests, and actual Web download/package check are complete. This is ready for root review. No commit or publication has been made.
+The bounded capture, multiplayer diagnostics-menu integration, native scene tests, actual Web download/package check and root review are complete. Root completed publication after Luna's model-capacity failure.
 
 ## Implementation
 
@@ -32,5 +32,13 @@ The bounded capture, multiplayer diagnostics-menu integration, native scene test
 - The package contains Godot viewport pixels, not compositor or monitor capture. The actual Web package check proves the browser download path and archive validity; it does not reproduce or diagnose the cave flicker itself.
 - Browser download testing used a rendered capture fixture with the production component. The actual MP diagnostics controls were tested in the real MP match scene with native viewport input; no signed-in or networked multiplayer round was run.
 - The component is reusable by SP, but only the MP diagnostics UI is wired in this change. No gameplay, network protocol, API, generator, database, or version-gate changes were made.
-- Current-tree source/test changes are not committed or published. Temporary browser fixture, ZIP, logs, and screenshots are under `E:\Utveckling\Gravity Run\.codex-web-capture-review\` and are review evidence, not gameplay assets.
+- Reviewed source/test changes are committed as `8278c35a9b947a13250326cce6383d7b0cfc14bd` and pushed to Azure. Temporary browser fixture, ZIP, logs, and screenshots remain review evidence, not gameplay assets.
 - Owned Godot test processes exited. The isolated Chrome and HTTP preview server were stopped after validation. The user's editor and unrelated dirty files were left untouched.
+
+## Verified public release
+
+- Clean exact-commit export from `8278c35`; clean actual-renderer capture contract and real MP touch integration tests report failures=0. Root checked their logs.
+- Pages commit `8140f42e9ab0d58d44b9cc803b0cd3c36b9f71a9`; root pushed the prepared commit after Luna's model-capacity error. Workflow `37440107248` completed/success for that exact SHA.
+- Build `right-edge-capture-8278c35-20261006`; both BUILD_ID and root/game loaders independently verified HTTP200/correct build.
+- Public PCK independently downloaded: 3352912 bytes, SHA256 `E29B56A1D849D82DF4D4A937A522D76AC6876B42BE06F838BE1C8655D0448AFD`, identical to clean export.
+- User flow: multiplayer Menu → Fånga högerkanten; after the short burst Menu → Spara fångst som ZIP. Download is `multiplayer_right_edge_peer<id>_<role>_<timestamp>.zip`. This collects evidence; cave flicker itself remains unresolved.
