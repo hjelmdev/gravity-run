@@ -59,9 +59,14 @@ func create_event(rng: RandomNumberGenerator, course_distance: float, difficulty
 			width = width_range.x
 			slope_direction = -1.0 if rng.randi_range(0, 1) == 0 else 1.0
 		&"rock":
-			lane_mask = FLOOR_LANE
-			width = 90.0
-			height = 100.0
+			if str(profile_id) == "cave_icicle":
+				lane_mask = CEILING_LANE
+				width = 64.0
+				height = 116.0
+			else:
+				lane_mask = FLOOR_LANE
+				width = 90.0
+				height = 100.0
 		&"ghost":
 			width = 72.0
 			height = 96.0
@@ -126,6 +131,14 @@ func build_threat_intervals(event: Dictionary) -> Array[Dictionary]:
 	# Events are instantiated at a fixed lead ahead of the viewport, so account
 	# for that offset as well as compressing each physical threat width by speed.
 	var forecast_center := center - spawn_lead_distance * (1.0 - 1.0 / speed_multiplier)
+	if str(event.get("id", "")) == "cave_icicle":
+		var fall_start := center - float(event.get("trigger_lead", 1250.0)) + float(event.get("warning_ticks", 48)) * 500.0 / 60.0
+		var fall_end := fall_start + float(event.get("fall_ticks", 30)) * 500.0 / 60.0
+		var lodged_end := fall_end + float(event.get("lodged_ticks", 240)) * 500.0 / 60.0
+		intervals.append({"start": fall_start - float(event.get("width", 52.0)) * 0.5 - 70.0, "end": fall_end + float(event.get("width", 52.0)) * 0.5 + 70.0, "blocked_lanes": FLOOR_LANE})
+		if bool(event.get("floor_supported", true)):
+			intervals.append({"start": fall_end - float(event.get("width", 52.0)) * 0.5 - 70.0, "end": lodged_end + float(event.get("width", 52.0)) * 0.5 + 70.0, "blocked_lanes": FLOOR_LANE})
+		return intervals
 	if StringName(event.get("kind", "")) == &"rock":
 		var half_width := float(event.get("width", 90.0)) * 0.5 + 60.0
 		intervals.append({"start": forecast_center - half_width, "end": forecast_center + half_width, "blocked_lanes": FLOOR_LANE})
@@ -146,6 +159,14 @@ func build_threat_intervals(event: Dictionary) -> Array[Dictionary]:
 			intervals.append({"start": forecast_center + 560.0, "end": forecast_center + 1100.0, "blocked_lanes": FLOOR_LANE})
 		return intervals
 	if StringName(event.get("kind", "")) == &"ghost":
+		if str(event.get("id", "")) == "haunted_chaser":
+			var trigger := center - float(event.get("trigger_lead", 1700.0))
+			var danger_start := trigger + float(event.get("warning_ticks", 54)) * 500.0 / 60.0
+			var danger_end := danger_start + float(event.get("danger_ticks", 150)) * 500.0 / 60.0
+			var chase_start := trigger - float(event.get("chase_start_lag", 220.0))
+			var chase_end := chase_start + float(event.get("chase_speed", 760.0)) * float(event.get("danger_ticks", 150)) / 60.0
+			intervals.append({"start": minf(danger_start, chase_start) - float(event.get("width", 72.0)) * 0.5 - 70.0, "end": maxf(danger_end, chase_end) + float(event.get("width", 72.0)) * 0.5 + 70.0, "blocked_lanes": FLOOR_LANE})
+			return intervals
 		var half_width := float(event.get("width", 72.0)) * 0.5 + threat_padding
 		intervals.append({"start": forecast_center - half_width, "end": forecast_center + half_width, "blocked_lanes": int(event.get("blocked_lanes", FLOOR_LANE))})
 		return intervals

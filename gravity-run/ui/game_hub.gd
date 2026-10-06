@@ -16,9 +16,13 @@ var _balance_label: Label
 var _start_button: Button
 var _seed_edit: LineEdit
 var _seed_label: Label
+var _seed_mobile_button: Button
+var _mobile_text_entry := false
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_mobile_text_entry = MobileTextEntry.is_mobile_web
+	MobileTextEntry.entry_submitted.connect(_on_mobile_text_submitted)
 	visibility_changed.connect(_on_visibility_changed)
 	_build()
 
@@ -72,6 +76,11 @@ func _build() -> void:
 	_seed_edit.clear_button_enabled = true
 	_seed_edit.text_changed.connect(_on_seed_input_changed)
 	layout.add_child(_seed_edit)
+	if _mobile_text_entry:
+		_seed_edit.visible = false
+		_seed_mobile_button = _make_button(tr("Enter course seed"), 44.0)
+		_seed_mobile_button.pressed.connect(_open_mobile_seed_entry)
+		layout.add_child(_seed_mobile_button)
 	_balance_label = Label.new()
 	_balance_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_balance_label.add_theme_color_override("font_color", Color("f5d45e"))
@@ -162,8 +171,12 @@ func _update_account_summary() -> void:
 	if is_instance_valid(_seed_label):
 		_seed_label.visible = false
 	if is_instance_valid(_seed_edit):
-		_seed_edit.visible = not ChallengeService.active
+		_seed_edit.visible = not ChallengeService.active and not _mobile_text_entry
 		_seed_edit.editable = not ChallengeService.active
+	if is_instance_valid(_seed_mobile_button):
+		_seed_mobile_button.visible = not ChallengeService.active
+		_seed_mobile_button.disabled = ChallengeService.active
+		_seed_mobile_button.text = _seed_edit.text if is_instance_valid(_seed_edit) and not _seed_edit.text.is_empty() else tr("Enter course seed")
 
 func _on_visibility_changed() -> void:
 	_update_account_summary()
@@ -179,9 +192,22 @@ func _start_run() -> void:
 	start_run_requested.emit()
 
 func _on_seed_input_changed(_new_text: String) -> void:
+	if is_instance_valid(_seed_mobile_button):
+		_seed_mobile_button.text = _seed_edit.text if not _seed_edit.text.is_empty() else tr("Enter course seed")
 	if is_instance_valid(_status_label):
 		_status_label.text = ""
 		_status_label.visible = false
+
+func _open_mobile_seed_entry() -> void:
+	if not _mobile_text_entry or ChallengeService.active:
+		return
+	MobileTextEntry.open("singleplayer_seed", _seed_edit.text, tr("Course seed"), "text", 32, "text", "off", "characters")
+
+func _on_mobile_text_submitted(field: String, value: String) -> void:
+	if field != "singleplayer_seed" or not is_instance_valid(_seed_edit):
+		return
+	_seed_edit.text = value.substr(0, 32)
+	_on_seed_input_changed(_seed_edit.text)
 
 func _on_account_changed(_authenticated: bool, _email: String) -> void:
 	_update_account_summary()

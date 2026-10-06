@@ -6,8 +6,13 @@ const GRAVITY := 720.0
 const COLORS := [Color("a89b83"), Color("817a6e"), Color("c0ad8b"), Color("756f66")]
 const INITIAL_VELOCITIES := [Vector2(-104.0, -155.0), Vector2(-48.0, -205.0), Vector2(56.0, -180.0), Vector2(112.0, -132.0)]
 const OFFSETS := [Vector2(-12.0, -3.0), Vector2(-4.0, -8.0), Vector2(5.0, -7.0), Vector2(13.0, -2.0)]
+const ICE_COLORS := [Color("e7fbff"), Color("a6dcec"), Color("d0f3fa"), Color("8ccbe0")]
 
 var _age := 0.0
+var _ice_mode := false
+
+func configure_ice(value: bool) -> void:
+	_ice_mode = value
 
 func _ready() -> void:
 	set_process(true)
@@ -32,6 +37,6 @@ func _draw() -> void:
 			origin + Vector2(3.1, 1.0).rotated(rotation),
 			origin + Vector2(-1.0, 2.3).rotated(rotation),
 		])
-		var color: Color = COLORS[index]
+		var color: Color = ICE_COLORS[index] if _ice_mode else COLORS[index]
 		color.a = fade
 		draw_colored_polygon(chip, color)

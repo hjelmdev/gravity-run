@@ -34,7 +34,7 @@ func is_destroying_now() -> bool:
 
 func get_hitbox_rect() -> Rect2:
 	if str(event.get("kind", "")) == "lava_crack":
-		return Model.crack_rect(event)
+		return Model.crack_rect(event, simulation_tick)
 	if str(event.get("kind", "")) != "volcano":
 		return Rect2()
 	var polygon: PackedVector2Array = Model.volcano_body_polygon_world(event)
@@ -53,16 +53,14 @@ func get_hitbox_rect() -> Rect2:
 
 func is_lethal_at(player_rect: Rect2, tick: int, start_x := -1.0) -> bool:
 	if str(event.get("kind", "")) == "lava_crack":
-		return player_rect.intersects(Model.crack_rect(event))
+		return player_rect.intersects(Model.crack_rect(event, float(tick)))
 	var origin := course_start_x if start_x < 0.0 else start_x
 	var center := player_rect.get_center()
 	return Model.swept_contact_fraction(event, origin, tick, tick, center, center, player_rect.size) >= 0.0
 
 func swept_contact_fraction(start_rect: Rect2, finish_rect: Rect2, start_tick: int, end_tick: int, player_size: Vector2 = Vector2.ZERO) -> float:
 	if str(event.get("kind", "")) == "lava_crack":
-		var bounds: Rect2 = Model.crack_rect(event)
-		var polygon := PackedVector2Array([bounds.position, Vector2(bounds.end.x, bounds.position.y), bounds.end, Vector2(bounds.position.x, bounds.end.y)])
-		return HazardRules.swept_rect_polygon_fraction(start_rect, finish_rect.position - start_rect.position, polygon)
+		return Model.swept_crack_contact_fraction(event, start_tick, end_tick, start_rect.get_center(), finish_rect.get_center(), player_size if player_size != Vector2.ZERO else start_rect.size)
 	var size := player_size if player_size != Vector2.ZERO else start_rect.size
 	return Model.swept_contact_fraction(event, course_start_x, start_tick, end_tick, start_rect.get_center(), finish_rect.get_center(), size)
 
@@ -78,6 +76,9 @@ func _draw() -> void:
 		_draw_volcano()
 
 func _draw_crack() -> void:
+	if int(event.get("lava_variant", 0)) == 1:
+		_draw_tidal_pool()
+		return
 	var geometry := crack_art_geometry(event)
 	var glow: Color = Color("ff380d")
 	glow.a = 0.30
@@ -95,6 +96,20 @@ func _draw_crack() -> void:
 			branch[index].x -= position.x
 		draw_polyline(branch, Color("ff5a1b", 0.86), 4.0, true)
 		draw_polyline(branch, Color("ffc35b", 0.88), 1.0, true)
+
+func _draw_tidal_pool() -> void:
+	var world_rect: Rect2 = Model.tidal_pool_rect(event, simulation_tick)
+	var rect := world_rect
+	rect.position.x -= position.x
+	var glow := rect.grow(8.0)
+	draw_rect(glow, Color(1.0, 0.16, 0.02, 0.22), true)
+	draw_rect(rect, Color("681f16"), true)
+	draw_rect(Rect2(rect.position, Vector2(rect.size.x, minf(6.0, rect.size.y))), Color("ff4815"), true)
+	var phase := (simulation_tick + float(event.get("pool_phase_ticks", 0))) / maxf(float(event.get("pool_period_ticks", 180)), 1.0)
+	for index in range(3):
+		var ripple_x := rect.position.x + rect.size.x * (0.2 + 0.3 * float(index))
+		var ripple_y := rect.position.y + 8.0 + 2.0 * sin(phase * TAU + float(index))
+		draw_arc(Vector2(ripple_x, ripple_y), 5.0 + 2.0 * sin(phase * TAU), PI, TAU, 12, Color("ffc65c", 0.75), 1.5, true)
 
 static func crack_art_geometry(crack_event: Dictionary) -> Dictionary:
 	## Artwork is inset into the solid surface. This intentionally differs from

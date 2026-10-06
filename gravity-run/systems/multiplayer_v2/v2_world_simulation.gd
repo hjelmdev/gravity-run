@@ -269,7 +269,8 @@ func _player_contact_against(player_state: Dictionary, barrel_state: Array, simu
 		var kind := str(event.get("kind", ""))
 		var event_id := str(event.get("event_id", ""))
 		if kind == "lava_crack":
-			if HazardRules.player_impact(rect, "block", LavaModel.crack_rect(event)) == HazardRules.PlayerImpact.LETHAL:
+			var lava_tick := simulation_tick if simulation_tick >= 0 else tick
+			if HazardRules.player_impact(rect, "block", LavaModel.crack_rect(event, float(lava_tick))) == HazardRules.PlayerImpact.LETHAL:
 				return {"kind": "terminal", "reason": "lava_crack", "entity_id": event_id, "event_id": event_id}
 			continue
 		if kind == "volcano":
@@ -342,9 +343,7 @@ func first_static_terminal_contact(previous: Dictionary, proposed: Dictionary) -
 		var kind := str(event.get("kind", ""))
 		var entity_id := str(event.get("event_id", ""))
 		if kind == "lava_crack":
-			var crack_rect: Rect2 = LavaModel.crack_rect(event)
-			var crack_polygon := PackedVector2Array([crack_rect.position, Vector2(crack_rect.end.x, crack_rect.position.y), crack_rect.end, Vector2(crack_rect.position.x, crack_rect.end.y)])
-			var crack_fraction := HazardRules.swept_rect_polygon_fraction(rect, end - start, crack_polygon)
+			var crack_fraction := LavaModel.swept_crack_contact_fraction(event, maxi(tick - 1, 0), tick, start, end, Motion.SIZE)
 			if crack_fraction >= 0.0 and crack_fraction < first_fraction:
 				first_fraction = crack_fraction
 				var crack_pose := start.lerp(end, crack_fraction)
@@ -383,17 +382,22 @@ func first_static_terminal_contact(previous: Dictionary, proposed: Dictionary) -
 		if kind == "ghost":
 			var ghost_entity: Dictionary = entity_ledger.entities.get(entity_id, {})
 			var activation_tick := int(ghost_entity.get("ghost_activation_tick", -1))
-			if activation_tick >= 0 and GhostModel.phase_at(event, activation_tick, tick) == GhostModel.DANGEROUS:
-				var ghost_rect := GhostModel.hitbox(event, tick, activation_tick)
-				var previous_dangerous := GhostModel.phase_at(event, activation_tick, maxi(tick - 1, 0)) == GhostModel.DANGEROUS
-				var fraction := -1.0
-				if previous_dangerous:
-					var ghost_polygon := PackedVector2Array([ghost_rect.position, Vector2(ghost_rect.end.x, ghost_rect.position.y), ghost_rect.end, Vector2(ghost_rect.position.x, ghost_rect.end.y)])
-					fraction = HazardRules.swept_rect_polygon_fraction(rect, end - start, ghost_polygon)
-				elif HazardRules.player_impact(Rect2(end - Motion.SIZE * 0.5, Motion.SIZE), "block", ghost_rect) == HazardRules.PlayerImpact.LETHAL:
-					# The phase becomes lethal on this tick; do not retroactively
-					# treat the previous warning-phase pose as a collision.
-					fraction = 1.0
+			var fraction := -1.0
+			if int(event.get("ghost_variant", 0)) == 1:
+				fraction = GhostModel.swept_contact_fraction(event, activation_tick, maxi(tick - 1, 0), tick, start, end, Motion.SIZE)
+			else:
+				# Preserve the pre-Gen17 stationary ghost contract: sweep against
+				# the current danger rect only if the previous tick was dangerous;
+				# on warning-to-danger entry, check the proposed endpoint only.
+				if activation_tick >= 0 and GhostModel.phase_at(event, activation_tick, tick) == GhostModel.DANGEROUS:
+					var ghost_rect := GhostModel.hitbox(event, tick, activation_tick)
+					var previous_dangerous := GhostModel.phase_at(event, activation_tick, maxi(tick - 1, 0)) == GhostModel.DANGEROUS
+					if previous_dangerous:
+						var ghost_polygon := PackedVector2Array([ghost_rect.position, Vector2(ghost_rect.end.x, ghost_rect.position.y), ghost_rect.end, Vector2(ghost_rect.position.x, ghost_rect.end.y)])
+						fraction = HazardRules.swept_rect_polygon_fraction(rect, end - start, ghost_polygon)
+					elif HazardRules.player_impact(Rect2(end - Motion.SIZE * 0.5, Motion.SIZE), "block", ghost_rect) == HazardRules.PlayerImpact.LETHAL:
+						fraction = 1.0
+			if fraction >= 0.0:
 				if fraction >= 0.0 and fraction < first_fraction:
 					first_fraction = fraction
 					var ghost_pose := start.lerp(end, fraction)

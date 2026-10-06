@@ -42,12 +42,13 @@ const GENERATOR_VERSION_13 := 13
 const GENERATOR_VERSION_14 := 14
 const GENERATOR_VERSION_15 := 15
 const GENERATOR_VERSION_16 := 16
+const GENERATOR_VERSION_17 := 17
 const GEN14_RHYTHM_SPACING_DELTAS := [-120.0, -120.0, 240.0]
 const GEN14_RHYTHM_BASE_SPACING_SCALE := 1.22
 const GEN16_RHYTHM_SPACING_DELTAS := [-90.0, -90.0, 180.0]
 const GEN16_RHYTHM_BASE_SPACING_SCALE := 0.98
 const PREVIOUS_CURRENT_GENERATOR_VERSION := GENERATOR_VERSION_14
-const GENERATOR_VERSION := GENERATOR_VERSION_16
+const GENERATOR_VERSION := GENERATOR_VERSION_17
 const PUBLISHED_SHARED_GENERATOR_VERSION := 5
 const LEGACY_GENERATOR_VERSION := 3
 const PREVIOUS_GENERATOR_VERSION := 4
@@ -138,7 +139,7 @@ func set_difficulty_profile(profile: Resource) -> void:
 func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> bool:
 	_configuration_failed = false
 	_generator_version = generator_version
-	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_15, GENERATOR_VERSION_14, GENERATOR_VERSION_13, GENERATOR_VERSION_12, GENERATOR_VERSION_11, GENERATOR_VERSION_10, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
+	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_16, GENERATOR_VERSION_15, GENERATOR_VERSION_14, GENERATOR_VERSION_13, GENERATOR_VERSION_12, GENERATOR_VERSION_11, GENERATOR_VERSION_10, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
 		push_error("Unsupported course generator version: %d" % generator_version)
 		return false
 	_profiles.clear()
@@ -168,6 +169,10 @@ func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> b
 			var crack_width := Vector2(150.0, 176.0) if generator_version >= GENERATOR_VERSION_15 else Vector2(104.0, 136.0)
 			_profiles.append(_make_profile(&"lava_crack", &"lava_crack", 1.2, BOTH_LANES, crack_width, Vector2i(1, 1), PackedFloat32Array([18.0])))
 			_profiles.append(_make_profile(&"lava_volcano", &"volcano", 0.85, FLOOR_LANE, Vector2(104.0, 136.0), Vector2i(1, 1), PackedFloat32Array([72.0])))
+		if generator_version >= GENERATOR_VERSION_17:
+			_profiles.append(_make_profile(&"haunted_chaser", &"ghost", 0.7, FLOOR_LANE, Vector2(72.0, 72.0), Vector2i(1, 1), PackedFloat32Array([96.0])))
+			_profiles.append(_make_profile(&"cave_icicle", &"rock", 0.95, CEILING_LANE, Vector2(72.0, 72.0), Vector2i(1, 1), PackedFloat32Array([112.0])))
+			_profiles.append(_make_profile(&"lava_tidal_pool", &"lava_crack", 0.9, FLOOR_LANE, Vector2(150.0, 180.0), Vector2i(1, 1), PackedFloat32Array([22.0])))
 	return true
 
 func get_profile_catalog(generator_version: int = GENERATOR_VERSION) -> Array[CourseHazardProfile]:
@@ -341,7 +346,7 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 				for threat in candidate["threats"]:
 					widest = maxf(widest, float(threat["end"]) - float(threat["start"]))
 				var conservative_spacing := maxf(spacing, widest + candidate_clearance)
-				if _generator_version == GENERATOR_VERSION_16:
+				if _generator_version == GENERATOR_VERSION_16 or _generator_version == GENERATOR_VERSION_17:
 					conservative_spacing = maxf(BASE_EVENT_SPACING, conservative_spacing * GEN16_RHYTHM_BASE_SPACING_SCALE + GEN16_RHYTHM_SPACING_DELTAS[phase])
 					_rhythm_event_index += 1
 				elif _generator_version >= GENERATOR_VERSION_14:
@@ -379,6 +384,16 @@ func _apply_generator_timing(event: Dictionary) -> void:
 		event["warning_ticks"] = 60
 		event["danger_ticks"] = 300
 		event["skin_variant"] = posmod(posmod(_seed, 3) + posmod(roundi(float(event.get("course_distance", 0.0)) / BASE_EVENT_SPACING), 3), 3)
+	if _generator_version == GENERATOR_VERSION_17:
+		match str(event.get("id", "")):
+			"haunted_ghost":
+				event.merge({"ghost_variant": 0, "trigger_lead": 1250.0, "warning_ticks": 60, "danger_ticks": 300, "fade_ticks": 45, "skin_variant": posmod(posmod(_seed, 3) + posmod(roundi(float(event.get("course_distance", 0.0)) / BASE_EVENT_SPACING), 3), 3)}, true)
+			"haunted_chaser":
+				event.merge({"ghost_variant": 1, "trigger_lead": 1700.0, "warning_ticks": 54, "danger_ticks": 210, "fade_ticks": 30, "chase_speed": 760.0, "chase_start_lag": 220.0, "skin_variant": posmod(posmod(_seed, 3) + posmod(roundi(float(event.get("course_distance", 0.0)) / BASE_EVENT_SPACING), 3), 3), "blocked_lanes": FLOOR_LANE, "from_ceiling": false}, true)
+			"cave_icicle":
+				event.merge({"rock_variant": 1, "from_ceiling": true, "blocked_lanes": FLOOR_LANE, "trigger_lead": 1250.0, "warning_ticks": 48, "fall_ticks": 30, "lodged_ticks": 240, "burial_depth": 18.0, "width": 64.0, "height": 116.0}, true)
+			"lava_tidal_pool":
+				event.merge({"lava_variant": 1, "blocked_lanes": FLOOR_LANE, "from_ceiling": false, "pool_min_depth": 6.0, "pool_max_depth": 30.0, "pool_period_ticks": 180, "pool_phase_ticks": posmod(_seed + roundi(float(event.get("course_distance", 0.0))), 180)}, true)
 	if str(event.get("kind", "")) == "saw" and _generator_version >= GENERATOR_VERSION_10:
 		var variant_roll := _rng.randf()
 		var variant := "floor_embedded"
@@ -394,7 +409,7 @@ func _apply_generator_timing(event: Dictionary) -> void:
 		var saw_profile: CourseHazardProfile = event.get("profile")
 		if saw_profile != null:
 			event["threats"] = saw_profile.build_threat_intervals(event)
-	if str(event.get("kind", "")) == "rock" and _generator_version >= ROCK_SAFE_GENERATOR_VERSION:
+	if str(event.get("kind", "")) == "rock" and _generator_version >= ROCK_SAFE_GENERATOR_VERSION and not (_generator_version == GENERATOR_VERSION_17 and str(event.get("id", "")) == "cave_icicle"):
 		event["trigger_lead"] = 1800.0
 		event["warning_ticks"] = 90
 		event["fall_ticks"] = 42
@@ -422,7 +437,7 @@ func _try_append_independent_barrel(base_event: Dictionary, clearance: float) ->
 	var separation := float(base_event.get("width", HazardRules.BARREL_WIDTH)) * 0.5 + chain_width * 0.5 + HazardRules.BARREL_WIDTH + 24.0
 	barrel_event["course_distance"] = base_distance + separation
 	barrel_event["threats"] = _barrel_profile.build_threat_intervals(barrel_event)
-	if _generator_version == GENERATOR_VERSION_16 and _gen16_barrel_meeting_conflicts_with_ceiling(barrel_event):
+	if _generator_version >= GENERATOR_VERSION_16 and _gen16_barrel_meeting_conflicts_with_ceiling(barrel_event):
 		_generation_stats["route_rejections"] = int(_generation_stats.get("route_rejections", 0)) + 1
 		return
 	var spiked_corridor: Dictionary = {}
@@ -438,7 +453,7 @@ func _try_append_independent_barrel(base_event: Dictionary, clearance: float) ->
 	trial.append(barrel_event)
 	if is_plan_solvable(trial, clearance):
 		_events.append(barrel_event)
-		if _generator_version == GENERATOR_VERSION_16:
+		if _generator_version >= GENERATOR_VERSION_16:
 			_gen16_barrel_meeting_windows.append_array(_barrel_meeting_windows(barrel_event))
 		if not spiked_corridor.is_empty():
 			_spiked_barrel_corridors.append(spiked_corridor)
@@ -507,7 +522,7 @@ func _candidate_crosses_spiked_barrel_corridor(candidate: Dictionary) -> bool:
 	if _generator_version < GENERATOR_VERSION_13:
 		return false
 	var safety_candidate := candidate
-	if _generator_version == GENERATOR_VERSION_16:
+	if _generator_version >= GENERATOR_VERSION_16:
 		var profile: Variant = candidate.get("profile")
 		if profile != null and profile.has_method("build_threat_intervals"):
 			safety_candidate = candidate.duplicate(true)
@@ -517,9 +532,9 @@ func _candidate_crosses_spiked_barrel_corridor(candidate: Dictionary) -> bool:
 			return true
 		if _generator_version >= GENERATOR_VERSION_16 and _opposing_hazard_overlaps_spiked_barrel_corridor(safety_candidate, corridor):
 			return true
-	if _generator_version == GENERATOR_VERSION_16 and _candidate_overlaps_gen16_barrel_meeting_window(safety_candidate):
+	if _generator_version >= GENERATOR_VERSION_16 and _candidate_overlaps_gen16_barrel_meeting_window(safety_candidate):
 		return true
-	if _generator_version == GENERATOR_VERSION_16 and _candidate_creates_too_short_lava_lane_return(safety_candidate):
+	if _generator_version >= GENERATOR_VERSION_16 and _candidate_creates_too_short_lava_lane_return(safety_candidate):
 		return true
 	return false
 
@@ -630,7 +645,7 @@ func _append_safe_fallback(speed: float, track_height: float) -> void:
 					widest = maxf(widest, float(threat["end"]) - float(threat["start"]))
 				var fallback_spacing := maxf(BASE_EVENT_SPACING, widest + clearance)
 				if _generator_version >= GENERATOR_VERSION_14:
-					if _generator_version == GENERATOR_VERSION_16:
+					if _generator_version == GENERATOR_VERSION_16 or _generator_version == GENERATOR_VERSION_17:
 						fallback_spacing = maxf(BASE_EVENT_SPACING, fallback_spacing * GEN16_RHYTHM_BASE_SPACING_SCALE + GEN16_RHYTHM_SPACING_DELTAS[_rhythm_event_index % GEN16_RHYTHM_SPACING_DELTAS.size()])
 					else:
 						fallback_spacing = maxf(BASE_EVENT_SPACING, fallback_spacing + GEN14_RHYTHM_SPACING_DELTAS[_rhythm_event_index % GEN14_RHYTHM_SPACING_DELTAS.size()])

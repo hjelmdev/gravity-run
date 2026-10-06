@@ -25,12 +25,13 @@ func apply_world_state(value: Dictionary) -> void:
 	_render_tick = maxf(float(value.get("tick", simulation_tick)), 0.0)
 	simulation_tick = int(floor(_render_tick))
 	var next_phase := str(value.get("phase", Model.phase_at(event, activation_tick, simulation_tick)))
-	if _phase == "falling" and next_phase == "buried":
+	if _phase == "falling" and (next_phase == "buried" or (int(event.get("rock_variant", 0)) == 1 and next_phase == "lodged")):
 		_spawn_impact_debris_once()
 	_phase = next_phase
 	_render_phase = _phase
 	_render_hitbox = value.get("rect", Model.hitbox_at(event, activation_tick, _render_tick))
 	position = Vector2(float(value.get("x", event.get("x", 0.0))), float(value.get("y", position.y)))
+	visible = next_phase != "expired"
 	queue_redraw()
 
 func configure(value: Dictionary) -> void:
@@ -49,13 +50,14 @@ func set_simulation_tick(value: int) -> void:
 	_previous_tick = simulation_tick
 	simulation_tick = maxi(value, 0)
 	var next_phase := Model.phase_at(event, activation_tick, simulation_tick)
-	if _phase == "falling" and next_phase == "buried":
+	if _phase == "falling" and (next_phase == "buried" or (int(event.get("rock_variant", 0)) == 1 and next_phase == "lodged")):
 		_spawn_impact_debris_once()
 	_phase = next_phase
 	_render_tick = float(simulation_tick)
 	_render_phase = _phase
 	_render_hitbox = Model.hitbox_at(event, activation_tick, _render_tick)
 	position = Model.center_at(event, activation_tick, simulation_tick)
+	visible = next_phase != "expired"
 	_shake = 1.8 * sin(float(simulation_tick) * 1.7) if _phase == "warning" else 0.0
 	queue_redraw()
 
@@ -79,7 +81,7 @@ func swept_contact_fraction(previous_rect: Rect2, current_rect: Rect2, start_tic
 	return Model.swept_contact_fraction(event, activation_tick, start_tick, end_tick, previous_rect.get_center(), current_rect.get_center(), body_size)
 
 func is_destroying_now() -> bool:
-	return false
+	return int(event.get("rock_variant", 0)) == 1 and _phase == "expired"
 
 static func buried_ground_occlusion_mask(surface_local_y: float, rock_width: float, depth: float = VISUAL_GROUND_OCCLUSION_DEPTH) -> Rect2:
 	var mask_depth := maxf(depth, 0.0)
@@ -92,11 +94,12 @@ func _spawn_impact_debris_once() -> void:
 	impact_started.emit(str(event.get("event_id", "")))
 	var effect := ImpactDebris.new() as Node2D
 	effect.name = "RockImpactDebris"
+	effect.call("configure_ice", int(event.get("rock_variant", 0)) == 1)
 	get_parent().add_child(effect)
-	effect.global_position = Vector2(global_position.x, float(event.get("floor_y", 460.0)) - Model.BURIAL_DEPTH)
+	effect.global_position = Vector2(global_position.x, float(event.get("floor_y", 460.0)) - float(event.get("burial_depth", Model.BURIAL_DEPTH)))
 
 func _draw() -> void:
-	if event.is_empty():
+	if event.is_empty() or _render_phase == "expired":
 		return
 	var width := float(event.get("width", Model.WIDTH))
 	var height := float(event.get("height", Model.HEIGHT))
@@ -112,7 +115,12 @@ func _draw() -> void:
 		var local_rect := Rect2(rect.position - position, rect.size)
 		_draw_stone_silhouette(local_rect)
 		if _render_phase == "falling":
-			draw_circle(Vector2(0, height * 0.55), width * 0.36, Color(0.68, 0.62, 0.5, 0.28))
+			if int(event.get("rock_variant", 0)) == 1:
+				var chill := Color("b6efff", 0.55)
+				draw_line(Vector2(-width * 0.22, height * 0.57), Vector2(-width * 0.30, height * 0.78), chill, 2.0, true)
+				draw_line(Vector2(width * 0.22, height * 0.57), Vector2(width * 0.30, height * 0.78), chill, 2.0, true)
+			else:
+				draw_circle(Vector2(0, height * 0.55), width * 0.36, Color(0.68, 0.62, 0.5, 0.28))
 		else:
 			var floor_y := float(event.get("floor_y", 460.0))
 			var surface_y := floor_y - position.y
@@ -124,12 +132,15 @@ func _draw() -> void:
 			edge_color.a = 0.82
 			draw_line(Vector2(-width * 0.76, surface_y), Vector2(-width * 0.68, surface_y), edge_color, 2.0, true)
 			draw_line(Vector2(width * 0.68, surface_y), Vector2(width * 0.76, surface_y), edge_color, 2.0, true)
-			var crack_color := Color("b28c69", 0.82)
+			var crack_color := Color("a9e5f4", 0.9) if int(event.get("rock_variant", 0)) == 1 else Color("b28c69", 0.82)
 			draw_polyline(PackedVector2Array([Vector2(-width * 0.94, surface_y - 2.0), Vector2(-width * 0.82, surface_y + 1.0), Vector2(-width * 0.72, surface_y + 6.0)]), crack_color, 2.0, true)
 			draw_polyline(PackedVector2Array([Vector2(width * 0.94, surface_y - 2.0), Vector2(width * 0.82, surface_y + 1.0), Vector2(width * 0.72, surface_y + 6.0)]), crack_color, 2.0, true)
 
 func _draw_stone_silhouette(rect: Rect2) -> void:
 	if rect.size.x <= 0.0 or rect.size.y <= 0.0:
+		return
+	if int(event.get("rock_variant", 0)) == 1:
+		_draw_icicle_silhouette(rect)
 		return
 	var origin := rect.position
 	var size := rect.size
@@ -146,10 +157,38 @@ func _draw_stone_silhouette(rect: Rect2) -> void:
 		origin + Vector2(0.20 * size.x, 1.00 * size.y),
 		origin + Vector2(0.04 * size.x, 0.77 * size.y),
 	])
-	draw_colored_polygon(points, Color("747773"))
+	var fill := Color("747773")
+	draw_colored_polygon(points, fill)
 	var outline := points.duplicate()
 	outline.append(points[0])
-	draw_polyline(outline, Color("454a49"), 2.0, true)
-	draw_line(origin + Vector2(size.x * 0.29, size.y * 0.29), origin + Vector2(size.x * 0.42, size.y * 0.55), Color("353c3f"), 2.5)
-	draw_line(origin + Vector2(size.x * 0.42, size.y * 0.55), origin + Vector2(size.x * 0.34, size.y * 0.69), Color("353c3f"), 2.5)
-	draw_line(origin + Vector2(size.x * 0.64, size.y * 0.20), origin + Vector2(size.x * 0.53, size.y * 0.42), Color("353c3f"), 2.0)
+	var outline_color := Color("454a49")
+	var vein_color := Color("353c3f")
+	draw_polyline(outline, outline_color, 2.0, true)
+	draw_line(origin + Vector2(size.x * 0.29, size.y * 0.29), origin + Vector2(size.x * 0.42, size.y * 0.55), vein_color, 2.5)
+	draw_line(origin + Vector2(size.x * 0.42, size.y * 0.55), origin + Vector2(size.x * 0.34, size.y * 0.69), vein_color, 2.5)
+	draw_line(origin + Vector2(size.x * 0.64, size.y * 0.20), origin + Vector2(size.x * 0.53, size.y * 0.42), vein_color, 2.0)
+
+func _draw_icicle_silhouette(rect: Rect2) -> void:
+	var o := rect.position
+	var s := rect.size
+	var points := PackedVector2Array([
+		o + Vector2(s.x * 0.08, 0.0),
+		o + Vector2(s.x * 0.92, 0.0),
+		o + Vector2(s.x * 0.83, s.y * 0.48),
+		o + Vector2(s.x * 0.68, s.y * 0.66),
+		o + Vector2(s.x * 0.53, s.y * 0.91),
+		o + Vector2(s.x * 0.47, s.y),
+		o + Vector2(s.x * 0.39, s.y * 0.91),
+		o + Vector2(s.x * 0.28, s.y * 0.67),
+		o + Vector2(s.x * 0.15, s.y * 0.49),
+	])
+	draw_colored_polygon(points, Color("b9e8f5", 0.84))
+	var outline := points.duplicate()
+	outline.append(points[0])
+	draw_polyline(outline, Color("eaffff", 0.98), 2.0, true)
+	draw_colored_polygon(PackedVector2Array([
+		o + Vector2(s.x * 0.52, s.y * 0.08),
+		o + Vector2(s.x * 0.76, s.y * 0.42),
+		o + Vector2(s.x * 0.58, s.y * 0.72),
+	]), Color("effcff", 0.5))
+	draw_line(o + Vector2(s.x * 0.29, s.y * 0.13), o + Vector2(s.x * 0.43, s.y * 0.48), Color("8bc7df", 0.84), 2.0, true)

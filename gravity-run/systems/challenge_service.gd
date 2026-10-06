@@ -339,6 +339,10 @@ func _new_default_ruleset(generator_version: int) -> Resource:
 	if generator_version == LEGACY_GENERATOR_VERSION:
 		default_ruleset.set("event_density", 1.0)
 	elif generator_version == GENERATOR_VERSION:
+		default_ruleset.set("revision", 14)
+		default_ruleset.set("event_density", 1.9)
+		default_ruleset.set("coin_revision", 2)
+	elif generator_version == CourseGeneratorScript.GENERATOR_VERSION_16:
 		default_ruleset.set("revision", 13)
 		default_ruleset.set("event_density", 1.9)
 		default_ruleset.set("coin_revision", 2)

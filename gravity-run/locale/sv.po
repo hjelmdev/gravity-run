@@ -1331,6 +1331,12 @@ msgstr "Rundan avbröts"
 msgid "Course seed (blank for random)"
 msgstr "Ban-seed (tomt för slumpmässig bana)"
 
+msgid "Enter course seed"
+msgstr "Ange ban-seed"
+
+msgid "Course seed"
+msgstr "Ban-seed"
+
 msgid "Leave blank for a new course each round. Enter a seed to replay the same course."
 msgstr "Lämna tomt för en ny bana varje runda. Ange ett seed för att återspela samma bana."
 

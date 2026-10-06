@@ -43,7 +43,7 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 	var source_events: Array[Dictionary] = generator.get_planned_events()
 	var manifest := ManifestScript.new() as MultiplayerCourseManifest
 	manifest.generator_version = generator_version
-	manifest.manifest_version = 9 if generator_version >= CourseGenerator.GENERATOR_VERSION_16 else (8 if generator_version >= CourseGenerator.GENERATOR_VERSION_15 else (7 if generator_version >= CourseGenerator.GENERATOR_VERSION_14 else (6 if generator_version >= CourseGenerator.GENERATOR_VERSION_12 else (5 if generator_version >= CourseGenerator.GENERATOR_VERSION_10 else (4 if generator_version >= CourseGenerator.GENERATOR_VERSION_9 else (3 if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION else 2))))))
+	manifest.manifest_version = 10 if generator_version >= CourseGenerator.GENERATOR_VERSION_17 else (9 if generator_version >= CourseGenerator.GENERATOR_VERSION_16 else (8 if generator_version >= CourseGenerator.GENERATOR_VERSION_15 else (7 if generator_version >= CourseGenerator.GENERATOR_VERSION_14 else (6 if generator_version >= CourseGenerator.GENERATOR_VERSION_12 else (5 if generator_version >= CourseGenerator.GENERATOR_VERSION_10 else (4 if generator_version >= CourseGenerator.GENERATOR_VERSION_9 else (3 if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION else 2)))))))
 	manifest.course_identity = str(definition.call("get_course_identity"))
 	manifest.seed_value = seed_value
 	manifest.course_length_px = course_length_px
@@ -52,6 +52,8 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 	manifest.ruleset_fingerprint = str(ruleset.call("get_fingerprint"))
 	var biome_start_offset := BiomeRendererScript.start_biome_offset_for_seed(seed_value, generator_version)
 	manifest.events = _resolve_events(source_events, course_length_px, generator_version, biome_start_offset)
+	if generator_version >= CourseGenerator.GENERATOR_VERSION_17:
+		manifest.events = filter_unsafe_gen17_biome_events(manifest.events)
 	if generator_version >= CourseGenerator.GENERATOR_VERSION_15:
 		manifest.events = filter_unsafe_gen15_volcanoes(manifest.events, manifest.start_x)
 	if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION:
@@ -61,6 +63,12 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 	if not manifest_error.is_empty():
 		return {"manifest": null, "error": manifest_error}
 	return {"manifest": manifest, "error": ""}
+
+func resolve_runtime_events(source_events: Array[Dictionary], course_length_px: int, generator_version: int, biome_start_offset: float = 0.0) -> Array[Dictionary]:
+	var resolved := _resolve_events(source_events, course_length_px, generator_version, biome_start_offset)
+	if generator_version >= CourseGenerator.GENERATOR_VERSION_17:
+		resolved = filter_unsafe_gen17_biome_events(resolved)
+	return resolved
 
 func filter_unsafe_gen15_volcanoes(events: Array[Dictionary], course_start_x: float) -> Array[Dictionary]:
 	var surface_index := CourseSurfaceIndexScript.new()
@@ -72,10 +80,35 @@ func filter_unsafe_gen15_volcanoes(events: Array[Dictionary], course_start_x: fl
 		filtered.append(event)
 	return filtered
 
+func filter_unsafe_gen17_biome_events(events: Array[Dictionary]) -> Array[Dictionary]:
+	var surface_index := CourseSurfaceIndexScript.new()
+	surface_index.configure(events, FLOOR_START_Y, CEILING_START_Y)
+	var filtered: Array[Dictionary] = []
+	for event in events:
+		var keep := true
+		var kind := str(event.get("kind", ""))
+		var event_x := float(event.get("x", 0.0))
+		if kind == "ghost" and int(event.get("ghost_variant", 0)) == 1:
+			var start_x := event_x - float(event.get("trigger_lead", 1700.0)) - float(event.get("chase_start_lag", 220.0)) - float(event.get("width", 72.0)) * 0.5
+			var end_x := event_x - float(event.get("trigger_lead", 1700.0)) - float(event.get("chase_start_lag", 220.0)) + float(event.get("chase_speed", 760.0)) * float(event.get("danger_ticks", 150)) / 60.0 + float(event.get("width", 72.0)) * 0.5
+			keep = bool(surface_index.call("interval_is_supported", start_x, end_x, true)) and bool(surface_index.call("interval_is_supported", start_x, end_x, false))
+		elif kind == "rock" and int(event.get("rock_variant", 0)) == 1:
+			keep = bool(surface_index.call("surface_at", event_x, true).get("supported", false))
+		elif kind == "lava_crack" and int(event.get("lava_variant", 0)) == 1:
+			var half_width := float(event.get("width", 160.0)) * 0.5 + 44.0
+			keep = bool(surface_index.call("interval_is_supported", event_x - half_width, event_x + half_width, true))
+		if keep:
+			filtered.append(event)
+	return filtered
+
 func _make_multiplayer_ruleset(generator_version: int) -> Resource:
 	var ruleset := CourseRulesetScript.new() as Resource
 	ruleset.set("ruleset_id", &"multiplayer_race")
-	if generator_version == CourseGenerator.GENERATOR_VERSION_16:
+	if generator_version == CourseGenerator.GENERATOR_VERSION_17:
+		ruleset.set("revision", 14)
+		ruleset.set("event_density", 1.9)
+		ruleset.set("coin_revision", 2)
+	elif generator_version == CourseGenerator.GENERATOR_VERSION_16:
 		ruleset.set("revision", 13)
 		ruleset.set("event_density", 1.9)
 		ruleset.set("coin_revision", 2)
@@ -128,10 +161,6 @@ func _make_multiplayer_ruleset(generator_version: int) -> Resource:
 
 func _resolve_events(source_events: Array[Dictionary], course_length_px: int, generator_version: int, biome_start_offset: float = 0.0) -> Array[Dictionary]:
 	var resolved: Array[Dictionary] = []
-	var source_terrain_distances: Array[float] = []
-	for planned_source in source_events:
-		if str(planned_source.get("kind", "")) in ["step", "slope", "gap"]:
-			source_terrain_distances.append(float(planned_source.get("course_distance", 0.0)))
 	var floor_y := FLOOR_START_Y
 	var ceiling_y := CEILING_START_Y
 	var event_index := 0
@@ -266,21 +295,28 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 				else:
 					floor_y = end_y
 			"rock":
+				var icicle := int(source.get("rock_variant", 0)) == 1
 				var near_terrain := false
-				for terrain_distance in source_terrain_distances:
+				for terrain_source in source_events:
+					var terrain_kind := str(terrain_source.get("kind", ""))
+					var terrain_distance := float(terrain_source.get("course_distance", 0.0))
+					if terrain_kind not in ["step", "slope", "gap"] or (icicle and terrain_kind == "gap" and not bool(terrain_source.get("from_ceiling", false))):
+						continue
 					if absf(terrain_distance - course_distance) < 420.0:
 						near_terrain = true
 						break
 				for prior in resolved:
 					var prior_kind := str(prior.get("kind", ""))
 					var prior_x := float(prior.get("x", 0.0))
-					if prior_kind in ["step", "slope", "gap"] and absf(prior_x - event_x) < 420.0:
+					if prior_kind in ["step", "slope"] and absf(prior_x - event_x) < 420.0:
 						near_terrain = true
 						break
+				var icicle_width := float(source.get("width", 52.0)) if icicle else 0.0
+				var floor_supported := not icicle or not _has_floor_gap_over_interval(source_events, course_distance, icicle_width)
 				if near_terrain or floor_surface_y - ceiling_surface_y < 260.0:
 					event_index += 1
 					continue
-				resolved.append({
+				var rock_event := {
 					"event_id": event_prefix,
 					"kind": "rock",
 					"x": event_x,
@@ -293,7 +329,10 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 					"fall_ticks": int(source.get("fall_ticks", 20)),
 					"burial_depth": float(source.get("burial_depth", 24.0)),
 					"from_ceiling": true,
-				})
+				}
+				if icicle:
+					rock_event.merge({"rock_variant": 1, "floor_supported": floor_supported, "lodged_ticks": int(source.get("lodged_ticks", 240))}, true)
+				resolved.append(rock_event)
 			"saw":
 				var from_ceiling_saw := bool(source.get("from_ceiling", false))
 				var saw_variant := str(source.get("saw_variant", "legacy_floor_then_drop"))
@@ -355,6 +394,10 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 				}
 				if generator_version >= CourseGenerator.GENERATOR_VERSION_16:
 					ghost_event["skin_variant"] = int(source.get("skin_variant", 0))
+				if generator_version >= CourseGenerator.GENERATOR_VERSION_17:
+					for key in ["ghost_variant", "chase_speed", "chase_start_lag"]:
+						if source.has(key):
+							ghost_event[key] = source[key]
 				resolved.append(ghost_event)
 			"lava_crack":
 				if generator_version < CourseGenerator.GENERATOR_VERSION_14 or BiomeRendererScript.biome_id_for_generator(course_distance + biome_start_offset, generator_version) != "lava":
@@ -376,6 +419,10 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 				if generator_version >= CourseGenerator.GENERATOR_VERSION_15:
 					crack_event["lava_crack_revision"] = int(source.get("lava_crack_revision", 1))
 					crack_event["visual_depth"] = clampf(float(source.get("visual_depth", 32.0)), 24.0, 44.0)
+				if generator_version >= CourseGenerator.GENERATOR_VERSION_17 and int(source.get("lava_variant", 0)) == 1:
+					for key in ["lava_variant", "pool_min_depth", "pool_max_depth", "pool_period_ticks", "pool_phase_ticks"]:
+						if source.has(key):
+							crack_event[key] = source[key]
 				resolved.append(crack_event)
 			"volcano":
 				if generator_version < CourseGenerator.GENERATOR_VERSION_14 or BiomeRendererScript.biome_id_for_generator(course_distance + biome_start_offset, generator_version) != "lava":
@@ -438,3 +485,15 @@ func _surface_y_at(events: Array[Dictionary], x: float, ceiling: bool) -> float:
 					return lerpf(float(event.get("start_y", surface_y)), float(event.get("end_y", surface_y)), (x - start_x) / (end_x - start_x))
 				surface_y = float(event.get("end_y", surface_y))
 	return surface_y
+
+func _has_floor_gap_over_interval(source_events: Array[Dictionary], course_distance: float, width: float) -> bool:
+	for source in source_events:
+		if str(source.get("kind", "")) != "gap" or bool(source.get("from_ceiling", false)):
+			continue
+		var center := float(source.get("course_distance", 0.0))
+		var half_width := float(source.get("width", 0.0)) * 0.5
+		var gap_left := center - half_width
+		var gap_right := center + half_width
+		if gap_right >= course_distance - width * 0.5 and gap_left <= course_distance + width * 0.5:
+			return true
+	return false

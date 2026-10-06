@@ -100,13 +100,52 @@ static func swept_contact_fraction(event: Dictionary, course_start_x: float, sta
 			best = fraction
 	return best if best != INF else -1.0
 
-static func crack_rect(event: Dictionary) -> Rect2:
+static func crack_rect(event: Dictionary, tick: float = 0.0) -> Rect2:
 	var x := float(event.get("x", 0.0))
 	var y := float(event.get("y", 0.0))
 	var width := maxf(float(event.get("width", 120.0)), 1.0)
 	var depth := clampf(float(event.get("hot_depth", 14.0)), 4.0, 30.0)
 	var from_ceiling := bool(event.get("from_ceiling", false))
+	if int(event.get("lava_variant", 0)) == 1:
+		return tidal_pool_rect(event, tick)
 	return Rect2(Vector2(x - width * 0.5, y - (2.0 if not from_ceiling else 0.0)), Vector2(width, depth + 2.0))
+
+static func tidal_pool_rect(event: Dictionary, tick: float) -> Rect2:
+	var x := float(event.get("x", 0.0))
+	var surface_y := float(event.get("y", 460.0))
+	var period := maxf(float(event.get("pool_period_ticks", 180)), 1.0)
+	var phase := (tick + float(event.get("pool_phase_ticks", 0))) / period
+	var wave := 0.5 - 0.5 * cos(TAU * phase)
+	var min_depth := clampf(float(event.get("pool_min_depth", 6.0)), 4.0, 24.0)
+	var max_depth := clampf(float(event.get("pool_max_depth", 30.0)), min_depth, 36.0)
+	var min_width := maxf(float(event.get("pool_min_width", float(event.get("width", 160.0)) * 0.58)), 60.0)
+	var max_width := maxf(float(event.get("width", 160.0)), min_width)
+	var depth := lerpf(min_depth, max_depth, wave)
+	var width := lerpf(min_width, max_width, wave)
+	return Rect2(Vector2(x - width * 0.5, surface_y - depth), Vector2(width, depth + 2.0))
+
+static func tidal_pool_envelope(event: Dictionary) -> Rect2:
+	var x := float(event.get("x", 0.0))
+	var y := float(event.get("y", 460.0))
+	var width := maxf(float(event.get("width", 160.0)), float(event.get("pool_min_width", 60.0)))
+	var depth := clampf(float(event.get("pool_max_depth", 30.0)), 4.0, 36.0)
+	return Rect2(Vector2(x - width * 0.5, y - depth), Vector2(width, depth + 2.0))
+
+static func swept_crack_contact_fraction(event: Dictionary, start_tick: int, end_tick: int, start_center: Vector2, end_center: Vector2, body_size: Vector2 = Motion.SIZE) -> float:
+	if int(event.get("lava_variant", 0)) != 1:
+		var bounds := crack_rect(event)
+		var polygon := PackedVector2Array([bounds.position, Vector2(bounds.end.x, bounds.position.y), bounds.end, Vector2(bounds.position.x, bounds.end.y)])
+		return HazardRules.swept_rect_polygon_fraction(Rect2(start_center - body_size * 0.5, body_size), end_center - start_center, polygon)
+	if end_tick < start_tick:
+		return -1.0
+	const SUBSTEPS := 12
+	for index in range(SUBSTEPS + 1):
+		var fraction := float(index) / float(SUBSTEPS)
+		var center := start_center.lerp(end_center, fraction)
+		var tick := lerpf(float(start_tick), float(end_tick), fraction)
+		if Rect2(center - body_size * 0.5, body_size).intersects(tidal_pool_rect(event, tick)):
+			return fraction
+	return -1.0
 
 static func volcano_body_polygon_local(event: Dictionary) -> PackedVector2Array:
 	var floor_y := float(event.get("floor_y", 460.0))

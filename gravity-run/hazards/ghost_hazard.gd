@@ -50,6 +50,7 @@ func set_simulation_tick(value: int) -> void:
 	if next_tick < simulation_tick:
 		return
 	simulation_tick = next_tick
+	global_position = Model.center_at(event, activation_tick, simulation_tick)
 	_update_phase()
 
 func apply_world_state(value: Dictionary) -> void:
@@ -65,6 +66,7 @@ func apply_world_state(value: Dictionary) -> void:
 	if activation_tick < 0 and next_activation >= 0:
 		activation_tick = next_activation
 	simulation_tick = next_tick
+	global_position = Model.center_at(event, activation_tick, simulation_tick)
 	_update_phase()
 
 func _update_phase() -> void:
@@ -77,6 +79,9 @@ func _update_phase() -> void:
 
 func get_hitbox_rect() -> Rect2:
 	return Model.hitbox(event, simulation_tick, activation_tick)
+
+func swept_contact_fraction(start_rect: Rect2, finish_rect: Rect2, start_tick: int, end_tick: int, body_size: Vector2) -> float:
+	return Model.swept_contact_fraction(event, activation_tick, start_tick, end_tick, start_rect.get_center(), finish_rect.get_center(), body_size)
 
 func is_destroying_now() -> bool:
 	return phase == Model.EXPIRED

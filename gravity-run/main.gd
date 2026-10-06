@@ -810,16 +810,25 @@ func _spawn_course_event(event: Dictionary) -> void:
 		&"slope":
 			_spawn_course_slope(event, event_x)
 		&"rock":
+			var is_icicle := _active_seed_version >= COURSE_GENERATOR_SCRIPT.GENERATOR_VERSION_17 and str(event.get("id", "")) == "cave_icicle"
 			var near_terrain := false
 			for planned in course_generator.get_planned_events():
-				if str(planned.get("kind", "")) in ["step", "slope", "gap"] and absf(float(planned.get("course_distance", 0.0)) - float(event.get("course_distance", 0.0))) < 420.0:
-					near_terrain = true
-					break
+				var planned_kind := str(planned.get("kind", ""))
+				if planned_kind in ["step", "slope"] or (planned_kind == "gap" and not (is_icicle and not bool(planned.get("from_ceiling", false)))):
+					if absf(float(planned.get("course_distance", 0.0)) - float(event.get("course_distance", 0.0))) < 420.0:
+						near_terrain = true
+						break
 			if not near_terrain and _floor_surface_y(event_x) - _ceiling_surface_y(event_x) >= 260.0:
 				var rock := FALLING_ROCK_SCENE.instantiate() as Node2D
 				var rock_event_id := _singleplayer_rock_key(event)
 				rock.connect("impact_started", Callable(self, "_on_rock_impact_started"))
 				var rock_event := {"event_id": rock_event_id, "kind": "rock", "x": event_x, "width": width, "height": height, "floor_y": _floor_surface_y(event_x), "ceiling_y": _ceiling_surface_y(event_x), "trigger_lead": float(event.get("trigger_lead", FALLING_ROCK_MODEL.TRIGGER_LEAD)), "warning_ticks": int(event.get("warning_ticks", FALLING_ROCK_MODEL.WARNING_TICKS)), "fall_ticks": int(event.get("fall_ticks", FALLING_ROCK_MODEL.FALL_TICKS)), "burial_depth": float(event.get("burial_depth", FALLING_ROCK_MODEL.BURIAL_DEPTH))}
+				if is_icicle:
+					var resolved_icicle := _resolve_singleplayer_rock_event(event)
+					if resolved_icicle.is_empty():
+						return
+					rock_event = resolved_icicle
+					rock_event["event_id"] = rock_event_id
 				rock.call("configure", rock_event)
 				rock.name = "FallingRock_%s" % rock_event_id
 				add_child(rock)
@@ -869,7 +878,7 @@ func _spawn_course_event(event: Dictionary) -> void:
 func _spawn_singleplayer_lava_event(source_event: Dictionary, target_x: float) -> void:
 	var horizon := ceili(maxf(float(course_distance) + screen_width + 2400.0, float(source_event.get("course_distance", 0.0)) + 1.0))
 	var biome_start_offset := BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(_active_seed, _active_seed_version)
-	var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", course_generator.get_planned_events(), horizon, _active_seed_version, biome_start_offset)
+	var resolved_events: Array[Dictionary] = _manifest_builder.call("resolve_runtime_events", course_generator.get_planned_events(), horizon, _active_seed_version, biome_start_offset)
 	var source_kind := str(source_event.get("kind", ""))
 	for event in resolved_events:
 		if str(event.get("kind", "")) != source_kind or absf(float(event.get("x", INF)) - target_x) > 0.5:
@@ -930,7 +939,7 @@ func _resolve_singleplayer_saw_event(source_event: Dictionary) -> Dictionary:
 	var support_horizon := source_distance + SAW_BLADE_MODEL.START_OFFSET + 3000.0
 	course_generator.ensure_horizon(support_horizon, _run_speed(), screen_height, COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE)
 	var biome_start_offset := BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(_active_seed, _active_seed_version)
-	var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", course_generator.get_planned_events(), ceili(support_horizon), _active_seed_version, biome_start_offset)
+	var resolved_events: Array[Dictionary] = _manifest_builder.call("resolve_runtime_events", course_generator.get_planned_events(), ceili(support_horizon), _active_seed_version, biome_start_offset)
 	var target_x := PLAYER_X + source_distance
 	for resolved_event in resolved_events:
 		if str(resolved_event.get("kind", "")) == "saw" and absf(float(resolved_event.get("x", INF)) - target_x) < 0.5:
@@ -946,16 +955,30 @@ func _resolve_singleplayer_ghost_event(source_event: Dictionary) -> Dictionary:
 	if course_generator == null or _manifest_builder == null:
 		return {}
 	var source_distance := float(source_event.get("course_distance", 0.0))
-	var support_horizon := source_distance + 200.0
+	var support_horizon := source_distance + float(source_event.get("trigger_lead", 1700.0)) + float(source_event.get("chase_start_lag", 220.0)) + float(source_event.get("chase_speed", 760.0)) * float(source_event.get("danger_ticks", 210)) / 60.0 + 900.0
 	course_generator.ensure_horizon(support_horizon, _run_speed(), screen_height, COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE)
 	var biome_start_offset := BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(_active_seed, _active_seed_version)
-	var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", course_generator.get_planned_events(), ceili(support_horizon), _active_seed_version, biome_start_offset)
+	var resolved_events: Array[Dictionary] = _manifest_builder.call("resolve_runtime_events", course_generator.get_planned_events(), ceili(support_horizon), _active_seed_version, biome_start_offset)
 	var target_x := PLAYER_X + source_distance
 	for resolved_event in resolved_events:
 		if str(resolved_event.get("kind", "")) == "ghost" and absf(float(resolved_event.get("x", INF)) - target_x) < 0.5:
 			var result := resolved_event.duplicate(true)
 			result["source_ghost_key"] = _singleplayer_ghost_key(source_event)
 			return result
+	return {}
+
+func _resolve_singleplayer_rock_event(source_event: Dictionary) -> Dictionary:
+	if course_generator == null or _manifest_builder == null:
+		return {}
+	var source_distance := float(source_event.get("course_distance", 0.0))
+	var support_horizon := source_distance + 200.0
+	course_generator.ensure_horizon(support_horizon, _run_speed(), screen_height, COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE)
+	var biome_start_offset := BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(_active_seed, _active_seed_version)
+	var resolved_events: Array[Dictionary] = _manifest_builder.call("resolve_runtime_events", course_generator.get_planned_events(), ceili(support_horizon), _active_seed_version, biome_start_offset)
+	var target_x := PLAYER_X + source_distance
+	for resolved_event in resolved_events:
+		if str(resolved_event.get("kind", "")) == "rock" and absf(float(resolved_event.get("x", INF)) - target_x) < 0.5:
+			return resolved_event.duplicate(true)
 	return {}
 
 func _saw_surface_at(x: float, ceiling: bool) -> Dictionary:
@@ -1161,9 +1184,10 @@ func _spawn_shared_coins() -> void:
 		return
 	var horizon := course_distance + screen_width + 1400.0
 	if PLAYER_X + horizon >= _shared_coin_planned_until + 100.0:
+		course_generator.ensure_horizon(PLAYER_X + horizon + 1200.0, _run_speed(), screen_height, COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE)
 		var source_events: Array[Dictionary] = course_generator.get_planned_events()
 		var biome_start_offset := BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(_active_seed, _active_seed_version)
-		var resolved_events: Array[Dictionary] = _manifest_builder.call("_resolve_events", source_events, ceili(horizon), _active_seed_version, biome_start_offset)
+		var resolved_events: Array[Dictionary] = _manifest_builder.call("resolve_runtime_events", source_events, ceili(horizon), _active_seed_version, biome_start_offset)
 		var planned: Array[Dictionary] = _shared_coin_planner.extend(PLAYER_X + horizon, resolved_events, WORLD_HEIGHT - 80.0, 80.0, 0)
 		_pending_shared_coins.append_array(planned)
 		_shared_coin_planned_until = PLAYER_X + horizon
@@ -1295,6 +1319,8 @@ func _earliest_lethal_contact_fraction(start_rect: Rect2, finish_rect: Rect2) ->
 		var fraction := -1.0
 		if obstacle.is_in_group("falling_rocks") or obstacle.is_in_group("saw_blades"):
 			fraction = float(obstacle.call("swept_contact_fraction", start_rect, finish_rect, maxi(_singleplayer_simulation_tick - 1, 0), _singleplayer_simulation_tick, Vector2(34.0, 44.0)))
+		elif obstacle.is_in_group("ghost_hazards") and obstacle.has_method("swept_contact_fraction") and int((obstacle.get("event") as Dictionary).get("ghost_variant", 0)) == 1:
+			fraction = float(obstacle.call("swept_contact_fraction", start_rect, finish_rect, maxi(_singleplayer_simulation_tick - 1, 0), _singleplayer_simulation_tick, start_rect.size))
 		elif obstacle.is_in_group("lava_hazards") and obstacle.has_method("swept_contact_fraction"):
 			fraction = float(obstacle.call("swept_contact_fraction", start_rect, finish_rect, maxi(_singleplayer_simulation_tick - 1, 0), _singleplayer_simulation_tick, start_rect.size))
 		elif obstacle.is_in_group("spikes") and obstacle.has_method("get_world_triangles"):

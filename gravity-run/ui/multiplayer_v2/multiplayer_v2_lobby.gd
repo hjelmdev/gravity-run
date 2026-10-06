@@ -14,6 +14,7 @@ var _name_button: Button
 var _room_code: LineEdit
 var _room_code_button: Button
 var _seed_edit: LineEdit
+var _seed_button: Button
 var _public_toggle: CheckButton
 var _scroll: ScrollContainer
 var _panel: PanelContainer
@@ -130,6 +131,12 @@ func _build_ui() -> void:
 	_seed_edit.tooltip_text = tr("Leave blank for a new course each round. Enter a seed to replay the same course.")
 	_seed_edit.max_length = 10
 	_create_view.add_child(_seed_edit)
+	if _mobile_text_entry:
+		_seed_edit.visible = false
+		_seed_button = _button(tr("Course seed (blank for random)"))
+		_seed_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_seed_button.pressed.connect(func() -> void: _open_mobile_text_entry("course_seed"))
+		_create_view.add_child(_seed_button)
 	_create_button = _button(tr("Create room"))
 	_create_button.pressed.connect(_create_room)
 	_create_view.add_child(_create_button)
@@ -537,12 +544,19 @@ func _show_view(view_name: String) -> void:
 	_room_code.visible = view_name == "join" and not _mobile_text_entry
 	if is_instance_valid(_room_code_button):
 		_room_code_button.visible = view_name == "join"
+	_seed_edit.visible = view_name == "create" and not _mobile_text_entry
+	if is_instance_valid(_seed_button):
+		_seed_button.visible = view_name == "create"
+		_seed_button.text = _seed_edit.text if not _seed_edit.text.is_empty() else tr("Course seed (blank for random)")
 
 func _open_mobile_text_entry(field: String) -> void:
-	var is_name := field == "name"
-	MobileTextEntry.open(field, _display_name.text if is_name else _room_code.text,
-		tr("Display name") if is_name else tr("Room code"), "text", 16 if is_name else 8,
-		"text", "off", "words" if is_name else "characters")
+	match field:
+		"name":
+			MobileTextEntry.open(field, _display_name.text, tr("Display name"), "text", 16, "text", "off", "words")
+		"room_code":
+			MobileTextEntry.open(field, _room_code.text, tr("Room code"), "text", 8, "text", "off", "characters")
+		"course_seed":
+			MobileTextEntry.open(field, _seed_edit.text, tr("Course seed"), "text", 10, "numeric", "off", "characters")
 
 func _on_mobile_text_submitted(field: String, value: String) -> void:
 	if field == "name":
@@ -553,6 +567,10 @@ func _on_mobile_text_submitted(field: String, value: String) -> void:
 		_room_code.text = value.substr(0, 8)
 		if is_instance_valid(_room_code_button):
 			_room_code_button.text = _room_code.text
+	elif field == "course_seed":
+		_seed_edit.text = value.substr(0, 10)
+		if is_instance_valid(_seed_button):
+			_seed_button.text = _seed_edit.text if not _seed_edit.text.is_empty() else tr("Course seed (blank for random)")
 
 func _on_profile_changed(nickname: String, has_profile: bool) -> void:
 	if has_profile and _display_name.text.is_empty():

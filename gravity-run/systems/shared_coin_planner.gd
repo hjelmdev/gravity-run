@@ -96,6 +96,11 @@ static func _position_blocked(x: float, y: float, events: Array[Dictionary]) -> 
 			volcano_envelope = LavaHazardModelScript.volcano_collision_envelope(event)
 			if x + COIN_RADIUS < volcano_envelope.position.x or x - COIN_RADIUS > volcano_envelope.end.x:
 				continue
+		elif kind == "ghost" and int(event.get("ghost_variant", 0)) == 1:
+			var chase_start := event_x - float(event.get("trigger_lead", 1700.0)) - float(event.get("chase_start_lag", 220.0))
+			var chase_end := chase_start + float(event.get("chase_speed", 760.0)) * float(event.get("danger_ticks", 150)) / 60.0
+			if x + COIN_RADIUS < minf(chase_start, chase_end) - float(event.get("width", 72.0)) * 0.5 or x - COIN_RADIUS > maxf(chase_start, chase_end) + float(event.get("width", 72.0)) * 0.5:
+				continue
 		elif absf(x - event_x) > reach + COIN_RADIUS:
 			continue
 		if kind == "block":
@@ -119,8 +124,16 @@ static func _position_blocked(x: float, y: float, events: Array[Dictionary]) -> 
 			if coin_rect.intersects(Rect2(Vector2(event_x - 2.0, low), Vector2(4.0, high - low))):
 				return true
 		elif kind == "lava_crack":
-			var crack := LavaHazardModelScript.crack_rect(event)
+			var crack: Rect2 = LavaHazardModelScript.tidal_pool_envelope(event) if int(event.get("lava_variant", 0)) == 1 else LavaHazardModelScript.crack_rect(event)
 			if coin_rect.intersects(crack):
+				return true
+		elif kind == "ghost" and int(event.get("ghost_variant", 0)) == 1:
+			var start_x := event_x - float(event.get("trigger_lead", 1700.0)) - float(event.get("chase_start_lag", 220.0))
+			var end_x := start_x + float(event.get("chase_speed", 760.0)) * float(event.get("danger_ticks", 150)) / 60.0
+			var floor_y := float(event.get("floor_y", 460.0))
+			var chase_width := float(event.get("width", 72.0))
+			var chase_bounds := Rect2(Vector2(start_x - chase_width * 0.5, floor_y - float(event.get("height", 96.0))), Vector2(end_x - start_x + chase_width, float(event.get("height", 96.0))))
+			if coin_rect.intersects(chase_bounds):
 				return true
 		elif kind == "volcano":
 			if coin_rect.intersects(volcano_envelope):
@@ -172,10 +185,16 @@ func _risk_has_unmodeled_motion(row_start_x: float, events: Array[Dictionary]) -
 	var corridor_left := row_start_x - RISK_APPROACH_DISTANCE
 	var corridor_right := row_start_x + float(COIN_ROW_MAX - 1) * 38.0 + RISK_EXIT_DISTANCE
 	for event in events:
-		if str(event.get("kind", "")) not in ["barrels", "rock", "saw", "ghost", "volcano"]:
+		var kind := str(event.get("kind", ""))
+		if kind not in ["barrels", "rock", "saw", "ghost", "volcano"]:
 			continue
 		var center_x := float(event.get("x", 0.0))
 		var half_width := maxf(float(event.get("width", 0.0)) * 0.5, float(event.get("count", 1)) * float(event.get("spacing", 0.0)) * 0.5 + 32.0)
+		if kind == "ghost" and int(event.get("ghost_variant", 0)) == 1:
+			var chase_start := center_x - float(event.get("trigger_lead", 1700.0)) - float(event.get("chase_start_lag", 220.0))
+			var chase_end := chase_start + float(event.get("chase_speed", 760.0)) * float(event.get("danger_ticks", 150)) / 60.0
+			center_x = (chase_start + chase_end) * 0.5
+			half_width = absf(chase_end - chase_start) * 0.5 + float(event.get("width", 72.0)) * 0.5
 		if center_x + half_width + RISK_MOVING_HAZARD_MARGIN >= corridor_left and center_x - half_width - RISK_MOVING_HAZARD_MARGIN <= corridor_right:
 			return true
 	return false

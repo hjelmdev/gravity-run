@@ -13,6 +13,7 @@ func _ready() -> void:
 	call_deferred("_run")
 
 func _run() -> void:
+	TranslationServer.set_locale("en")
 	var challenge = get_tree().root.get_node("ChallengeService")
 	challenge.call("clear_challenge")
 	var hub := HubScene.instantiate() as Control
@@ -28,6 +29,8 @@ func _run() -> void:
 	_check(start_count == 0, "invalid ordinary input cannot start a run")
 	_check(bool(hub.get("_status_label").visible), "seed validation errors remain visible after routine account copy is removed")
 	seed_edit.text = "GR13-100000003"
+	hub.call("_on_seed_input_changed", seed_edit.text)
+	await get_tree().process_frame
 	_check(not bool(hub.get("_status_label").visible), "editing the seed clears the stale validation error")
 	hub.call("_start_run")
 	print("seed_hub_start_count=%d version=%d active=%s" % [start_count, int(challenge.get("generation_version")), str(challenge.get("active"))])
@@ -43,7 +46,7 @@ func _run() -> void:
 	challenge.call("clear_challenge")
 	seed_edit.text = "100000014"
 	hub.call("_start_run")
-	_check(start_count == 3 and int(challenge.get("seed_value")) == 100000014 and int(challenge.get("generation_version")) == 15 and not bool(challenge.get("active")), "numeric ordinary input selects current Gen15 without challenge mode")
+	_check(start_count == 3 and int(challenge.get("seed_value")) == 100000014 and int(challenge.get("generation_version")) == Generator.GENERATOR_VERSION and not bool(challenge.get("active")), "numeric ordinary input selects current Gen17 without challenge mode")
 	seed_edit.text = ""
 	challenge.call("clear_challenge")
 	hub.call("_start_run")
