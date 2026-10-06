@@ -29,3 +29,11 @@ Root inspected the staged 18-file diff and the reconstructed 44-line main-scene 
 Luna's final actual-main SP test, SFX pool test and MP handler/export integration test pass. The MP test explicitly reports `MP_AUDIO_TOUCH_DISPATCHED=false` in the native headless fixture, then tests the connected button signal/handler separately; root does not treat this as a real mobile GUI activation proof. Standard button wiring and bounded handler behavior are acceptable for this diagnostic release, with the limitation retained. The earlier renderer-based ZIP contract passed and no audio-only capture performs image readback. No audible mobile output timing, target-device frame-stall cause or missed-pickup fix is claimed.
 
 Approved next steps: scoped source commit/Azure push, clean archive of that exact commit, required targeted tests and Web export, Pages root/game publication and independent public identity/hash verification. No migration is needed because API/generation/wallet contracts are unchanged.
+
+## Independent root publication verification
+
+Root independently fetched GitHub workflow `37491539016`: completed/success for exact Pages head `eba426a744bc1c015f41624275f85beace5ea438`. Azure remote head matched report commit `8118945615b61c9a47bad68f282f61c4c34e53be`. Exact gameplay archive source is `79c1b36062db56ba4b021c08c0bae2f9b95f38cf` (feature `84f59c1` plus build metadata).
+
+Both public loaders returned HTTP 200 and contain `audio-diagnostics-84f59c1-20261006`. Root downloaded the versioned public game PCK independently: 3,463,008 bytes, SHA-256 `BA366B8CD017525912159EC159C0EE513FA989AE7FBCFB28FAF37E86327DC31C`, matching the clean export. BUILD_ID responses require UTF-8 decoding when PowerShell returns their content as byte arrays; do not interpret a byte-array string cast as a mismatched release.
+
+Scoped publication is complete. User-device long audio delays, missed-pickup observation and intermittent stalls remain unverified and require a captured affected run. This release supplies bounded app timing/contact diagnostics and corrects the reproduced offscreen SP barrel audio discrepancy; it does not claim to solve those remaining symptoms.
