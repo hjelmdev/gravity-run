@@ -249,13 +249,14 @@ static func _draw_classic_backdrop(canvas: CanvasItem, left: float, size: Vector
 		canvas.draw_circle(Vector2(screen_x, y), radius, color)
 
 static func _draw_cave_backdrop(canvas: CanvasItem, left: float, size: Vector2, camera_course_distance: float, fragment_offset: float, biome: BiomeDefinition) -> void:
+	var ridge_samples := cave_ridge_diagnostic_samples(camera_course_distance, fragment_offset, size.x, size.y)
 	for layer in range(3):
 		var amplitude := size.y * (0.13 + 0.055 * float(layer))
 		var base_y := size.y * (0.32 + 0.18 * float(layer))
 		var points := PackedVector2Array()
 		var spacing := 48.0
-		var parallax := 0.16 + 0.07 * float(layer)
-		var layer_parallax_left := camera_course_distance * parallax + fragment_offset
+		var sample: Dictionary = ridge_samples[layer]
+		var layer_parallax_left := float(sample.get("phase_left", 0.0))
 		var first_sample := floori(layer_parallax_left / spacing)
 		var last_sample := ceili((layer_parallax_left + size.x) / spacing)
 		for i in range(first_sample, last_sample + 1):
@@ -269,7 +270,7 @@ static func _draw_cave_backdrop(canvas: CanvasItem, left: float, size: Vector2, 
 		points.append(Vector2(left + size.x, size.y))
 		points.append(Vector2(left, size.y))
 		var color := biome.layer_colors[layer % biome.layer_colors.size()]
-		var clipped := PackedVector2Array([Vector2(left, _cave_ridge_y(layer_parallax_left, size.y, layer)), Vector2(left + size.x, _cave_ridge_y(layer_parallax_left + size.x, size.y, layer))])
+		var clipped := PackedVector2Array([Vector2(left, float(sample.get("left_y", 0.0))), Vector2(left + size.x, float(sample.get("right_y", 0.0)))])
 		for point_index in range(points.size()):
 			var point := points[point_index]
 			if point.x > left and point.x < left + size.x:
@@ -298,6 +299,24 @@ static func _cave_ridge_y(parallax_x: float, viewport_height: float, layer: int)
 	var base_y := viewport_height * (0.32 + 0.18 * float(layer))
 	var phase := parallax_x * 0.003
 	return clampf(base_y + sin(phase) * amplitude + cos(phase * 0.37) * amplitude * 0.4, viewport_height * 0.04, viewport_height * 0.94)
+
+static func cave_ridge_diagnostic_samples(camera_course_distance: float, fragment_offset: float, fragment_width: float, logical_height: float) -> Array[Dictionary]:
+	## Shared by the renderer and opt-in diagnostics so clipped fragments report
+	## the exact parallax phases and ridge endpoints used for drawing.
+	var samples: Array[Dictionary] = []
+	for layer in range(3):
+		var parallax := 0.16 + 0.07 * float(layer)
+		var phase_left := camera_course_distance * parallax + fragment_offset
+		var phase_right := phase_left + fragment_width
+		samples.append({
+			"layer": layer,
+			"parallax": parallax,
+			"phase_left": phase_left,
+			"phase_right": phase_right,
+			"left_y": _cave_ridge_y(phase_left, logical_height, layer),
+			"right_y": _cave_ridge_y(phase_right, logical_height, layer),
+		})
+	return samples
 
 static func _draw_haunted_backdrop(canvas: CanvasItem, left: float, size: Vector2, distance: float, view_left: float, full_view_size: Vector2, camera_course_distance: float, biome: BiomeDefinition, cycle_length: float = CYCLE_LENGTH) -> void:
 	# Moon and silhouettes are tied to the biome's course interval, not the

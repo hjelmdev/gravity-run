@@ -1220,6 +1220,66 @@ msgstr "Aktivera inspelning och fortsätt spela. Återvänd hit för att spara."
 msgid "Save diagnostics"
 msgstr "Spara diagnostik"
 
+msgid "Capture right edge"
+msgstr "Fånga högerkanten"
+
+msgid "Cancel capture"
+msgstr "Avbryt fångst"
+
+msgid "Clear capture"
+msgstr "Rensa fångst"
+
+msgid "Save capture ZIP"
+msgstr "Spara fångst som ZIP"
+
+msgid "Capturing right edge: %d/%d"
+msgstr "Fångar högerkanten: %d/%d"
+
+msgid "Capturing right edge: %d/%d — Cancel"
+msgstr "Fångar högerkanten: %d/%d — Avbryt"
+
+msgid "Right-edge capture ready: %d frames. Save the ZIP."
+msgstr "Högerkantsbilder klara: %d bilder. Spara ZIP-filen."
+
+msgid "Right-edge capture ready: %d frames. Open the menu to save."
+msgstr "Högerkantsbilder klara: %d bilder. Öppna menyn och spara."
+
+msgid "Right-edge capture ready: %d frames."
+msgstr "Högerkantsbilder klara: %d bilder."
+
+msgid "The raw image memory limit was reached."
+msgstr "Gränsen för bildminne nåddes."
+
+msgid "Right-edge capture ready: %d frames. The raw image memory limit was reached."
+msgstr "Högerkantsbilder klara: %d bilder. Gränsen för bildminne nåddes."
+
+msgid "Right-edge capture cancelled."
+msgstr "Fångsten av högerkanten avbröts."
+
+msgid "Right-edge capture is unavailable."
+msgstr "Det går inte att fånga högerkanten."
+
+msgid "Right-edge capture is unavailable: %s"
+msgstr "Det går inte att fånga högerkanten: %s"
+
+msgid "The game viewport is not ready for capture."
+msgstr "Spelvyn är inte redo för fångst."
+
+msgid "The viewport exceeds the capture memory limit."
+msgstr "Spelvyn överskrider minnesgränsen för fångst."
+
+msgid "No rendered frames were available."
+msgstr "Det fanns inga renderade bildrutor att spara."
+
+msgid "Capture ZIP download started: %d frames, %d bytes."
+msgstr "Nedladdning av ZIP startad: %d bilder, %d byte."
+
+msgid "Capture ZIP saved: %d frames, %d bytes."
+msgstr "ZIP-filen sparad: %d bilder, %d byte."
+
+msgid "Could not save capture ZIP."
+msgstr "Det gick inte att spara ZIP-filen."
+
 msgid "Eliminated"
 msgstr "Utslagen"
 

@@ -10,7 +10,10 @@ const PlayerScene := preload("res://player/player.tscn")
 const Motion := preload("res://systems/runner_motion.gd")
 const FallingRockModel := preload("res://systems/falling_rock_model.gd")
 const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_export.gd")
+const RightEdgeCaptureScript := preload("res://systems/multiplayer_v2/v2_right_edge_capture.gd")
 const CoursePresentationScript := preload("res://systems/race_course_presentation.gd")
+const CourseGeneratorScript := preload("res://systems/course_generator.gd")
+const BiomeRendererScript := preload("res://biomes/biome_renderer.gd")
 const RoundCoordinatorScript := preload("res://systems/multiplayer_v2/v2_round_coordinator.gd")
 const HudLayout := preload("res://ui/multiplayer_v2/v2_hud_layout.gd")
 const SharedRunHudScene := preload("res://ui/shared_run_hud.tscn")
@@ -90,6 +93,13 @@ var _last_remote_watch_poses: Dictionary = {}
 var _last_cadence_window_usec := -1
 var _last_process_usec := -1
 var _diagnostics_export_in_progress := false
+var _right_edge_capture: Node
+var _right_edge_start_button: Button
+var _right_edge_cancel_button: Button
+var _right_edge_save_button: Button
+var _right_edge_clear_button: Button
+var _right_edge_capture_status: Label
+var _right_edge_capture_toast: Label
 var _godot_frame_intervals_ms: Array[float] = []
 var _phase_profile: Dictionary = {}
 var _last_barrel_probe: Dictionary = {}
@@ -238,7 +248,7 @@ func _build_overlay() -> void:
 	_countdown_label.visible = false
 	_hud_root.add_child(_countdown_label)
 	_debug_panel = PanelContainer.new()
-	_debug_panel.custom_minimum_size = Vector2(280.0, 110.0)
+	_debug_panel.custom_minimum_size = Vector2(320.0, 220.0)
 	_debug_panel.visible = false
 	var debug_style := StyleBoxFlat.new()
 	debug_style.bg_color = Color("18243a")
@@ -257,12 +267,53 @@ func _build_overlay() -> void:
 	export_button.text = tr("Save diagnostics")
 	export_button.pressed.connect(_save_diagnostics)
 	tools.add_child(export_button)
+	var capture_row := HBoxContainer.new()
+	tools.add_child(capture_row)
+	_right_edge_start_button = Button.new()
+	_right_edge_start_button.text = tr("Capture right edge")
+	_right_edge_start_button.pressed.connect(_start_right_edge_capture)
+	capture_row.add_child(_right_edge_start_button)
+	_right_edge_cancel_button = Button.new()
+	_right_edge_cancel_button.text = tr("Cancel capture")
+	_right_edge_cancel_button.pressed.connect(_cancel_right_edge_capture)
+	_right_edge_cancel_button.visible = false
+	_right_edge_save_button = Button.new()
+	_right_edge_save_button.text = tr("Save capture ZIP")
+	_right_edge_save_button.disabled = true
+	var capture_actions := HBoxContainer.new()
+	tools.add_child(capture_actions)
+	capture_actions.add_child(_right_edge_save_button)
+	_right_edge_save_button.pressed.connect(_save_right_edge_capture)
+	_right_edge_clear_button = Button.new()
+	_right_edge_clear_button.text = tr("Clear capture")
+	_right_edge_clear_button.disabled = true
+	capture_actions.add_child(_right_edge_clear_button)
+	_right_edge_clear_button.pressed.connect(_clear_right_edge_capture)
+	_right_edge_capture_status = Label.new()
+	_right_edge_capture_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_right_edge_capture_status.add_theme_font_size_override("font_size", 12)
+	_right_edge_capture_status.visible = false
+	tools.add_child(_right_edge_capture_status)
 	_export_confirmation = Label.new()
 	_export_confirmation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_export_confirmation.add_theme_font_size_override("font_size", 12)
 	_export_confirmation.add_theme_color_override("font_color", Color("42d6c5"))
 	_export_confirmation.visible = false
 	tools.add_child(_export_confirmation)
+	_right_edge_capture = RightEdgeCaptureScript.new()
+	_right_edge_capture.name = "RightEdgeCapture"
+	_right_edge_capture.state_changed.connect(_on_right_edge_capture_state_changed)
+	_hud_root.add_child(_right_edge_capture)
+	_right_edge_capture_toast = Label.new()
+	_right_edge_capture_toast.position = Vector2(18.0, 68.0)
+	_right_edge_capture_toast.custom_minimum_size = Vector2(280.0, 28.0)
+	_right_edge_capture_toast.add_theme_font_size_override("font_size", 14)
+	_right_edge_capture_toast.add_theme_color_override("font_color", Color("42d6c5"))
+	_right_edge_capture_toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_right_edge_capture_toast.visible = false
+	_hud_root.add_child(_right_edge_capture_toast)
+	_right_edge_cancel_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	_hud_root.add_child(_right_edge_cancel_button)
 	_result_panel = PanelContainer.new()
 	_result_panel.set_anchors_preset(Control.PRESET_CENTER)
 	_result_panel.anchor_left = 0.15
@@ -326,6 +377,7 @@ func _layout_hud() -> void:
 	var music_rect: Rect2 = layout.get("music_button", Rect2())
 	var status_rect: Rect2 = layout.get("status", Rect2())
 	var panel_rect: Rect2 = layout.get("panel", Rect2())
+	var margin := float(layout.get("margin", 18.0))
 	_debug_toggle.position = button_rect.position
 	_debug_toggle.size = button_rect.size
 	_shared_run_hud.call("set_music_right_offset", music_rect.position.x - size.x)
@@ -334,6 +386,12 @@ func _layout_hud() -> void:
 	_status_label.size = status_rect.size
 	_debug_panel.position = panel_rect.position
 	_debug_panel.size = panel_rect.size
+	if is_instance_valid(_right_edge_capture_toast):
+		_right_edge_capture_toast.position = Vector2(margin, margin + 70.0)
+		_right_edge_capture_toast.size = Vector2(minf(360.0, maxf(size.x - margin * 2.0, 0.0)), 28.0)
+	if is_instance_valid(_right_edge_cancel_button):
+		_right_edge_cancel_button.position = Vector2(margin, margin + 70.0)
+		_right_edge_cancel_button.size = Vector2(minf(360.0, maxf(size.x - margin * 2.0, 0.0)), 32.0)
 	_countdown_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 	_countdown_label.offset_left = -minf(size.x * 0.4, 240.0)
 	_countdown_label.offset_right = minf(size.x * 0.4, 240.0)
@@ -1757,6 +1815,145 @@ func _save_diagnostics() -> void:
 			_export_confirmation.visible = false
 	)
 
+func _start_right_edge_capture() -> void:
+	if _right_edge_capture == null or _right_edge_capture.is_capturing:
+		return
+	var session := {"round_id": _round_id, "role": str(MultiplayerV2Service.session.get("role", "client")), "local_peer_id": int(MultiplayerV2Service.session.get("local_peer_id", 0))}
+	var context := {"round_id": _round_id, "session": session, "build_id": str(ProjectSettings.get_setting("application/config/version", "unknown")), "game_api_version": MultiplayerV2Service.V2_GAME_VERSION, "seed": int(_manifest.get("seed_value")) if _manifest != null else -1, "generator_version": int(_manifest.get("generator_version")) if _manifest != null else -1, "manifest_hash": str(_manifest.get("manifest_hash")) if _manifest != null else "", "capture_started_usec": Time.get_ticks_usec()}
+	if not _right_edge_capture.start_capture(get_viewport(), context, Callable(self, "_right_edge_frame_context")):
+		return
+	if _debug_open:
+		_toggle_debug_panel()
+	_touch_gesture.cancel("right_edge_capture_started")
+	_pending_flip_direction = 0
+	_pending_flip_source = ""
+
+func _cancel_right_edge_capture() -> void:
+	if _right_edge_capture != null:
+		_right_edge_capture.cancel_capture("user_cancelled")
+
+func _save_right_edge_capture() -> void:
+	if _right_edge_capture == null:
+		return
+	var saved: Dictionary = _right_edge_capture.save_package()
+	if bool(saved.get("ok", false)):
+		var message := tr("Capture ZIP download started: %d frames, %d bytes.") % [int(_right_edge_capture.captured_frame_count), int(saved.get("bytes", 0))] if OS.has_feature("web") else tr("Capture ZIP saved: %d frames, %d bytes.") % [int(_right_edge_capture.captured_frame_count), int(saved.get("bytes", 0))]
+		_right_edge_capture_status.text = message
+		_right_edge_capture_status.visible = true
+		_right_edge_capture_toast.text = message
+		_right_edge_capture_toast.visible = true
+	else:
+		_right_edge_capture_status.text = tr("Could not save capture ZIP.")
+		_right_edge_capture_status.visible = true
+	_update_right_edge_capture_controls()
+
+func _clear_right_edge_capture() -> void:
+	if _right_edge_capture == null or _right_edge_capture.is_capturing:
+		return
+	_right_edge_capture.clear_capture()
+	_right_edge_capture_status.text = ""
+	_right_edge_capture_status.visible = false
+	_right_edge_capture_toast.visible = false
+	_update_right_edge_capture_controls()
+
+func _on_right_edge_capture_state_changed(state: String, frame_count: int, message: String) -> void:
+	if not is_instance_valid(_right_edge_capture_status):
+		return
+	match state:
+		"capturing":
+			_right_edge_capture_status.text = tr("Capturing right edge: %d/%d") % [frame_count, RightEdgeCaptureScript.MAX_FRAMES]
+			_right_edge_cancel_button.text = tr("Capturing right edge: %d/%d — Cancel") % [frame_count, RightEdgeCaptureScript.MAX_FRAMES]
+			_right_edge_capture_toast.visible = false
+		"complete":
+			_right_edge_cancel_button.visible = false
+			var capped := str(_right_edge_capture.get("completion_reason")) == "raw_image_budget"
+			_right_edge_capture_status.text = tr("Right-edge capture ready: %d frames. Save the ZIP.") % frame_count
+			_right_edge_capture_toast.text = tr("Right-edge capture ready: %d frames. Open the menu to save.") % frame_count
+			if capped:
+				_right_edge_capture_status.text += " " + tr("The raw image memory limit was reached.")
+				_right_edge_capture_toast.text += " " + tr("The raw image memory limit was reached.")
+			_right_edge_capture_toast.visible = true
+		"cancelled":
+			_right_edge_cancel_button.visible = false
+			_right_edge_capture_status.text = tr("Right-edge capture cancelled.")
+			_right_edge_capture_toast.text = tr("Right-edge capture cancelled.")
+			_right_edge_capture_toast.visible = true
+		"unavailable":
+			_right_edge_cancel_button.visible = false
+			_right_edge_capture_status.text = tr("Right-edge capture is unavailable: %s") % message
+			_right_edge_capture_toast.text = tr("Right-edge capture is unavailable: %s") % message
+			_right_edge_capture_toast.visible = true
+	_right_edge_capture_status.visible = true
+	_update_right_edge_capture_controls()
+
+func _update_right_edge_capture_controls() -> void:
+	if not is_instance_valid(_right_edge_capture):
+		return
+	if is_instance_valid(_right_edge_start_button):
+		_right_edge_start_button.disabled = _right_edge_capture.is_capturing or _right_edge_capture.has_capture
+	if is_instance_valid(_right_edge_cancel_button):
+		_right_edge_cancel_button.visible = _right_edge_capture.is_capturing
+	if is_instance_valid(_right_edge_save_button):
+		_right_edge_save_button.disabled = _right_edge_capture.is_capturing or not _right_edge_capture.has_capture
+	if is_instance_valid(_right_edge_clear_button):
+		_right_edge_clear_button.disabled = _right_edge_capture.is_capturing or not _right_edge_capture.has_capture
+
+func _right_edge_frame_context() -> Dictionary:
+	if _manifest == null or _runner == null or _world == null or _course_presentation == null:
+		return {"round_id": _round_id}
+	var viewport := get_viewport()
+	var viewport_size := viewport.get_visible_rect().size
+	var canvas_transform := viewport.get_canvas_transform()
+	var inverse := canvas_transform.affine_inverse()
+	var center_y := viewport_size.y * 0.5
+	var applied_left := (inverse * Vector2(0.0, center_y)).x
+	var applied_right := (inverse * Vector2(viewport_size.x, center_y)).x
+	var course_start_x := float(_manifest.get("start_x"))
+	var course_left := BiomeRendererScript.course_distance_at_world_x(_camera_left + course_start_x, course_start_x)
+	var course_right := course_left + viewport_size.x
+	var fragments: Array[Dictionary] = []
+	var cycle_length := BiomeRendererScript.cycle_length_for_generator(int(_manifest.get("generator_version")))
+	var cursor := course_left
+	while cursor < course_right and fragments.size() < 8:
+		var slot := int(floor(fposmod(maxf(cursor, 0.0), cycle_length) / BiomeRendererScript.THEME_LENGTH))
+		var cycle_start := floorf(maxf(cursor, 0.0) / cycle_length) * cycle_length
+		var fragment_start := cycle_start + float(slot) * BiomeRendererScript.THEME_LENGTH
+		var fragment_end := minf(course_right, fragment_start + BiomeRendererScript.THEME_LENGTH)
+		fragments.append({"biome": BiomeRendererScript.biome_id_for_generator(cursor, int(_manifest.get("generator_version"))), "course_start": maxf(cursor, fragment_start), "course_end": fragment_end})
+		cursor = fragment_end
+	var metadata := {"round_id": _round_id, "render_callback_index": _render_callback_index, "round_phase": "results" if not _result.is_empty() else ("running" if _round_started else "preparing"), "presentation_tick": _last_presentation_tick, "shared_world_tick": _world.tick, "runner_course_distance": float(_local_presentation_pose.get("world_x", _runner.player_state.get("world_x", course_start_x))) - course_start_x, "requested_camera_left": _camera_left, "camera_node_position": _render_camera.global_position.x if is_instance_valid(_render_camera) else -1.0, "applied_canvas_left": applied_left, "applied_canvas_right": applied_right, "presentation_clip_left": float(_course_presentation.get("_camera_left")), "presentation_clip_right": float(_course_presentation.get("_camera_left")) + viewport_size.x, "course_left": course_left, "course_right": course_right, "biome_fragments": fragments}
+	if fragments.any(func(fragment: Dictionary) -> bool: return str(fragment.get("biome", "")) == "cave"):
+		var logical_height := minf(viewport_size.y, BiomeRendererScript.LOGICAL_BACKGROUND_HEIGHT)
+		var ridges: Array[Dictionary] = []
+		for fragment in fragments:
+			if str(fragment.get("biome", "")) != "cave":
+				continue
+			var fragment_start := float(fragment.get("course_start", course_left))
+			var fragment_end := float(fragment.get("course_end", fragment_start))
+			var fragment_offset := fragment_start - course_left
+			var samples: Array = BiomeRendererScript.cave_ridge_diagnostic_samples(course_left, fragment_offset, fragment_end - fragment_start, logical_height)
+			for sample in samples:
+				sample["fragment_course_start"] = fragment_start
+				sample["fragment_course_end"] = fragment_end
+				ridges.append(sample)
+		metadata["cave_fallback_ridge_samples"] = ridges
+	metadata["visible_surface_geometry"] = {"floor_gaps": _bounded_geometry_samples(_course_presentation.get("_render_floor_gaps"), course_left, course_right), "ceiling_gaps": _bounded_geometry_samples(_course_presentation.get("_render_ceiling_gaps"), course_left, course_right), "terrain_boundaries": _bounded_geometry_samples(_course_presentation.get("_render_terrain_boundaries"), course_left, course_right)}
+	return metadata
+
+func _bounded_geometry_samples(value: Variant, left: float, right: float) -> Array:
+	var result: Array = []
+	if not value is Array:
+		return result
+	for item in value:
+		if not item is Dictionary:
+			continue
+		var x := float(item.get("x", item.get("start_x", item.get("course_distance", -INF))))
+		if x >= left - 240.0 and x <= right + 240.0:
+			result.append(item.duplicate(true))
+			if result.size() >= 32:
+				break
+	return result
+
 func _course_presentation_diagnostic_snapshot() -> Dictionary:
 	var snapshot := {"mode": "multiplayer_v2", "round_id": _round_id, "generator_version": int(_manifest.get("generator_version")) if _manifest != null else -1, "world_tick": _world.tick if _world != null else -1, "camera_left": _camera_left, "viewport": [get_viewport_rect().size.x, get_viewport_rect().size.y], "world_distance": float(_runner.player_state.get("world_x", 0.0)) - float(_manifest.get("start_x")) if _runner != null and _manifest != null else 0.0, "generated_coins": 0, "generated_hazards": {}, "presented_event_nodes": 0, "visible_event_nodes": 0, "coin_nodes": 0, "active_coins": 0, "collected_coins": 0, "visible_coins": 0, "in_view_coins": 0, "rocks": []}
 	if _manifest != null:
@@ -1801,6 +1998,8 @@ func _notification(what: int) -> void:
 		_touch_gesture.cancel("focus_or_tree_pause")
 		_pending_flip_direction = 0
 		_pending_flip_source = ""
+		if _right_edge_capture != null:
+			_right_edge_capture.cancel_capture("focus_lost")
 
 func _leave_v2() -> void:
 	if not _mp_achievement_context.is_empty():

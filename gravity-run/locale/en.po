@@ -64,3 +64,63 @@ msgstr "Show music volume"
 
 msgid "My coins"
 msgstr "My coins"
+
+msgid "Capture right edge"
+msgstr "Capture right edge"
+
+msgid "Cancel capture"
+msgstr "Cancel capture"
+
+msgid "Clear capture"
+msgstr "Clear capture"
+
+msgid "Save capture ZIP"
+msgstr "Save capture ZIP"
+
+msgid "Capturing right edge: %d/%d"
+msgstr "Capturing right edge: %d/%d"
+
+msgid "Capturing right edge: %d/%d — Cancel"
+msgstr "Capturing right edge: %d/%d — Cancel"
+
+msgid "Right-edge capture ready: %d frames. Save the ZIP."
+msgstr "Right-edge capture ready: %d frames. Save the ZIP."
+
+msgid "Right-edge capture ready: %d frames. Open the menu to save."
+msgstr "Right-edge capture ready: %d frames. Open the menu to save."
+
+msgid "Right-edge capture ready: %d frames."
+msgstr "Right-edge capture ready: %d frames."
+
+msgid "The raw image memory limit was reached."
+msgstr "The raw image memory limit was reached."
+
+msgid "Right-edge capture ready: %d frames. The raw image memory limit was reached."
+msgstr "Right-edge capture ready: %d frames. The raw image memory limit was reached."
+
+msgid "Right-edge capture cancelled."
+msgstr "Right-edge capture cancelled."
+
+msgid "Right-edge capture is unavailable."
+msgstr "Right-edge capture is unavailable."
+
+msgid "Right-edge capture is unavailable: %s"
+msgstr "Right-edge capture is unavailable: %s"
+
+msgid "The game viewport is not ready for capture."
+msgstr "The game viewport is not ready for capture."
+
+msgid "The viewport exceeds the capture memory limit."
+msgstr "The viewport exceeds the capture memory limit."
+
+msgid "No rendered frames were available."
+msgstr "No rendered frames were available."
+
+msgid "Capture ZIP download started: %d frames, %d bytes."
+msgstr "Capture ZIP download started: %d frames, %d bytes."
+
+msgid "Capture ZIP saved: %d frames, %d bytes."
+msgstr "Capture ZIP saved: %d frames, %d bytes."
+
+msgid "Could not save capture ZIP."
+msgstr "Could not save capture ZIP."

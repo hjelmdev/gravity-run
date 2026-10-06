@@ -7,7 +7,7 @@ static func for_viewport(size: Vector2) -> Dictionary:
 	var button_width := clampf(size.x * 0.24, 96.0, 136.0)
 	var status_width := minf(440.0, maxf(size.x - 2.0 * margin - button_width - 64.0, 0.0))
 	var panel_width := minf(360.0, maxf(size.x - 2.0 * margin, 120.0))
-	var panel_height := minf(220.0, maxf(size.y - 2.0 * margin - 56.0, 110.0))
+	var panel_height := minf(260.0, maxf(size.y - 2.0 * margin - 56.0, 110.0))
 	var button := Rect2(size.x - margin - button_width, margin, button_width, 42.0)
 	var music_control_x := button.position.x - 48.0 - AUDIO_TO_MENU_GAP
 	var status_right := music_control_x - 30.0 - 12.0
