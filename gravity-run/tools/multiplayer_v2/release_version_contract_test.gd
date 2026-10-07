@@ -9,7 +9,7 @@ func _run() -> void:
 	var service_source := _read("res://systems/multiplayer_v2/multiplayer_v2_service.gd")
 	var generator_source := _read("res://systems/course_generator.gd")
 	var config_source := _read("res://project.godot")
-	var migration_path := "res://supabase/migrations/202610070001_generator19_ghost_pursuit.sql"
+	var migration_path := "res://supabase/migrations/202610070002_generator20_narrow_gaps_barrels.sql"
 	var migration_source := _read(migration_path)
 	var game_values := _capture(service_source, 'const V2_GAME_VERSION := "([^"]+)"', "service multiplayer version")
 	var generator_values := _capture(generator_source, "const GENERATOR_VERSION := GENERATOR_VERSION_([0-9]+)", "current generator version")
@@ -26,7 +26,8 @@ func _run() -> void:
 	var gen17_create_gate := migration_source.contains("p_game_version = '2.1.20261006.13' and p_generator_version = 17")
 	var gen18_create_gate := migration_source.contains("p_game_version = '2.1.20261007.14' and p_generator_version = 18")
 	var gen19_create_gate := migration_source.contains("p_game_version = '2.1.20261007.15' and p_generator_version = 19")
-	var mixed_create_gates_rejected := not migration_source.contains("p_game_version = '2.1.20261007.14' and p_generator_version = 19") and not migration_source.contains("p_game_version = '2.1.20261007.15' and p_generator_version = 18")
+	var gen20_create_gate := migration_source.contains("p_game_version = '2.1.20261007.16' and p_generator_version = 20")
+	var mixed_create_gates_rejected := not migration_source.contains("p_game_version = '2.1.20261007.15' and p_generator_version = 20") and not migration_source.contains("p_game_version = '2.1.20261007.16' and p_generator_version = 19")
 	var coin_gate := migration_source.contains("v_room.generator_version = 14 and v_room.game_version = '2.1.20261005.10'")
 	var legacy_coin_gate := migration_source.contains("v_room.generator_version = 11 and v_room.game_version = '2.1.20261003.7'")
 	var prior_coin_gate := migration_source.contains("v_room.generator_version = 12 and v_room.game_version = '2.1.20261005.8'")
@@ -37,7 +38,8 @@ func _run() -> void:
 	var gen17_coin_gate := migration_source.contains("v_room.generator_version = 17 and v_room.game_version = '2.1.20261006.13'")
 	var gen18_coin_gate := migration_source.contains("v_room.generator_version = 18 and v_room.game_version = '2.1.20261007.14'")
 	var gen19_coin_gate := migration_source.contains("v_room.generator_version = 19 and v_room.game_version = '2.1.20261007.15'")
-	var mixed_coin_gates_rejected := not migration_source.contains("v_room.generator_version = 19 and v_room.game_version = '2.1.20261007.14'") and not migration_source.contains("v_room.generator_version = 18 and v_room.game_version = '2.1.20261007.15'")
+	var gen20_coin_gate := migration_source.contains("v_room.generator_version = 20 and v_room.game_version = '2.1.20261007.16'")
+	var mixed_coin_gates_rejected := not migration_source.contains("v_room.generator_version = 19 and v_room.game_version = '2.1.20261007.16'") and not migration_source.contains("v_room.generator_version = 20 and v_room.game_version = '2.1.20261007.15'")
 	var game_version: String = game_values[0] if not game_values.is_empty() else ""
 	var generator_version: String = generator_values[0] if not generator_values.is_empty() else ""
 	_check(not game_version.is_empty(), "the service version constant is readable")
@@ -51,8 +53,9 @@ func _run() -> void:
 	_check(gen16_create_gate, "create-room gate accepts the current Gen16 release tuple")
 	_check(gen17_create_gate, "create-room gate retains the Gen17 release tuple")
 	_check(gen18_create_gate, "create-room gate accepts the Gen18 .14 tuple")
-	_check(gen19_create_gate, "create-room gate accepts the current Gen19 .15 tuple")
-	_check(mixed_create_gates_rejected, "create-room gate does not mix Gen18 and Gen19 game versions")
+	_check(gen19_create_gate, "create-room gate preserves the Gen19 .15 tuple")
+	_check(gen20_create_gate, "create-room gate accepts the current Gen20 .16 tuple")
+	_check(mixed_create_gates_rejected, "create-room gate does not mix Gen19 and Gen20 game versions")
 	_check(coin_gate, "Gen14 coin registration gate remains frozen")
 	_check(legacy_coin_gate, "coin registration gate preserves existing Gen11 rounds")
 	_check(prior_coin_gate, "coin registration gate preserves existing Gen12 rounds")
@@ -62,22 +65,23 @@ func _run() -> void:
 	_check(gen16_coin_gate, "coin registration gate accepts the current Gen16 tuple")
 	_check(gen17_coin_gate, "coin registration gate retains the Gen17 tuple")
 	_check(gen18_coin_gate, "coin registration gate accepts the Gen18 .14 tuple")
-	_check(gen19_coin_gate, "coin registration gate accepts the current Gen19 .15 tuple")
-	_check(mixed_coin_gates_rejected, "coin registration gate does not mix Gen18 and Gen19 game versions")
-	_check(migration_source.count("generator_version in (11, 12, 13, 14, 15, 16, 17, 18, 19)") == 2, "achievement receipts preserve legacy versions through Gen19")
+	_check(gen19_coin_gate, "coin registration gate preserves the Gen19 .15 tuple")
+	_check(gen20_coin_gate, "coin registration gate accepts the current Gen20 .16 tuple")
+	_check(mixed_coin_gates_rejected, "coin registration gate does not mix Gen19 and Gen20 game versions")
+	_check(migration_source.count("generator_version in (11, 12, 13, 14, 15, 16, 17, 18, 19, 20)") == 2, "achievement receipts preserve legacy versions and accept Gen20")
 	_check(migration_source.count("create or replace function public.") == 4, "migration only replaces room creation, coin registration, and the two achievement receipt functions")
 	_check(migration_source.contains("cardinality(p_hazards) > 12") and migration_source.contains("'lava_crack','lava_volcano'"), "Gen14 hazard discovery accepts both lava identities within the expanded catalog bound")
 	if not game_version.is_empty() and not generator_version.is_empty():
-		_check(game_version == "2.1.20261007.15" and generator_version == "19", "service and generator constants name the Gen19 release tuple")
-	_check(manifest_builder_source.contains("manifest.manifest_version = 12 if generator_version >= CourseGenerator.GENERATOR_VERSION_19"), "Gen19 selects manifest format 12")
-	_check(manifest_source.contains("generator_version == CourseGenerator.GENERATOR_VERSION_19 and manifest_version != 12") and manifest_source.contains("generator_version == CourseGenerator.GENERATOR_VERSION_18 and manifest_version != 11"), "manifest validator retains explicit Gen18/Gen19 formats")
-	_check(ledger_source.contains("const BASELINE_FORMAT_VERSION := 4"), "Gen19 uses the existing baseline format without a codec bump")
+		_check(game_version == "2.1.20261007.16" and generator_version == "20", "service and generator constants name the Gen20 release tuple")
+	_check(manifest_builder_source.contains("manifest.manifest_version = 13 if generator_version >= CourseGenerator.GENERATOR_VERSION_20"), "Gen20 selects manifest format 13")
+	_check(manifest_source.contains("generator_version == CourseGenerator.GENERATOR_VERSION_20 and manifest_version != 13") and manifest_source.contains("generator_version == CourseGenerator.GENERATOR_VERSION_19 and manifest_version != 12") and manifest_source.contains("generator_version == CourseGenerator.GENERATOR_VERSION_18 and manifest_version != 11"), "manifest validator retains explicit Gen18/Gen19/Gen20 formats")
+	_check(ledger_source.contains("const BASELINE_FORMAT_VERSION := 4"), "Gen20 uses the existing baseline format without a codec bump")
 	var config_values := _capture(config_source, 'config/version="([^"]+)"', "visible project build version")
 	var config_version: String = config_values[0] if not config_values.is_empty() else ""
 	_check(not config_version.is_empty() and config_version != "2026.10.02-start-audio-rock-fix1", "project build identifier no longer advertises the stale release")
-	_check(config_version.contains("gen19"), "project build identifier names generator v19")
+	_check(config_version.contains("gen20"), "project build identifier names generator v20")
 	if failures == 0:
-		print("Release version contract passed: source v%s/generator %s matches Gen17/18/19 SQL gates, manifest formats and baseline v4; project build %s." % [game_version, generator_version, config_version])
+		print("Release version contract passed: source v%s/generator %s matches Gen17/18/19/20 SQL gates, manifest formats and baseline v4; project build %s." % [game_version, generator_version, config_version])
 	quit(1 if failures > 0 else 0)
 
 func _read(path: String) -> String:

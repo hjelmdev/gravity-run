@@ -46,13 +46,22 @@ const GENERATOR_VERSION_16 := 16
 const GENERATOR_VERSION_17 := 17
 const GENERATOR_VERSION_18 := 18
 const GENERATOR_VERSION_19 := 19
+const GENERATOR_VERSION_20 := 20
 const GEN19_PURSUIT_MIN_TRIGGER_GAP := 4000.0
 const GEN14_RHYTHM_SPACING_DELTAS := [-120.0, -120.0, 240.0]
 const GEN14_RHYTHM_BASE_SPACING_SCALE := 1.22
 const GEN16_RHYTHM_SPACING_DELTAS := [-90.0, -90.0, 180.0]
 const GEN16_RHYTHM_BASE_SPACING_SCALE := 0.98
-const PREVIOUS_CURRENT_GENERATOR_VERSION := GENERATOR_VERSION_18
-const GENERATOR_VERSION := GENERATOR_VERSION_19
+const GEN20_RHYTHM_SPACING_DELTAS := [-60.0, -60.0, 120.0]
+const GEN20_NARROW_RHYTHM_BASE_SPACING_SCALE := 0.82
+const GEN20_NARROW_SPAN_MAX := 300.0
+const GEN20_ORDINARY_BARREL_EXTRA_SEPARATION := 500.0
+const GEN20_SPIKED_BARREL_CHANCE := 0.25
+const COURSE_FLOOR_START_Y := 460.0
+const COURSE_CEILING_START_Y := 80.0
+const GEN20_SLOPE_WIDTH := 440.0
+const PREVIOUS_CURRENT_GENERATOR_VERSION := GENERATOR_VERSION_19
+const GENERATOR_VERSION := GENERATOR_VERSION_20
 const PUBLISHED_SHARED_GENERATOR_VERSION := 5
 const LEGACY_GENERATOR_VERSION := 3
 const PREVIOUS_GENERATOR_VERSION := 4
@@ -143,7 +152,7 @@ func set_difficulty_profile(profile: Resource) -> void:
 func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> bool:
 	_configuration_failed = false
 	_generator_version = generator_version
-	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_18, GENERATOR_VERSION_17, GENERATOR_VERSION_16, GENERATOR_VERSION_15, GENERATOR_VERSION_14, GENERATOR_VERSION_13, GENERATOR_VERSION_12, GENERATOR_VERSION_11, GENERATOR_VERSION_10, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
+	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_19, GENERATOR_VERSION_18, GENERATOR_VERSION_17, GENERATOR_VERSION_16, GENERATOR_VERSION_15, GENERATOR_VERSION_14, GENERATOR_VERSION_13, GENERATOR_VERSION_12, GENERATOR_VERSION_11, GENERATOR_VERSION_10, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
 		push_error("Unsupported course generator version: %d" % generator_version)
 		return false
 	_profiles.clear()
@@ -340,7 +349,7 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 			break
 		var candidate := profile.create_event(_rng, _next_event_distance, _difficulty, _preferred_lane())
 		_apply_generator_timing(candidate)
-		if _generator_version == GENERATOR_VERSION_19 and _gen19_pursuit_trigger_is_too_close(candidate):
+		if _generator_version in [GENERATOR_VERSION_19, GENERATOR_VERSION_20] and _gen19_pursuit_trigger_is_too_close(candidate):
 			var replacement_profile := _pick_gen19_non_pursuit_profile(_next_event_distance)
 			if replacement_profile != null:
 				profile = replacement_profile
@@ -351,7 +360,7 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 			_generation_stats["biome_rejections"] = int(_generation_stats.get("biome_rejections", 0)) + 1
 			# Gen19 retries a haunted-only pick at the same deterministic slot.
 			# Older generator contracts keep their historical skip behavior.
-			if _generator_version != GENERATOR_VERSION_19:
+			if _generator_version not in [GENERATOR_VERSION_19, GENERATOR_VERSION_20]:
 				_next_event_distance += PLAN_RETRY_SPACING
 				spacing += PLAN_RETRY_SPACING
 			continue
@@ -386,13 +395,19 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 				var phase := _rhythm_event_index % GEN14_RHYTHM_SPACING_DELTAS.size()
 				if _generator_version >= GENERATOR_VERSION_14:
 					candidate["rhythm_phase"] = phase
-				_events.append(candidate)
+				_insert_generated_event(candidate)
 				_generation_stats["accepted_events"] = int(_generation_stats.get("accepted_events", 0)) + 1
 				var widest := 0.0
 				for threat in candidate["threats"]:
 					widest = maxf(widest, float(threat["end"]) - float(threat["start"]))
 				var conservative_spacing := maxf(spacing, widest + candidate_clearance)
-				if _generator_version in [GENERATOR_VERSION_16, GENERATOR_VERSION_17, GENERATOR_VERSION_18, GENERATOR_VERSION_19]:
+				if _generator_version == GENERATOR_VERSION_20 and _is_narrow_supported_corridor(float(candidate.get("course_distance", 0.0))):
+					conservative_spacing = maxf(BASE_EVENT_SPACING, conservative_spacing * GEN20_NARROW_RHYTHM_BASE_SPACING_SCALE + GEN20_RHYTHM_SPACING_DELTAS[phase])
+					_rhythm_event_index += 1
+				elif _generator_version in [GENERATOR_VERSION_16, GENERATOR_VERSION_17, GENERATOR_VERSION_18, GENERATOR_VERSION_19]:
+					conservative_spacing = maxf(BASE_EVENT_SPACING, conservative_spacing * GEN16_RHYTHM_BASE_SPACING_SCALE + GEN16_RHYTHM_SPACING_DELTAS[phase])
+					_rhythm_event_index += 1
+				elif _generator_version == GENERATOR_VERSION_20:
 					conservative_spacing = maxf(BASE_EVENT_SPACING, conservative_spacing * GEN16_RHYTHM_BASE_SPACING_SCALE + GEN16_RHYTHM_SPACING_DELTAS[phase])
 					_rhythm_event_index += 1
 				elif _generator_version >= GENERATOR_VERSION_14:
@@ -440,7 +455,7 @@ func _apply_generator_timing(event: Dictionary) -> void:
 				event.merge({"rock_variant": 1, "from_ceiling": true, "blocked_lanes": FLOOR_LANE, "trigger_lead": 1250.0, "warning_ticks": 48, "fall_ticks": 30, "lodged_ticks": 240, "burial_depth": 18.0, "width": 64.0, "height": 116.0}, true)
 			"lava_tidal_pool":
 				event.merge({"lava_variant": 1, "blocked_lanes": FLOOR_LANE, "from_ceiling": false, "pool_min_depth": 6.0, "pool_max_depth": 30.0, "pool_period_ticks": 180, "pool_phase_ticks": posmod(_seed + roundi(float(event.get("course_distance", 0.0))), 180)}, true)
-	if _generator_version in [GENERATOR_VERSION_18, GENERATOR_VERSION_19]:
+	if _generator_version in [GENERATOR_VERSION_18, GENERATOR_VERSION_19, GENERATOR_VERSION_20]:
 		match str(event.get("id", "")):
 			"haunted_ghost":
 				event.merge({"ghost_variant": 0, "trigger_lead": 1250.0, "warning_ticks": 60, "danger_ticks": 300, "fade_ticks": 45, "skin_variant": posmod(posmod(_seed, 3) + posmod(roundi(float(event.get("course_distance", 0.0)) / BASE_EVENT_SPACING), 3), 3)}, true)
@@ -473,7 +488,7 @@ func _apply_generator_timing(event: Dictionary) -> void:
 		var saw_profile: CourseHazardProfile = event.get("profile")
 		if saw_profile != null:
 			event["threats"] = saw_profile.build_threat_intervals(event)
-	if str(event.get("kind", "")) == "rock" and _generator_version >= ROCK_SAFE_GENERATOR_VERSION and not (_generator_version in [GENERATOR_VERSION_17, GENERATOR_VERSION_18, GENERATOR_VERSION_19] and str(event.get("id", "")) == "cave_icicle"):
+	if str(event.get("kind", "")) == "rock" and _generator_version >= ROCK_SAFE_GENERATOR_VERSION and not (_generator_version in [GENERATOR_VERSION_17, GENERATOR_VERSION_18, GENERATOR_VERSION_19, GENERATOR_VERSION_20] and str(event.get("id", "")) == "cave_icicle"):
 		event["trigger_lead"] = 1800.0
 		event["warning_ticks"] = 90
 		event["fall_ticks"] = 42
@@ -499,13 +514,32 @@ func _try_append_independent_barrel(base_event: Dictionary, clearance: float) ->
 	# rolls into that obstacle on screen; its independent roll never replaces it.
 	var chain_width := float(barrel_event.get("width", HazardRules.BARREL_WIDTH)) - HazardRules.BARREL_WIDTH
 	var separation := float(base_event.get("width", HazardRules.BARREL_WIDTH)) * 0.5 + chain_width * 0.5 + HazardRules.BARREL_WIDTH + 24.0
+	var is_spiked := false
+	if _generator_version == GENERATOR_VERSION_20 and base_kind == &"block":
+		is_spiked = _gen20_spiked_barrel_roll(base_event) < GEN20_SPIKED_BARREL_CHANCE
+	if _generator_version == GENERATOR_VERSION_20 and not is_spiked:
+		# Keep a normal barrel alive long enough to become a runner encounter before
+		# it reaches a later floor obstacle. Collision/destruction rules stay shared.
+		separation += GEN20_ORDINARY_BARREL_EXTRA_SEPARATION
 	barrel_event["course_distance"] = base_distance + separation
 	barrel_event["threats"] = _barrel_profile.build_threat_intervals(barrel_event)
-	if _generator_version >= GENERATOR_VERSION_16 and _gen16_barrel_meeting_conflicts_with_ceiling(barrel_event):
+	if _generator_version >= GENERATOR_VERSION_16 and not (_generator_version == GENERATOR_VERSION_20 and is_spiked) and _gen16_barrel_meeting_conflicts_with_ceiling(barrel_event):
 		_generation_stats["route_rejections"] = int(_generation_stats.get("route_rejections", 0)) + 1
 		return
 	var spiked_corridor: Dictionary = {}
-	if _generator_version >= GENERATOR_VERSION_12 and base_kind == &"block" and _rng.randf() < 0.25:
+	if _generator_version == GENERATOR_VERSION_20 and is_spiked:
+		spiked_corridor = _try_make_supported_spiked_corridor(barrel_event, base_event)
+		if not spiked_corridor.is_empty():
+			barrel_event["spiked"] = true
+		else:
+			is_spiked = false
+			separation += GEN20_ORDINARY_BARREL_EXTRA_SEPARATION
+			barrel_event["course_distance"] = base_distance + separation
+			barrel_event["threats"] = _barrel_profile.build_threat_intervals(barrel_event)
+			if _gen16_barrel_meeting_conflicts_with_ceiling(barrel_event):
+				_generation_stats["route_rejections"] = int(_generation_stats.get("route_rejections", 0)) + 1
+				return
+	elif _generator_version != GENERATOR_VERSION_20 and _generator_version >= GENERATOR_VERSION_12 and base_kind == &"block" and _rng.randf() < 0.25:
 		if _generator_version < GENERATOR_VERSION_13:
 			barrel_event["spiked"] = true
 		else:
@@ -516,7 +550,7 @@ func _try_append_independent_barrel(base_event: Dictionary, clearance: float) ->
 	trial.append_array(_events)
 	trial.append(barrel_event)
 	if is_plan_solvable(trial, clearance):
-		_events.append(barrel_event)
+		_insert_generated_event(barrel_event)
 		if _generator_version >= GENERATOR_VERSION_16:
 			_gen16_barrel_meeting_windows.append_array(_barrel_meeting_windows(barrel_event))
 		if not spiked_corridor.is_empty():
@@ -550,6 +584,14 @@ func _barrel_meeting_windows(barrel_event: Dictionary) -> Array[Dictionary]:
 			# full flip-cooldown margin that would reject unrelated encounters.
 			windows.append({"start": entry_x, "end": exit_x, "speed": runner_speed, "barrel_index": barrel_index})
 	return windows
+
+func _gen20_spiked_barrel_roll(base_event: Dictionary) -> float:
+	# Keep the new role choice local to this base event. Consuming the shared
+	# course RNG here would perturb later terrain/profile choices in Gen20.
+	var event_distance := roundi(float(base_event.get("course_distance", 0.0)) * 1000.0)
+	var event_key := str(base_event.get("event_id", base_event.get("id", ""))).hash()
+	var mixed := int(_seed) * 31 + event_distance * 17 + event_key
+	return float(posmod(mixed, 100000)) / 100000.0
 
 func _gen16_barrel_meeting_conflicts_with_ceiling(barrel_event: Dictionary) -> bool:
 	for window in _barrel_meeting_windows(barrel_event):
@@ -736,7 +778,7 @@ func _append_safe_fallback(speed: float, track_height: float) -> void:
 			if is_plan_solvable(_events + [candidate], clearance):
 				if _generator_version >= GENERATOR_VERSION_14:
 					candidate["rhythm_phase"] = _rhythm_event_index % GEN14_RHYTHM_SPACING_DELTAS.size()
-				_events.append(candidate)
+				_insert_generated_event(candidate)
 				_generation_stats["accepted_events"] = int(_generation_stats.get("accepted_events", 0)) + 1
 				_generation_stats["fallback_events"] = int(_generation_stats.get("fallback_events", 0)) + 1
 				var widest := 0.0
@@ -744,7 +786,11 @@ func _append_safe_fallback(speed: float, track_height: float) -> void:
 					widest = maxf(widest, float(threat["end"]) - float(threat["start"]))
 				var fallback_spacing := maxf(BASE_EVENT_SPACING, widest + clearance)
 				if _generator_version >= GENERATOR_VERSION_14:
-					if _generator_version in [GENERATOR_VERSION_16, GENERATOR_VERSION_17, GENERATOR_VERSION_18, GENERATOR_VERSION_19]:
+					if _generator_version == GENERATOR_VERSION_20 and _is_narrow_supported_corridor(safe_distance):
+						fallback_spacing = maxf(BASE_EVENT_SPACING, fallback_spacing * GEN20_NARROW_RHYTHM_BASE_SPACING_SCALE + GEN20_RHYTHM_SPACING_DELTAS[_rhythm_event_index % GEN20_RHYTHM_SPACING_DELTAS.size()])
+					elif _generator_version in [GENERATOR_VERSION_16, GENERATOR_VERSION_17, GENERATOR_VERSION_18, GENERATOR_VERSION_19]:
+						fallback_spacing = maxf(BASE_EVENT_SPACING, fallback_spacing * GEN16_RHYTHM_BASE_SPACING_SCALE + GEN16_RHYTHM_SPACING_DELTAS[_rhythm_event_index % GEN16_RHYTHM_SPACING_DELTAS.size()])
+					elif _generator_version == GENERATOR_VERSION_20:
 						fallback_spacing = maxf(BASE_EVENT_SPACING, fallback_spacing * GEN16_RHYTHM_BASE_SPACING_SCALE + GEN16_RHYTHM_SPACING_DELTAS[_rhythm_event_index % GEN16_RHYTHM_SPACING_DELTAS.size()])
 					else:
 						fallback_spacing = maxf(BASE_EVENT_SPACING, fallback_spacing + GEN14_RHYTHM_SPACING_DELTAS[_rhythm_event_index % GEN14_RHYTHM_SPACING_DELTAS.size()])
@@ -781,6 +827,79 @@ func _get_versioned_profile_weight(profile: CourseHazardProfile, course_distance
 func _biome_id_at(course_distance: float) -> String:
 	return BiomeRenderer.biome_id_for_generator(course_distance + _biome_start_offset, _generator_version)
 
+func _is_narrow_supported_corridor(course_distance: float) -> bool:
+	if _generator_version != GENERATOR_VERSION_20:
+		return false
+	var floor_y := COURSE_FLOOR_START_Y
+	var ceiling_y := COURSE_CEILING_START_Y
+	var floor_supported := true
+	var ceiling_supported := true
+	for event in _events:
+		var kind := str(event.get("kind", ""))
+		var x := float(event.get("course_distance", 0.0))
+		var from_ceiling := bool(event.get("from_ceiling", false))
+		if kind == "gap":
+			var half_width := float(event.get("width", 0.0)) * 0.5
+			if absf(course_distance - x) <= half_width:
+				if from_ceiling:
+					ceiling_supported = false
+				else:
+					floor_supported = false
+			continue
+		if kind == "step":
+			if x > course_distance:
+				continue
+			var start_y := ceiling_y if from_ceiling else floor_y
+			var change := float(event.get("height", 84.0))
+			var low_limit := 40.0 if from_ceiling else 330.0
+			var high_limit := 220.0 if from_ceiling else 500.0
+			var end_y := start_y + change if from_ceiling else start_y - change
+			end_y = clampf(end_y, low_limit, high_limit)
+			if absf(end_y - start_y) < 40.0:
+				end_y = clampf(start_y - change if from_ceiling else start_y + change, low_limit, high_limit)
+			if from_ceiling:
+				ceiling_y = end_y
+			else:
+				floor_y = end_y
+		elif kind == "slope":
+			var half_width := GEN20_SLOPE_WIDTH * 0.5
+			var start_x := x - half_width
+			var end_x := x + half_width
+			if course_distance <= start_x:
+				continue
+			var start_y := ceiling_y if from_ceiling else floor_y
+			var low_limit := 40.0 if from_ceiling else 330.0
+			var high_limit := 220.0 if from_ceiling else 500.0
+			var direction := float(event.get("slope_direction", 1.0))
+			var end_y := clampf(start_y + direction * float(event.get("height", 65.0)), low_limit, high_limit)
+			if absf(end_y - start_y) < 40.0:
+				end_y = clampf(start_y - direction * 45.0, low_limit, high_limit)
+			var progress := clampf((course_distance - start_x) / GEN20_SLOPE_WIDTH, 0.0, 1.0)
+			var slope_y := lerpf(start_y, end_y, progress)
+			if course_distance < end_x:
+				if from_ceiling:
+					ceiling_y = slope_y
+				else:
+					floor_y = slope_y
+				break
+			if from_ceiling:
+				ceiling_y = end_y
+			else:
+				floor_y = end_y
+	return floor_supported and ceiling_supported and floor_y - ceiling_y <= GEN20_NARROW_SPAN_MAX
+
+func _insert_generated_event(event: Dictionary) -> void:
+	if _generator_version != GENERATOR_VERSION_20:
+		_events.append(event)
+		return
+	var distance := float(event.get("course_distance", 0.0))
+	var index := 0
+	while index < _events.size() and float(_events[index].get("course_distance", 0.0)) <= distance:
+		index += 1
+	_events.insert(index, event)
+	if index < _next_spawn_index:
+		_next_spawn_index += 1
+
 func _get_profile_weight_multiplier(profile_id: StringName) -> float:
 	if _difficulty == null:
 		return 1.0
@@ -790,7 +909,13 @@ func _get_profile_weight_multiplier(profile_id: StringName) -> float:
 func _preferred_lane() -> int:
 	if _events.is_empty():
 		return 0
-	var previous_mask := int(_events.back().get("blocked_lanes", 0))
+	var previous_event: Dictionary = _events.back()
+	if _generator_version == GENERATOR_VERSION_20:
+		for index in range(_events.size() - 1, -1, -1):
+			if float(_events[index].get("course_distance", 0.0)) <= _next_event_distance + 0.001:
+				previous_event = _events[index]
+				break
+	var previous_mask := int(previous_event.get("blocked_lanes", 0))
 	if previous_mask == FLOOR_LANE:
 		return CEILING_LANE
 	if previous_mask == CEILING_LANE:

@@ -78,7 +78,11 @@ func _run() -> void:
 	_check(not ghost_row.is_empty(), "shared world render state includes the activated pursuit")
 	if not ghost_row.is_empty():
 		node.call("apply_world_state", {"state": ghost_row.state})
-		_check(node.global_position.distance_to(Vector2(float(ghost_row.state.x), float(ghost_row.state.y))) < 0.01, "shared GhostHazard scene follows authoritative rendered pose")
+		var state: Dictionary = ghost_row.state
+		var render_tick := float(state.get("render_tick", state.get("tick", 0)))
+		var render_activation := {"lane": int(state.get("lane", 0)), "world_x": float(state.get("world_x", 0.0)), "speed": float(state.get("speed", 0.0)), "target_peer_id": int(state.get("target_peer_id", 0))}
+		var expected_render_position := GhostModel.center_for_activation(event, int(state.get("activation_tick", -1)), render_tick, render_activation)
+		_check(node.global_position.distance_to(expected_render_position) < 0.01, "shared GhostHazard scene follows the authoritative fractional rendered pose")
 		var altered: Dictionary = ghost_row.state.duplicate(true)
 		altered.lane = 1
 		altered.target_peer_id = 1

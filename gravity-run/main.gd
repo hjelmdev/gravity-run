@@ -107,6 +107,11 @@ var _render_course_distance := 0.0
 var render_diagnostics_enabled := false
 var _render_diagnostic_frames: Array[Dictionary] = []
 var _render_diagnostic_tick := 0
+const MAX_COIN_TRACE_EVENTS := 512
+var _coin_trace_events: Array[Dictionary] = []
+var _coin_trace_seen: Dictionary = {}
+var _coin_trace_dropped := 0
+var _coin_trace_counts := {"spawned": 0, "near_sweep": 0, "swept_contact": 0, "collected": 0, "expired_uncollected": 0}
 var _render_callback_index := 0
 var _render_callback_begin_usec := -1
 var _render_presentation_sample_usec := -1
@@ -213,6 +218,11 @@ func _start_run() -> void:
 	_singleplayer_saw_surface_indexes.clear()
 	_pending_shared_coins.clear()
 	_shared_coin_planned_until = PLAYER_X + SHARED_COIN_PLANNER_SCRIPT.COURSE_START_OFFSET
+	if render_diagnostics_enabled:
+		_coin_trace_events.clear()
+		_coin_trace_seen.clear()
+		_coin_trace_dropped = 0
+		_coin_trace_counts = {"spawned": 0, "spawned_before_capture": 0, "near_sweep": 0, "swept_contact": 0, "collected": 0, "expired_uncollected": 0}
 	_shared_coin_planner = SHARED_COIN_PLANNER_SCRIPT.new()
 	var coin_ruleset: Resource = ChallengeService.ruleset if ChallengeService.ruleset != null else _default_ruleset
 	_shared_coin_planner.reset(_active_seed, PLAYER_X, int(coin_ruleset.get("coin_revision")), float(coin_ruleset.get("coin_density")))
@@ -335,6 +345,20 @@ func set_render_diagnostics_enabled(enabled: bool) -> void:
 	render_diagnostics_enabled = enabled
 	if enabled:
 		_render_diagnostic_frames.clear()
+		_coin_trace_events.clear()
+		_coin_trace_seen.clear()
+		_coin_trace_dropped = 0
+		_coin_trace_counts = {"spawned": 0, "spawned_before_capture": 0, "near_sweep": 0, "swept_contact": 0, "collected": 0, "expired_uncollected": 0}
+		# Diagnostics may be enabled mid-run; preserve canonical identities for active coins.
+		for coin in coins:
+			if not is_instance_valid(coin) or bool(coin.call("is_collected")):
+				continue
+			var entity_id := str(coin.get_meta("coin_trace_id", "sp_coin_%d" % coin.get_instance_id()))
+			coin.set_meta("coin_trace_id", entity_id)
+			if not entity_id.begins_with("coin_") and not bool(coin.get_meta("coin_trace_collect_connected", false)):
+				coin.connect("collected", Callable(self, "_on_singleplayer_coin_collected").bind(coin, entity_id, "active_node_snapshot"))
+				coin.set_meta("coin_trace_collect_connected", true)
+			_record_coin_trace("spawned_before_capture", entity_id, coin.global_position, {"source": "active_node_snapshot"}, "spawned:%s" % entity_id)
 
 func _record_render_diagnostic(delta: float) -> void:
 	var capture_started_usec := Time.get_ticks_usec()
@@ -402,8 +426,64 @@ func _record_render_diagnostic(delta: float) -> void:
 	_render_diagnostic_frames[_render_diagnostic_frames.size() - 1]["diagnostic_capture_usec"] = Time.get_ticks_usec() - capture_started_usec
 
 func save_render_diagnostics() -> String:
-	var report := {"session": {"network_mode": "singleplayer", "build_id": str(ProjectSettings.get_setting("application/config/version", "")), "godot_version": Engine.get_version_info(), "seed": _active_seed, "viewport": [screen_width, screen_height], "zoom": camera.zoom.x}, "frames": _render_diagnostic_frames.duplicate(true), "exported_at_unix": Time.get_unix_time_from_system()}
+	var report := _build_render_diagnostics_report()
 	return DiagnosticsExport.save_report(report, "singleplayer_smoothness_%d.json" % Time.get_unix_time_from_system())
+
+func _build_render_diagnostics_report() -> Dictionary:
+	var trace_events: Array[Dictionary] = _coin_trace_events.duplicate(true)
+	for event in trace_events:
+		event.erase("_dedup_key")
+	return {"session": {"network_mode": "singleplayer", "build_id": str(ProjectSettings.get_setting("application/config/version", "")), "godot_version": Engine.get_version_info(), "seed": _active_seed, "generator_version": _active_seed_version, "viewport": [screen_width, screen_height], "zoom": camera.zoom.x}, "frames": _render_diagnostic_frames.duplicate(true), "coin_trace": {"enabled": render_diagnostics_enabled, "max_records": MAX_COIN_TRACE_EVENTS, "event_count": trace_events.size(), "dropped_events": _coin_trace_dropped, "counts": _coin_trace_counts.duplicate(true), "events": trace_events}, "exported_at_unix": Time.get_unix_time_from_system()}
+
+func _record_coin_trace(action: String, entity_id: String, coin_position: Vector2, details: Dictionary = {}, dedup_key: String = "") -> void:
+	if not render_diagnostics_enabled:
+		return
+	if not dedup_key.is_empty() and _coin_trace_seen.has(dedup_key):
+		return
+	if not dedup_key.is_empty():
+		_coin_trace_seen[dedup_key] = true
+		while _coin_trace_seen.size() > MAX_COIN_TRACE_EVENTS:
+			_coin_trace_seen.erase(_coin_trace_seen.keys()[0])
+	if _coin_trace_events.size() >= MAX_COIN_TRACE_EVENTS:
+		var discarded: Dictionary = _coin_trace_events.pop_front()
+		var discarded_key := str(discarded.get("_dedup_key", ""))
+		if not discarded_key.is_empty():
+			_coin_trace_seen.erase(discarded_key)
+		_coin_trace_dropped += 1
+	var event := {"action": action, "entity_id": entity_id, "tick": _singleplayer_simulation_tick, "course_distance": course_distance, "coin_position": _render_diagnostic_vector(coin_position), "run_coins": int(run_state.get("coins")) if is_instance_valid(run_state) else -1}
+	for key in details:
+		event[key] = details[key]
+	if not dedup_key.is_empty():
+		event["_dedup_key"] = dedup_key
+	_coin_trace_events.append(event)
+	_coin_trace_counts[action] = int(_coin_trace_counts.get(action, 0)) + 1
+
+func _coin_trace_rect(rect: Rect2) -> Array[float]:
+	return [rect.position.x, rect.position.y, rect.size.x, rect.size.y]
+
+func _record_coin_sweep_diagnostic(coin: Node2D, start_rect: Rect2, end_rect: Rect2, fraction: float, lethal_fraction: float) -> void:
+	if not render_diagnostics_enabled or not is_instance_valid(coin):
+		return
+	var entity_id := str(coin.get_meta("coin_trace_id", "sp_coin_%d" % coin.get_instance_id()))
+	var coin_rect: Rect2 = coin.call("get_hitbox_rect")
+	var broadphase := start_rect.merge(end_rect).grow(24.0)
+	if fraction < 0.0 and not broadphase.intersects(coin_rect):
+		return
+	var survives_terminal := fraction >= 0.0 and fraction < lethal_fraction - 0.000001
+	var reason := "swept_contact_before_terminal" if survives_terminal else ("terminal_contact_precedes_coin" if fraction >= 0.0 else "near_sweep_without_circle_contact")
+	var details := {"swept_fraction": fraction, "lethal_fraction": lethal_fraction, "eligible_before_terminal": survives_terminal, "decision_reason": reason, "player_rect_start": _coin_trace_rect(start_rect), "player_rect_end": _coin_trace_rect(end_rect), "coin_rect": _coin_trace_rect(coin_rect), "run_coins_before": int(run_state.get("coins")) if is_instance_valid(run_state) else -1}
+	_record_coin_trace("near_sweep", entity_id, coin.global_position, details, "near:%s" % entity_id)
+	if fraction >= 0.0:
+		_record_coin_trace("swept_contact", entity_id, coin.global_position, details, "contact:%s" % entity_id)
+
+func _record_uncollected_coin_expiry(camera_left: float) -> void:
+	if not render_diagnostics_enabled:
+		return
+	for coin in coins:
+		if not is_instance_valid(coin) or bool(coin.call("is_collected")) or coin.position.x > camera_left - 100.0:
+			continue
+		var entity_id := str(coin.get_meta("coin_trace_id", "sp_coin_%d" % coin.get_instance_id()))
+		_record_coin_trace("expired_uncollected", entity_id, coin.global_position, {"reason": "camera_passed_uncollected", "camera_left": camera_left, "coin_world_x": coin.global_position.x})
 
 func _render_diagnostic_vector(value: Vector2) -> Array[float]:
 	return [value.x, value.y]
@@ -577,6 +657,8 @@ func _physics_process(delta: float) -> void:
 				continue
 			var center := coin.global_position
 			var fraction := HAZARD_RULES_SCRIPT.swept_rect_circle_fraction(previous_player_rect, final_player_rect.position - previous_player_rect.position, center, 13.0)
+			if render_diagnostics_enabled:
+				_record_coin_sweep_diagnostic(coin, previous_player_rect, final_player_rect, fraction, lethal_fraction)
 			if is_instance_valid(_sfx_audio_diagnostic_capture) and bool(_sfx_audio_diagnostic_capture.call("is_capture_active")):
 				var coin_rect: Rect2 = coin.call("get_hitbox_rect")
 				var broadphase := previous_player_rect.merge(final_player_rect).grow(24.0)
@@ -590,6 +672,8 @@ func _physics_process(delta: float) -> void:
 	if run_end_requested:
 		_end_run()
 	var camera_left := course_distance
+	if render_diagnostics_enabled:
+		_record_uncollected_coin_expiry(camera_left)
 	coins = coins.filter(func(coin: Node2D) -> bool: return is_instance_valid(coin) and not bool(coin.call("is_collected")) and coin.position.x > camera_left - 100.0)
 	loot_pickups = loot_pickups.filter(func(pickup: Node2D) -> bool: return is_instance_valid(pickup) and pickup.position.x > camera_left - 100.0)
 	queue_redraw()
@@ -1216,7 +1300,14 @@ func _spawn_coin_row() -> void:
 	var coin_count := randi_range(1, 3)
 	for i in range(coin_count):
 		var coin := COIN_SCENE.instantiate() as Node2D
+		var trace_id := ""
+		if render_diagnostics_enabled:
+			trace_id = "sp_coin_%d" % coin.get_instance_id()
+			coin.set_meta("coin_trace_id", trace_id)
 		coin.connect("collected", Callable(run_state, "add_coins"))
+		if render_diagnostics_enabled:
+			coin.connect("collected", Callable(self, "_on_singleplayer_coin_collected").bind(coin, trace_id, "singleplayer_row"))
+			coin.set_meta("coin_trace_collect_connected", true)
 		_connect_coin_audio(coin, "coin:%d" % coin.get_instance_id())
 		var coin_x := course_distance + screen_width + 70.0 + float(i) * 48.0
 		var placed := false
@@ -1231,16 +1322,33 @@ func _spawn_coin_row() -> void:
 			continue
 		add_child(coin)
 		coins.append(coin)
+		if render_diagnostics_enabled:
+			_record_coin_trace("spawned", trace_id, coin.global_position, {"source": "singleplayer_row"})
 
 func _spawn_shared_coins() -> void:
 	if _active_seed <= 0 or _manifest_builder == null or _shared_coin_planner == null:
 		return
 	var horizon := course_distance + screen_width + 1400.0
-	if PLAYER_X + horizon >= _shared_coin_planned_until + 100.0:
-		course_generator.ensure_horizon(PLAYER_X + horizon + 1200.0, _run_speed(), screen_height, COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE)
+	var planner_refresh_distance := 100.0
+	if _active_seed_version >= COURSE_GENERATOR_SCRIPT.GENERATOR_VERSION_20:
+		# Batch planning to avoid resolving the entire course on each ~100px
+		# movement while retaining more than a viewport of planned coins.
+		planner_refresh_distance = 250.0
+	if PLAYER_X + horizon >= _shared_coin_planned_until + planner_refresh_distance:
+		var planner_hazard_lookahead := 0.0
+		var source_generation_lookahead := 1200.0
+		if _active_seed_version >= COURSE_GENERATOR_SCRIPT.GENERATOR_VERSION_20:
+			# Coin risk rows can precede a Gen19 pursuit by up to 1250px, while
+			# pursuit eligibility checks support through its post-event route end
+			# (3156px beyond the event, including half-width, at max model speed).
+			# Add the maximum 1250px row lead plus a conservative 94px margin.
+			planner_hazard_lookahead = 4500.0
+			source_generation_lookahead = planner_hazard_lookahead + 200.0
+		course_generator.ensure_horizon(PLAYER_X + horizon + source_generation_lookahead, _run_speed(), screen_height, COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE)
 		var source_events: Array[Dictionary] = course_generator.get_planned_events()
 		var biome_start_offset := BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(_active_seed, _active_seed_version)
-		var resolved_events: Array[Dictionary] = _manifest_builder.call("resolve_runtime_events", source_events, ceili(horizon), _active_seed_version, biome_start_offset)
+		var resolved_course_length := ceili(horizon + planner_hazard_lookahead)
+		var resolved_events: Array[Dictionary] = _manifest_builder.call("resolve_runtime_events", source_events, resolved_course_length, _active_seed_version, biome_start_offset)
 		var planned: Array[Dictionary] = _shared_coin_planner.extend(PLAYER_X + horizon, resolved_events, WORLD_HEIGHT - 80.0, 80.0, 0)
 		_pending_shared_coins.append_array(planned)
 		_shared_coin_planned_until = PLAYER_X + horizon
@@ -1253,15 +1361,24 @@ func _spawn_shared_coins() -> void:
 		_pending_shared_coins.remove_at(index)
 		_spawned_shared_coin_ids[entity_id] = true
 		var coin := COIN_SCENE.instantiate() as Node2D
+		coin.set_meta("coin_trace_id", entity_id)
 		coin.connect("collected", Callable(run_state, "add_coins"))
-		coin.connect("collected", Callable(self, "_on_shared_coin_collected").bind(entity_id))
+		coin.connect("collected", Callable(self, "_on_shared_coin_collected").bind(coin, entity_id))
 		_connect_coin_audio(coin, "coin:%s" % entity_id)
 		coin.position = Vector2(float(item.world_x), float(item.world_y))
 		add_child(coin)
 		coins.append(coin)
+		if render_diagnostics_enabled:
+			_record_coin_trace("spawned", entity_id, coin.global_position, {"source": "shared_planner", "planned_world_x": float(item.world_x), "planned_world_y": float(item.world_y), "planner_refresh_distance": planner_refresh_distance})
 
-func _on_shared_coin_collected(_value: int, entity_id: String) -> void:
+func _on_shared_coin_collected(_value: int, coin: Node2D, entity_id: String) -> void:
 	_spawned_shared_coin_ids.erase(entity_id)
+	if render_diagnostics_enabled and is_instance_valid(coin):
+		_record_coin_trace("collected", entity_id, coin.global_position, {"run_coins_after": int(run_state.get("coins")), "source": "shared_planner"}, "collected:%s" % entity_id)
+
+func _on_singleplayer_coin_collected(_value: int, coin: Node2D, entity_id: String, source: String) -> void:
+	if render_diagnostics_enabled and is_instance_valid(coin):
+		_record_coin_trace("collected", entity_id, coin.global_position, {"run_coins_after": int(run_state.get("coins")), "source": source}, "collected:%s" % entity_id)
 
 func _connect_coin_audio(coin: Node, event_id: String) -> void:
 	var event_key := "%s|%s" % [_singleplayer_audio_round_id, event_id]

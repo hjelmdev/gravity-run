@@ -332,13 +332,13 @@ func _get_available_profiles(generator_version: int = GENERATOR_VERSION) -> Arra
 	return generator.get_profile_catalog(generator_version)
 
 func _supports_generator_version(generator_version: int) -> bool:
-	return generator_version in [GENERATOR_VERSION, CourseGeneratorScript.GENERATOR_VERSION_15, CourseGeneratorScript.GENERATOR_VERSION_14, CourseGeneratorScript.GENERATOR_VERSION_13, CourseGeneratorScript.GENERATOR_VERSION_12, CourseGeneratorScript.GENERATOR_VERSION_11, CourseGeneratorScript.GENERATOR_VERSION_10, CourseGeneratorScript.GENERATOR_VERSION_9, CourseGeneratorScript.GENERATOR_VERSION_8, CourseGeneratorScript.ROCK_SAFE_GENERATOR_VERSION, CourseGeneratorScript.GENERATOR_VERSION_6, CourseGeneratorScript.PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]
+	return generator_version in [GENERATOR_VERSION, CourseGeneratorScript.GENERATOR_VERSION_19, CourseGeneratorScript.GENERATOR_VERSION_18, CourseGeneratorScript.GENERATOR_VERSION_17, CourseGeneratorScript.GENERATOR_VERSION_16, CourseGeneratorScript.GENERATOR_VERSION_15, CourseGeneratorScript.GENERATOR_VERSION_14, CourseGeneratorScript.GENERATOR_VERSION_13, CourseGeneratorScript.GENERATOR_VERSION_12, CourseGeneratorScript.GENERATOR_VERSION_11, CourseGeneratorScript.GENERATOR_VERSION_10, CourseGeneratorScript.GENERATOR_VERSION_9, CourseGeneratorScript.GENERATOR_VERSION_8, CourseGeneratorScript.ROCK_SAFE_GENERATOR_VERSION, CourseGeneratorScript.GENERATOR_VERSION_6, CourseGeneratorScript.PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]
 
 func _new_default_ruleset(generator_version: int) -> Resource:
 	var default_ruleset := RulesetScript.new() as Resource
 	if generator_version == LEGACY_GENERATOR_VERSION:
 		default_ruleset.set("event_density", 1.0)
-	elif generator_version == GENERATOR_VERSION:
+	elif generator_version in [GENERATOR_VERSION, CourseGeneratorScript.GENERATOR_VERSION_19]:
 		default_ruleset.set("revision", 14)
 		default_ruleset.set("event_density", 1.9)
 		default_ruleset.set("coin_revision", 2)
