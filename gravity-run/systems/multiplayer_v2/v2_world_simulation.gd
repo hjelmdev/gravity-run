@@ -154,11 +154,14 @@ func render_state(fraction: float) -> Dictionary:
 				current_state[key] = lerpf(float(previous_state.get(key, current_state.get(key, 0.0))), float(current_state.get(key, 0.0)), clampf(fraction, 0.0, 1.0))
 		rendered_saws.append({"event_id": saw_id, "state": current_state, "event": saw.get("event", {})})
 	var rendered_ghosts: Array[Dictionary] = []
+	var ghost_render_tick := maxf(float(tick - 1) + clampf(fraction, 0.0, 1.0), 0.0)
 	for event in ghosts:
 		var event_id := str(event.get("event_id", ""))
 		var entity: Dictionary = entity_ledger.entities.get(event_id, {})
 		var activation_tick := int(entity.get("ghost_activation_tick", -1))
-		rendered_ghosts.append({"event_id": event_id, "event": event, "state": GhostModel.state(event, activation_tick, tick, _ghost_activation_state(entity))})
+		var ghost_state := GhostModel.state(event, activation_tick, tick, _ghost_activation_state(entity))
+		ghost_state["render_tick"] = ghost_render_tick
+		rendered_ghosts.append({"event_id": event_id, "event": event, "state": ghost_state})
 	var lava_render_tick := float(tick - 1) + clampf(fraction, 0.0, 1.0)
 	var rendered_lava: Array[Dictionary] = []
 	for event in lava_events:

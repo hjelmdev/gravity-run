@@ -25,6 +25,23 @@ static func phase_at(event: Dictionary, activation_tick: int, tick: int) -> Stri
 		return FADING
 	return EXPIRED
 
+## Presentation-only phase lookup. Collision and authoritative phase decisions
+## continue to use phase_at() with the integer simulation tick.
+static func presentation_phase_at(event: Dictionary, activation_tick: int, tick: float) -> String:
+	if activation_tick < 0 or tick < float(activation_tick):
+		return DORMANT
+	var elapsed := tick - float(activation_tick)
+	var warning_ticks := float(int(event.get("warning_ticks", 120)))
+	var danger_ticks := float(int(event.get("danger_ticks", 500)))
+	var fade_ticks := float(int(event.get("fade_ticks", 45)))
+	if elapsed < warning_ticks:
+		return WARNING
+	if elapsed < warning_ticks + danger_ticks:
+		return DANGEROUS
+	if elapsed < warning_ticks + danger_ticks + fade_ticks:
+		return FADING
+	return EXPIRED
+
 static func center(event: Dictionary) -> Vector2:
 	var x := float(event.get("x", 0.0))
 	var height := float(event.get("height", 96.0))

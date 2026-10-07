@@ -260,6 +260,12 @@ func _update_camera() -> void:
 	camera.call("configure", Vector2(screen_width, screen_height), PLAYER_X, camera.zoom.x)
 	camera.call("follow", _render_player_position)
 
+func _update_ghost_presentation(render_fraction: float) -> void:
+	var presentation_tick := maxf(float(_singleplayer_simulation_tick - 1) + clampf(render_fraction, 0.0, 1.0), 0.0)
+	for obstacle in obstacles:
+		if is_instance_valid(obstacle) and obstacle.is_in_group("ghost_hazards") and obstacle.has_method("set_presentation_tick"):
+			obstacle.call("set_presentation_tick", presentation_tick)
+
 func _on_run_stats_changed(distance_pixels: float, coins: int) -> void:
 	hud.call("update_stats", distance_pixels, coins)
 	if not demo_mode:
@@ -310,6 +316,7 @@ func _process(delta: float) -> void:
 	for obstacle in obstacles:
 		if is_instance_valid(obstacle) and obstacle.has_method("set_render_fraction") and (obstacle.is_in_group("falling_rocks") or obstacle.is_in_group("saw_blades")):
 			obstacle.call("set_render_fraction", _render_interpolation_fraction)
+	_update_ghost_presentation(_render_interpolation_fraction)
 	_render_presentation_sample_usec = Time.get_ticks_usec()
 	_render_player_position = _presentation.sample(_render_interpolation_fraction)
 	_render_pose_sampled_usec = Time.get_ticks_usec() if render_diagnostics_enabled else -1

@@ -16,6 +16,8 @@ var activation_tick := -1
 var activation_state: Dictionary = {}
 var simulation_tick := 0
 var phase := Model.DORMANT
+var _presentation_tick := 0.0
+var _presentation_phase := Model.DORMANT
 var _visual_time := 0.0
 var skin_variant := 0
 
@@ -29,11 +31,16 @@ func visual_offset() -> Vector2:
 	return Vector2(sin(_visual_time * TAU / 4.0) * 3.0, sin(_visual_time * TAU / 2.8) * 5.0)
 
 func configure(value: Dictionary) -> void:
+	# The shared renderer samples this node explicitly in SP and MP. Disable
+	# engine transform interpolation here so the same pose is never interpolated twice.
+	physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	event = value.duplicate(true)
 	activation_tick = -1
 	activation_state.clear()
 	simulation_tick = 0
 	phase = Model.DORMANT
+	_presentation_tick = 0.0
+	_presentation_phase = Model.DORMANT
 	_visual_time = 0.0
 	skin_variant = clampi(int(event.get("skin_variant", 0)), 0, SKINS.size() - 1)
 	global_position = Model.center(event)
@@ -69,6 +76,23 @@ func set_simulation_tick(value: int) -> void:
 	global_position = Model.center_for_activation(event, activation_tick, simulation_tick, activation_state)
 	_update_phase()
 
+## Moves only the rendered node. The authoritative simulation tick and hitbox
+## remain integer-tick based for collision, replay and ledger decisions.
+func set_presentation_tick(value: float) -> void:
+	if not is_finite(value):
+		return
+	var variant := int(event.get("ghost_variant", 0))
+	if variant not in [1, 2, 3]:
+		_presentation_tick = float(simulation_tick)
+		_presentation_phase = phase
+		global_position = Model.center_for_activation(event, activation_tick, _presentation_tick, activation_state)
+		visible = phase not in [Model.DORMANT, Model.EXPIRED]
+		return
+	_presentation_tick = maxf(value, 0.0)
+	_presentation_phase = Model.presentation_phase_at(event, activation_tick, _presentation_tick)
+	global_position = Model.center_for_activation(event, activation_tick, _presentation_tick, activation_state)
+	visible = _presentation_phase not in [Model.DORMANT, Model.EXPIRED]
+
 func apply_world_state(value: Dictionary) -> void:
 	var incoming: Variant = value.get("state", value)
 	if not incoming is Dictionary:
@@ -98,6 +122,10 @@ func apply_world_state(value: Dictionary) -> void:
 	simulation_tick = next_tick
 	global_position = Model.center_for_activation(event, activation_tick, simulation_tick, activation_state)
 	_update_phase()
+	if incoming.has("render_tick") and (incoming.render_tick is int or incoming.render_tick is float):
+		set_presentation_tick(float(incoming.render_tick))
+	else:
+		set_presentation_tick(float(simulation_tick))
 
 func _update_phase() -> void:
 	var next_phase := Model.phase_at(event, activation_tick, simulation_tick)
@@ -106,6 +134,8 @@ func _update_phase() -> void:
 		phase_changed.emit(str(event.get("event_id", "")), phase)
 		queue_redraw()
 	visible = phase not in [Model.DORMANT, Model.EXPIRED]
+	_presentation_tick = float(simulation_tick)
+	_presentation_phase = phase
 	global_position = Model.center_for_activation(event, activation_tick, simulation_tick, activation_state)
 
 func get_hitbox_rect() -> Rect2:
@@ -118,18 +148,19 @@ func is_destroying_now() -> bool:
 	return phase == Model.EXPIRED
 
 func _draw() -> void:
-	if phase in [Model.DORMANT, Model.EXPIRED]:
+	var draw_phase := _presentation_phase if int(event.get("ghost_variant", 0)) in [1, 2, 3] else phase
+	if draw_phase in [Model.DORMANT, Model.EXPIRED]:
 		return
 	var size := Vector2(float(event.get("width", 72.0)), float(event.get("height", 96.0)))
 	var tint := Color("d6e3ff", 0.58)
-	if phase == Model.DANGEROUS:
+	if draw_phase == Model.DANGEROUS:
 		tint = Color("f0f5ff", 0.98)
-	elif phase == Model.FADING:
+	elif draw_phase == Model.FADING:
 		tint = Color("bdc9e3", 0.28)
 	draw_set_transform(visual_offset(), sin(_visual_time * TAU / 4.0) * 0.025)
 	draw_texture_rect(SKINS[skin_variant], Rect2(-size * 0.5, size), false, tint)
 	draw_set_transform(Vector2.ZERO)
-	if phase == Model.WARNING:
-		var pulse := 0.65 + 0.25 * sin(float(simulation_tick % 24) * TAU / 24.0)
+	if draw_phase == Model.WARNING:
+		var pulse := 0.65 + 0.25 * sin(fposmod(_presentation_tick, 24.0) * TAU / 24.0)
 		var radius := maxf(size.x, size.y) * 0.58
 		draw_arc(Vector2.ZERO, radius, 0.0, TAU, 36, Color("c7a9ff", pulse), 2.0, true)
