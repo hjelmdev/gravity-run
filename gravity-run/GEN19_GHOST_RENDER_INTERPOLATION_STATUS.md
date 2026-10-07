@@ -1,6 +1,6 @@
 # Gen19 ghost render interpolation status
 
-Status: REVIEW_READY. A presentation-only correction is implemented in shared SP/MP ghost rendering. Simulation ticks, phase authority, collision geometry, activation/ledger, generation, and network state remain tick-based and unchanged.
+Status: RELEASE_COMPLETE. A presentation-only correction is implemented in shared SP/MP ghost rendering. Simulation ticks, phase authority, collision geometry, activation/ledger, generation, and network state remain tick-based and unchanged.
 
 ## Scope and initial finding
 
@@ -30,3 +30,14 @@ A separate non-headless OpenGL capture used the actual `main.tscn`, generated Ge
 Images and per-render callback JSON are in `gravity-run/.codex-ghost-render-review/gen19-ghost-{fps60,fps240,uneven}.{png,json}`. The original user trace had 820 same-tick ghost/runner screen pairs moving backward (median −2.104 px); the new 240 Hz runtime capture has 396 such pairs moving forward (median +0.9165 px, minimum +0.0643 px). This is a controlled singleplayer event fixture rather than a replay of the user’s full run. No actual networked MP browser capture was run; multiplayer integration is covered by the shared world render-state regression, not claimed as a live-match visual test.
 
 Godot was launched only by bounded hidden test processes. Those processes exited; the pre-existing editor process (PID 53204) was left untouched. Headless Godot logs benign local `user://` log/shader-cache and certificate-store warnings in this environment; the test result itself was exit 0. No gameplay, API, generator, or migration change is intended. Existing unrelated working-tree edits (capture, menu, pacing, audio, and other reviews) remain outside this scope.
+
+## Release verification
+
+- Azure source commit: `934e5a6294b1ecb43814d68ff747b9c848392e10` (`codex/current-prototype`); the remote branch was verified at this SHA.
+- Pages commit: `9b0fbdcfd009f8978d3fbe8f0e9728e650f88d6d` (`main`); GitHub Actions Pages workflow `37675256822` completed successfully on that exact SHA.
+- Public build ID: `shared-ghost-render-934e5a6-20261007`, present in root and game `BUILD_ID`; the root iframe selects the same build and the game loader selects `index.ghost-render-934e5a6-20261007.pck`.
+- Clean exact-commit source archive: `.codex-clean-gen19-render-934e5a6.zip`; Web export: `.codex-gen19-ghost-render-934e5a6-web`.
+- Local and downloaded public PCKs both measured 3,629,864 bytes with SHA-256 `9423F1D0B5EAA404BFA3852E21EECFCD5BF641EC86DAAACD4618904847ED6E39`.
+- Public URL: `https://hjelmdev.github.io/gravity-run/`.
+
+This release has no database migration. The public build was verified through the Pages workflow, live root/game markers, and exact PCK hash. Verification does not include a connected MP browser match; MP interpolation is covered by the shared render-state regression. The actual GPU timing capture was a controlled SP event fixture, not a replay of the supplied full session.
