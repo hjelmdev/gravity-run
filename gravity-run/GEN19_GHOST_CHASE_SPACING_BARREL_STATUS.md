@@ -1,6 +1,17 @@
 # Gen19 ghost chase, encounter spacing, and barrel follow-up status
 
-Status: RELEASE_CANDIDATE_READY for root review. Ordinary-barrel behavior and broad density tuning are explicitly deferred. No commit, live migration, push, or publication has occurred.
+Status: RELEASE_COMPLETE. This release delivers the Gen19 shared ghost pursuit and supported SP/MP pursuit-to-block fallback. Ordinary-barrel behavior and broad density tuning remain unresolved; this release makes no barrel, density, or gap-tail improvement claim.
+
+## Verified release — 2026-10-07
+
+- Azure source commit and remote branch `codex/current-prototype`: `def4540919af7cf02de19bb09d22d68cc0b2f569` (`Add Gen19 shared ghost pursuit`). The staged `main.gd` contains only the reviewed Gen19 pursuit/fallback hunks; unrelated capture, menu, pacing, and diagnostics edits were left unstaged.
+- Supabase migration `202610070001_generator19_ghost_pursuit.sql` was applied. Linked migration history confirms local and remote match through `202610070001`.
+- The exact commit was archived at `E:/Utveckling/Gravity Run/.codex-clean-gen19-def4540`; clean import/export completed. The published Pages commit is `dab7ce92acd174fe1ff69c164bdb0c8607d8e322` on `main`.
+- Pages workflow [37651709969](https://github.com/hjelmdev/gravity-run/actions/runs/37651709969) completed successfully for that exact Pages commit. Root and game `BUILD_ID` are both `shared-ghost-gen19-def4540-20261007`; the root loader points to `game/index.html` with that build identifier.
+- Public URL: https://hjelmdev.github.io/gravity-run/ . The versioned game pack is 3,610,812 bytes; local clean export and downloaded public pack both have SHA-256 `7892232EB87E958B9DA8329C02804336CE95E22B5F0C410D00C5448F8F37BD50`.
+- Clean-commit tests passed: actual-main fallback spawn, world-activation contract, release-version contract, pursuit fallback, and Gen17/Gen18 frozen-generation fixtures. Existing Godot environment warnings concerned unavailable user log/certificate storage; test processes exited successfully. The user editor process was not stopped.
+
+This publication is the ghost pursuit/fallback candidate only. The matched cohort showed no density or gap-tail improvement, and the ordinary-barrel reach comparison showed no improvement. Those feedback items remain open.
 
 ## Release candidate checkpoint — 2026-10-07
 
