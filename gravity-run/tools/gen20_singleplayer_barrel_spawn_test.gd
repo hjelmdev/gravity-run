@@ -5,8 +5,9 @@ const MainScene := preload("res://main.tscn")
 const Builder := preload("res://systems/course_manifest_builder.gd")
 const RunDefinition := preload("res://systems/course_run_definition.gd")
 const Generator := preload("res://systems/course_generator.gd")
+const HazardInteraction := preload("res://systems/hazard_interaction_rules.gd")
 const PLAYER_X := 180.0
-const BARREL_SPACING := HazardRules.BARREL_CHAIN_SPACING
+const BARREL_SPACING := HazardInteraction.BARREL_CHAIN_SPACING
 
 var failures: Array[String] = []
 
