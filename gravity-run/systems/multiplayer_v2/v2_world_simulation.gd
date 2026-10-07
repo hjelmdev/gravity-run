@@ -77,7 +77,7 @@ func configure(course_manifest: Resource) -> String:
 				entities.append({"entity_id": entity_id, "incarnation": 1, "kind": str(barrel.kind), "health": 1})
 				_entity_by_event[entity_id] = {"kind": str(barrel.kind), "event_id": event_id}
 		elif kind in ["block", "step", "rock", "saw", "ghost"]:
-			entities.append({"entity_id": event_id, "incarnation": 1, "kind": kind, "health": 1})
+			entities.append({"entity_id": event_id, "incarnation": 1, "kind": kind, "health": 1, "ghost_variant": int(event.get("ghost_variant", 0)) if kind == "ghost" else 0})
 			_entity_by_event[event_id] = {"kind": kind, "event_id": event_id}
 			if kind == "rock":
 				rocks.append(event.duplicate(true))
@@ -158,7 +158,7 @@ func render_state(fraction: float) -> Dictionary:
 		var event_id := str(event.get("event_id", ""))
 		var entity: Dictionary = entity_ledger.entities.get(event_id, {})
 		var activation_tick := int(entity.get("ghost_activation_tick", -1))
-		rendered_ghosts.append({"event_id": event_id, "event": event, "state": GhostModel.state(event, activation_tick, tick)})
+		rendered_ghosts.append({"event_id": event_id, "event": event, "state": GhostModel.state(event, activation_tick, tick, _ghost_activation_state(entity))})
 	var lava_render_tick := float(tick - 1) + clampf(fraction, 0.0, 1.0)
 	var rendered_lava: Array[Dictionary] = []
 	for event in lava_events:
@@ -298,7 +298,7 @@ func _player_contact_against(player_state: Dictionary, barrel_state: Array, simu
 			var ghost_entity: Dictionary = entity_ledger.entities.get(event_id, {})
 			var ghost_tick := simulation_tick if simulation_tick >= 0 else tick
 			var ghost_activation := int(ghost_entity.get("ghost_activation_tick", -1))
-			var ghost_rect := GhostModel.hitbox(event, ghost_tick, ghost_activation)
+			var ghost_rect := GhostModel.hitbox(event, ghost_tick, ghost_activation, _ghost_activation_state(ghost_entity))
 			if ghost_rect.size != Vector2.ZERO and HazardRules.player_impact(rect, "block", ghost_rect) == HazardRules.PlayerImpact.LETHAL:
 				return {"kind": "terminal", "reason": "ghost", "entity_id": event_id, "event_id": event_id}
 			continue
@@ -383,14 +383,14 @@ func first_static_terminal_contact(previous: Dictionary, proposed: Dictionary) -
 			var ghost_entity: Dictionary = entity_ledger.entities.get(entity_id, {})
 			var activation_tick := int(ghost_entity.get("ghost_activation_tick", -1))
 			var fraction := -1.0
-			if int(event.get("ghost_variant", 0)) == 1:
-				fraction = GhostModel.swept_contact_fraction(event, activation_tick, maxi(tick - 1, 0), tick, start, end, Motion.SIZE)
+			if int(event.get("ghost_variant", 0)) in [1, 2, 3]:
+				fraction = GhostModel.swept_contact_fraction(event, activation_tick, maxi(tick - 1, 0), tick, start, end, Motion.SIZE, _ghost_activation_state(ghost_entity))
 			else:
 				# Preserve the pre-Gen17 stationary ghost contract: sweep against
 				# the current danger rect only if the previous tick was dangerous;
 				# on warning-to-danger entry, check the proposed endpoint only.
 				if activation_tick >= 0 and GhostModel.phase_at(event, activation_tick, tick) == GhostModel.DANGEROUS:
-					var ghost_rect := GhostModel.hitbox(event, tick, activation_tick)
+					var ghost_rect := GhostModel.hitbox(event, tick, activation_tick, _ghost_activation_state(ghost_entity))
 					var previous_dangerous := GhostModel.phase_at(event, activation_tick, maxi(tick - 1, 0)) == GhostModel.DANGEROUS
 					if previous_dangerous:
 						var ghost_polygon := PackedVector2Array([ghost_rect.position, Vector2(ghost_rect.end.x, ghost_rect.position.y), ghost_rect.end, Vector2(ghost_rect.position.x, ghost_rect.end.y)])
@@ -480,7 +480,7 @@ func state_hash() -> String:
 	var normalized := []
 	for entity_id in entities:
 		var state: Dictionary = entity_ledger.entities[entity_id]
-		normalized.append({"id": str(entity_id), "incarnation": int(state.incarnation), "kind": str(state.kind), "state": str(state.state), "hp": int(state.shared_health), "winner_peer_id": int(state.get("winner_peer_id", 0)), "award_value": int(state.get("award_value", 0)), "rock_activation_tick": int(state.get("rock_activation_tick", -1)), "saw_activation_tick": int(state.get("saw_activation_tick", -1))})
+		normalized.append({"id": str(entity_id), "incarnation": int(state.incarnation), "kind": str(state.kind), "state": str(state.state), "hp": int(state.shared_health), "winner_peer_id": int(state.get("winner_peer_id", 0)), "award_value": int(state.get("award_value", 0)), "rock_activation_tick": int(state.get("rock_activation_tick", -1)), "saw_activation_tick": int(state.get("saw_activation_tick", -1)), "ghost_activation_tick": int(state.get("ghost_activation_tick", -1)), "ghost_activation_lane": int(state.get("ghost_activation_lane", 0)), "ghost_activation_world_x_sixteenth": int(round(float(state.get("ghost_activation_world_x", -1.0)) * 16.0)), "ghost_activation_speed_sixteenth": int(round(float(state.get("ghost_activation_speed", 0.0)) * 16.0)), "ghost_target_peer_id": int(state.get("ghost_target_peer_id", 0))})
 	var barrel_state := []
 	for barrel in barrels:
 		barrel_state.append({"id": str(barrel.entity_id), "x": int(round(float(barrel.x) * 16.0)), "y": int(round(float(barrel.y) * 16.0)), "spawned": bool(barrel.spawned), "falling": bool(barrel.falling), "destroyed": bool(barrel.destroyed), "spiked": bool(barrel.get("spiked", false))})
@@ -492,6 +492,11 @@ func state_hash() -> String:
 	context.start(HashingContext.HASH_SHA256)
 	context.update(JSON.stringify({"tick": tick, "revision": entity_ledger.revision, "entities": normalized, "barrels": barrel_state, "saws": saw_state}).to_utf8_buffer())
 	return context.finish().hex_encode()
+
+func _ghost_activation_state(entity: Dictionary) -> Dictionary:
+	if entity.is_empty():
+		return {}
+	return {"lane": int(entity.get("ghost_activation_lane", 0)), "world_x": float(entity.get("ghost_activation_world_x", -1.0)), "speed": float(entity.get("ghost_activation_speed", 0.0)), "target_peer_id": int(entity.get("ghost_target_peer_id", 0))}
 
 func _surface_angle_at(x: float, ceiling: bool) -> float:
 	for event in manifest.events:

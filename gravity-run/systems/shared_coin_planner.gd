@@ -96,6 +96,13 @@ static func _position_blocked(x: float, y: float, events: Array[Dictionary]) -> 
 			volcano_envelope = LavaHazardModelScript.volcano_collision_envelope(event)
 			if x + COIN_RADIUS < volcano_envelope.position.x or x - COIN_RADIUS > volcano_envelope.end.x:
 				continue
+		elif kind == "ghost" and int(event.get("ghost_variant", 0)) == 3:
+			var pursuit_start := event_x - float(event.get("trigger_lead", 1500.0)) - float(event.get("pursuit_start_lag", 330.0))
+			var pursuit_ticks := float(event.get("warning_ticks", 90)) + float(event.get("danger_ticks", 200)) + float(event.get("fade_ticks", 60))
+			var pursuit_end := pursuit_start + (800.0 + float(event.get("pursuit_speed_delta", 220.0))) * pursuit_ticks / 60.0
+			var pursuit_padding := float(event.get("width", 72.0)) * 0.5 + COIN_RADIUS
+			if x + pursuit_padding < pursuit_start or x - pursuit_padding > pursuit_end:
+				continue
 		elif kind == "ghost" and int(event.get("ghost_variant", 0)) == 1:
 			var chase_start := event_x - float(event.get("trigger_lead", 1700.0)) - float(event.get("chase_start_lag", 220.0))
 			var chase_end := chase_start + float(event.get("chase_speed", 760.0)) * float(event.get("danger_ticks", 150)) / 60.0
@@ -126,6 +133,16 @@ static func _position_blocked(x: float, y: float, events: Array[Dictionary]) -> 
 		elif kind == "lava_crack":
 			var crack: Rect2 = LavaHazardModelScript.tidal_pool_envelope(event) if int(event.get("lava_variant", 0)) == 1 else LavaHazardModelScript.crack_rect(event)
 			if coin_rect.intersects(crack):
+				return true
+		elif kind == "ghost" and int(event.get("ghost_variant", 0)) == 3:
+			var pursuit_height := float(event.get("height", 96.0))
+			var pursuit_low := minf(float(event.get("ceiling_y", 80.0)), float(event.get("floor_y", 460.0)) - pursuit_height) - COIN_RADIUS
+			var pursuit_high := maxf(float(event.get("ceiling_y", 80.0)) + pursuit_height, float(event.get("floor_y", 460.0))) + COIN_RADIUS
+			var pursuit_start := event_x - float(event.get("trigger_lead", 1500.0)) - float(event.get("pursuit_start_lag", 330.0))
+			var pursuit_ticks := float(event.get("warning_ticks", 90)) + float(event.get("danger_ticks", 200)) + float(event.get("fade_ticks", 60))
+			var pursuit_end := pursuit_start + (800.0 + float(event.get("pursuit_speed_delta", 220.0))) * pursuit_ticks / 60.0
+			var sweep_rect := Rect2(Vector2(pursuit_start - float(event.get("width", 72.0)) * 0.5, pursuit_low), Vector2(pursuit_end - pursuit_start + float(event.get("width", 72.0)), pursuit_high - pursuit_low))
+			if coin_rect.intersects(sweep_rect):
 				return true
 		elif kind == "ghost" and int(event.get("ghost_variant", 0)) == 1:
 			var start_x := event_x - float(event.get("trigger_lead", 1700.0)) - float(event.get("chase_start_lag", 220.0))

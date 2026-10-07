@@ -38,6 +38,13 @@ const GEN17_VARIANT_OVERLAY := {
 	"lava": {"haunted_chaser": 0.0, "cave_icicle": 0.0, "lava_tidal_pool": 1.4},
 }
 
+const GEN18_GHOST_OVERLAY := {
+	"classic": {"haunted_chaser": 0.0},
+	"cave": {"haunted_chaser": 0.0},
+	"haunted": {"haunted_chaser": 3.1},
+	"lava": {"haunted_chaser": 0.0},
+}
+
 static func multiplier(generator_version: int, biome_id: String, profile_id: StringName) -> float:
 	if generator_version < 12:
 		return 1.0
@@ -46,7 +53,8 @@ static func multiplier(generator_version: int, biome_id: String, profile_id: Str
 		var lava_overlay: Dictionary = GEN14_OVERLAY.get(biome_id, {})
 		var generation_overlay: Dictionary = GEN16_HAZARD_OVERLAY.get(biome_id, {})
 		var variant_overlay: Dictionary = GEN17_VARIANT_OVERLAY.get(biome_id, {})
-		return float(base_weights.get(String(profile_id), 1.0)) * float(lava_overlay.get(String(profile_id), 1.0)) * float(generation_overlay.get(String(profile_id), 1.0)) * float(variant_overlay.get(String(profile_id), 1.0))
+		var ghost_overlay: Dictionary = GEN18_GHOST_OVERLAY.get(biome_id, {}) if generator_version >= 18 else {}
+		return float(base_weights.get(String(profile_id), 1.0)) * float(lava_overlay.get(String(profile_id), 1.0)) * float(generation_overlay.get(String(profile_id), 1.0)) * float(variant_overlay.get(String(profile_id), 1.0)) * float(ghost_overlay.get(String(profile_id), 1.0))
 	if generator_version >= 16:
 		var base_weights: Dictionary = GEN12_TABLE.get(biome_id, {})
 		var lava_overlay: Dictionary = GEN14_OVERLAY.get(biome_id, {})

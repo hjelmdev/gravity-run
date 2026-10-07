@@ -13,6 +13,7 @@ signal phase_changed(event_id: String, phase: String)
 
 var event: Dictionary = {}
 var activation_tick := -1
+var activation_state: Dictionary = {}
 var simulation_tick := 0
 var phase := Model.DORMANT
 var _visual_time := 0.0
@@ -30,6 +31,7 @@ func visual_offset() -> Vector2:
 func configure(value: Dictionary) -> void:
 	event = value.duplicate(true)
 	activation_tick = -1
+	activation_state.clear()
 	simulation_tick = 0
 	phase = Model.DORMANT
 	_visual_time = 0.0
@@ -45,12 +47,26 @@ func set_activation_tick(value: int) -> void:
 	activation_tick = maxi(value, 0)
 	_update_phase()
 
+func set_activation_snapshot(value: Dictionary) -> void:
+	if activation_tick >= 0 or int(event.get("ghost_variant", 0)) not in [2, 3]:
+		return
+	var lane := int(value.get("lane", 0))
+	var world_x := float(value.get("world_x", NAN))
+	var speed := float(value.get("speed", NAN))
+	var target_peer_id := int(value.get("target_peer_id", 0))
+	var tick := int(value.get("activation_tick", -1))
+	if lane not in [1, 2] or not is_finite(world_x) or world_x < 0.0 or not is_finite(speed) or speed < 200.0 or speed > 800.0 or target_peer_id <= 0 or tick < 0:
+		return
+	activation_state = {"lane": lane, "world_x": world_x, "speed": speed, "target_peer_id": target_peer_id}
+	activation_tick = tick
+	_update_phase()
+
 func set_simulation_tick(value: int) -> void:
 	var next_tick := maxi(value, 0)
 	if next_tick < simulation_tick:
 		return
 	simulation_tick = next_tick
-	global_position = Model.center_at(event, activation_tick, simulation_tick)
+	global_position = Model.center_for_activation(event, activation_tick, simulation_tick, activation_state)
 	_update_phase()
 
 func apply_world_state(value: Dictionary) -> void:
@@ -63,10 +79,24 @@ func apply_world_state(value: Dictionary) -> void:
 		return
 	if next_tick < simulation_tick:
 		return
+	var next_activation_state := activation_state.duplicate(true)
+	if int(event.get("ghost_variant", 0)) in [2, 3]:
+		if next_activation >= 0:
+			var lane_value: Variant = incoming.get("lane", null)
+			var world_x_value: Variant = incoming.get("world_x", null)
+			var speed_value: Variant = incoming.get("speed", null)
+			var peer_value: Variant = incoming.get("target_peer_id", null)
+			if not lane_value is int or int(lane_value) not in [1, 2] or not (world_x_value is int or world_x_value is float) or not is_finite(float(world_x_value)) or float(world_x_value) < 0.0 or not (speed_value is int or speed_value is float) or not is_finite(float(speed_value)) or float(speed_value) < 200.0 or float(speed_value) > 800.0 or not peer_value is int or int(peer_value) <= 0:
+				return
+			var candidate := {"lane": int(lane_value), "world_x": float(world_x_value), "speed": float(speed_value), "target_peer_id": int(peer_value)}
+			if activation_tick >= 0 and (candidate.lane != int(activation_state.get("lane", 0)) or not is_equal_approx(candidate.world_x, float(activation_state.get("world_x", -1.0))) or not is_equal_approx(candidate.speed, float(activation_state.get("speed", 0.0))) or candidate.target_peer_id != int(activation_state.get("target_peer_id", 0))):
+				return
+			next_activation_state = candidate
 	if activation_tick < 0 and next_activation >= 0:
 		activation_tick = next_activation
+	activation_state = next_activation_state
 	simulation_tick = next_tick
-	global_position = Model.center_at(event, activation_tick, simulation_tick)
+	global_position = Model.center_for_activation(event, activation_tick, simulation_tick, activation_state)
 	_update_phase()
 
 func _update_phase() -> void:
@@ -76,12 +106,13 @@ func _update_phase() -> void:
 		phase_changed.emit(str(event.get("event_id", "")), phase)
 		queue_redraw()
 	visible = phase not in [Model.DORMANT, Model.EXPIRED]
+	global_position = Model.center_for_activation(event, activation_tick, simulation_tick, activation_state)
 
 func get_hitbox_rect() -> Rect2:
-	return Model.hitbox(event, simulation_tick, activation_tick)
+	return Model.hitbox(event, simulation_tick, activation_tick, activation_state)
 
 func swept_contact_fraction(start_rect: Rect2, finish_rect: Rect2, start_tick: int, end_tick: int, body_size: Vector2) -> float:
-	return Model.swept_contact_fraction(event, activation_tick, start_tick, end_tick, start_rect.get_center(), finish_rect.get_center(), body_size)
+	return Model.swept_contact_fraction(event, activation_tick, start_tick, end_tick, start_rect.get_center(), finish_rect.get_center(), body_size, activation_state)
 
 func is_destroying_now() -> bool:
 	return phase == Model.EXPIRED

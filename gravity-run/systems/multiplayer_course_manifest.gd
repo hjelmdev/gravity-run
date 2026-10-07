@@ -127,7 +127,7 @@ func validate() -> String:
 		return "The multiplayer world dimensions are invalid."
 	if events.size() > 4000:
 		return "The multiplayer manifest has too many events."
-	if manifest_version not in [2, 3, 4, 5, 6, 7, 8, 9, 10] or (generator_version == CourseGenerator.GENERATOR_VERSION_17 and manifest_version != 10) or (generator_version == CourseGenerator.GENERATOR_VERSION_16 and manifest_version != 9) or (generator_version == CourseGenerator.GENERATOR_VERSION_15 and manifest_version != 8) or (generator_version == CourseGenerator.GENERATOR_VERSION_14 and manifest_version != 7) or (generator_version >= CourseGenerator.GENERATOR_VERSION_12 and generator_version < CourseGenerator.GENERATOR_VERSION_14 and manifest_version != 6) or (generator_version >= CourseGenerator.GENERATOR_VERSION_10 and generator_version < CourseGenerator.GENERATOR_VERSION_12 and manifest_version != 5) or (generator_version >= CourseGenerator.GENERATOR_VERSION_9 and generator_version < CourseGenerator.GENERATOR_VERSION_10 and manifest_version != 4) or (generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and generator_version < CourseGenerator.GENERATOR_VERSION_9 and manifest_version != 3) or (generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and manifest_version != 2):
+	if manifest_version not in [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] or (generator_version == CourseGenerator.GENERATOR_VERSION_19 and manifest_version != 12) or (generator_version == CourseGenerator.GENERATOR_VERSION_18 and manifest_version != 11) or (generator_version == CourseGenerator.GENERATOR_VERSION_17 and manifest_version != 10) or (generator_version == CourseGenerator.GENERATOR_VERSION_16 and manifest_version != 9) or (generator_version == CourseGenerator.GENERATOR_VERSION_15 and manifest_version != 8) or (generator_version == CourseGenerator.GENERATOR_VERSION_14 and manifest_version != 7) or (generator_version >= CourseGenerator.GENERATOR_VERSION_12 and generator_version < CourseGenerator.GENERATOR_VERSION_14 and manifest_version != 6) or (generator_version >= CourseGenerator.GENERATOR_VERSION_10 and generator_version < CourseGenerator.GENERATOR_VERSION_12 and manifest_version != 5) or (generator_version >= CourseGenerator.GENERATOR_VERSION_9 and generator_version < CourseGenerator.GENERATOR_VERSION_10 and manifest_version != 4) or (generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and generator_version < CourseGenerator.GENERATOR_VERSION_9 and manifest_version != 3) or (generator_version < CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION and manifest_version != 2):
 		return "The course generator and manifest versions are incompatible."
 	var biome_start_offset := BiomeRendererScript.start_biome_offset_for_seed(seed_value, generator_version)
 	var previous_x := -INF
@@ -149,7 +149,7 @@ func validate() -> String:
 			var max_warning_ticks := 120 if generator_version >= 8 else 90
 			if not is_finite(width) or not is_finite(height) or width < 60.0 or width > 140.0 or height < 60.0 or height > 150.0 or warning < 20 or warning > max_warning_ticks or fall < 8 or fall > 45 or not is_finite(float(event.get("floor_y", NAN))) or not is_finite(float(event.get("ceiling_y", NAN))):
 				return "The falling rock has invalid versioned geometry or timing."
-			if generator_version == CourseGenerator.GENERATOR_VERSION_17 and int(event.get("rock_variant", 0)) == 1:
+			if generator_version in [CourseGenerator.GENERATOR_VERSION_17, CourseGenerator.GENERATOR_VERSION_18, CourseGenerator.GENERATOR_VERSION_19] and int(event.get("rock_variant", 0)) == 1:
 				var floor_supported_value: Variant = event.get("floor_supported", null)
 				if not (event.get("rock_variant") is int) or not bool(event.get("from_ceiling", false)) or not (floor_supported_value is bool) or int(event.get("lodged_ticks", -1)) < 120 or int(event.get("lodged_ticks", -1)) > 360:
 					return "The Gen17 icicle has invalid support or lifecycle data."
@@ -189,7 +189,23 @@ func validate() -> String:
 			var gen16_ghost_timing := generator_version == CourseGenerator.GENERATOR_VERSION_16 and is_equal_approx(trigger_lead, 1250.0) and warning_ticks == 60 and danger_ticks == 300 and event.get("skin_variant") is int and int(event.get("skin_variant")) in [0, 1, 2]
 			var gen17_variant: Variant = event.get("ghost_variant", null)
 			var gen17_ghost_timing := generator_version == CourseGenerator.GENERATOR_VERSION_17 and gen17_variant is int and int(gen17_variant) in [0, 1] and event.get("skin_variant") is int and int(event.get("skin_variant")) in [0, 1, 2] and ((int(gen17_variant) == 0 and is_equal_approx(trigger_lead, 1250.0) and warning_ticks == 60 and danger_ticks == 300 and int(event.get("blocked_lanes", 0)) in [CourseGenerator.FLOOR_LANE, CourseGenerator.CEILING_LANE]) or (int(gen17_variant) == 1 and is_equal_approx(trigger_lead, 1700.0) and warning_ticks == 54 and danger_ticks == 210 and is_equal_approx(float(event.get("chase_speed", NAN)), 760.0) and is_equal_approx(float(event.get("chase_start_lag", NAN)), 220.0) and int(event.get("blocked_lanes", 0)) == CourseGenerator.FLOOR_LANE))
-			if not is_finite(ghost_width) or not is_finite(ghost_height) or not is_finite(trigger_lead) or ghost_width < 56.0 or ghost_width > 100.0 or ghost_height < 72.0 or ghost_height > 120.0 or not (legacy_ghost_timing or gen16_ghost_timing or gen17_ghost_timing) or fade_ticks < 20 or fade_ticks > 90 or int(event.get("blocked_lanes", 0)) not in [1, 2] or BiomeRendererScript.biome_id_for_generator(event_x - start_x + biome_start_offset, generator_version) != "haunted":
+			var gen18_variant: Variant = event.get("ghost_variant", null)
+			var flyby_lag: Variant = event.get("flyby_start_lag", null)
+			var flyby_delta: Variant = event.get("flyby_speed_delta", null)
+			var ghost_from_ceiling: Variant = event.get("from_ceiling", null)
+			var gen18_ghost_timing := false
+			if generator_version == CourseGenerator.GENERATOR_VERSION_18 and gen18_variant is int and event.get("skin_variant") is int and int(event.get("skin_variant")) in [0, 1, 2]:
+				var stationary_timing: bool = int(gen18_variant) == 0 and is_equal_approx(trigger_lead, 1250.0) and warning_ticks == 60 and danger_ticks == 300 and int(event.get("blocked_lanes", 0)) in [CourseGenerator.FLOOR_LANE, CourseGenerator.CEILING_LANE]
+				var flyby_timing: bool = int(gen18_variant) == 2 and is_equal_approx(trigger_lead, 1500.0) and warning_ticks == 72 and danger_ticks == 120 and (flyby_lag is int or flyby_lag is float) and is_finite(float(flyby_lag)) and is_equal_approx(float(flyby_lag), 130.0) and (flyby_delta is int or flyby_delta is float) and is_finite(float(flyby_delta)) and is_equal_approx(float(flyby_delta), 500.0) and int(event.get("blocked_lanes", 0)) == CourseGenerator.BOTH_LANES and ghost_from_ceiling is bool
+				gen18_ghost_timing = stationary_timing or flyby_timing
+			var gen19_variant: Variant = event.get("ghost_variant", null)
+			var pursuit_lag: Variant = event.get("pursuit_start_lag", null)
+			var pursuit_delta: Variant = event.get("pursuit_speed_delta", null)
+			if generator_version == CourseGenerator.GENERATOR_VERSION_19 and gen19_variant is int and event.get("skin_variant") is int and int(event.get("skin_variant")) in [0, 1, 2]:
+				var stationary_gen19: bool = int(gen19_variant) == 0 and is_equal_approx(trigger_lead, 1250.0) and warning_ticks == 60 and danger_ticks == 300 and int(event.get("blocked_lanes", 0)) in [CourseGenerator.FLOOR_LANE, CourseGenerator.CEILING_LANE]
+				var pursuit_gen19: bool = int(gen19_variant) == 3 and is_equal_approx(trigger_lead, 2500.0) and warning_ticks == 90 and danger_ticks == 200 and (pursuit_lag is int or pursuit_lag is float) and is_finite(float(pursuit_lag)) and is_equal_approx(float(pursuit_lag), 330.0) and (pursuit_delta is int or pursuit_delta is float) and is_finite(float(pursuit_delta)) and is_equal_approx(float(pursuit_delta), 220.0) and int(event.get("blocked_lanes", 0)) == CourseGenerator.BOTH_LANES and ghost_from_ceiling is bool
+				gen18_ghost_timing = stationary_gen19 or pursuit_gen19
+			if not is_finite(ghost_width) or not is_finite(ghost_height) or not is_finite(trigger_lead) or ghost_width < 56.0 or ghost_width > 100.0 or ghost_height < 72.0 or ghost_height > 120.0 or not (legacy_ghost_timing or gen16_ghost_timing or gen17_ghost_timing or gen18_ghost_timing) or fade_ticks < 20 or fade_ticks > 90 or int(event.get("blocked_lanes", 0)) not in [1, 2, 3] or BiomeRendererScript.biome_id_for_generator(event_x - start_x + biome_start_offset, generator_version) != "haunted":
 				return "The ghost hazard has invalid versioned geometry, timing, or biome."
 		if str(event.kind) == "lava_crack":
 			var crack_width := float(event.get("width", NAN))
@@ -205,7 +221,7 @@ func validate() -> String:
 			var revision_valid := not event.has("lava_crack_revision") and not event.has("visual_depth") if generator_version < CourseGenerator.GENERATOR_VERSION_15 else int(event.get("lava_crack_revision", -1)) == 1 and visual_depth >= 24.0 and visual_depth <= 44.0
 			if not is_finite(crack_width) or not is_finite(hot_depth) or not is_finite(crack_y) or not is_finite(visual_depth) or not width_valid or not depth_valid or not revision_valid or crack_y < 40.0 or crack_y > 500.0 or int(event.get("blocked_lanes", 0)) != (2 if from_ceiling else 1) or BiomeRendererScript.biome_id_for_generator(event_x - start_x + biome_start_offset, generator_version) != "lava":
 				return "The lava crack has invalid versioned geometry or biome."
-			if generator_version == CourseGenerator.GENERATOR_VERSION_17 and event.has("lava_variant"):
+			if generator_version in [CourseGenerator.GENERATOR_VERSION_17, CourseGenerator.GENERATOR_VERSION_18, CourseGenerator.GENERATOR_VERSION_19] and event.has("lava_variant"):
 				var variant: Variant = event.get("lava_variant")
 				if not (variant is int) or int(variant) != 1 or from_ceiling or not (event.get("pool_period_ticks") is int) or int(event.get("pool_period_ticks", 0)) < 120 or int(event.get("pool_period_ticks", 0)) > 240 or float(event.get("pool_min_depth", NAN)) < 4.0 or float(event.get("pool_max_depth", NAN)) > 36.0 or float(event.get("pool_min_depth", NAN)) > float(event.get("pool_max_depth", NAN)) or int(event.get("pool_phase_ticks", -1)) < 0:
 					return "The Gen17 tidal pool has invalid phase or hot-area geometry."

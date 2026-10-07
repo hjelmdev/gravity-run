@@ -159,6 +159,11 @@ func build_threat_intervals(event: Dictionary) -> Array[Dictionary]:
 			intervals.append({"start": forecast_center + 560.0, "end": forecast_center + 1100.0, "blocked_lanes": FLOOR_LANE})
 		return intervals
 	if StringName(event.get("kind", "")) == &"ghost":
+		if int(event.get("ghost_variant", 0)) in [2, 3]:
+			# Gen18/19 snapshot a lane at the trigger; CourseGenerator inserts
+			# conditional lane-lock edges into the route solver.
+			# CourseGenerator inserts conditional lane-lock edges into its route solver.
+			return intervals
 		if str(event.get("id", "")) == "haunted_chaser":
 			var trigger := center - float(event.get("trigger_lead", 1700.0))
 			var danger_start := trigger + float(event.get("warning_ticks", 54)) * 500.0 / 60.0

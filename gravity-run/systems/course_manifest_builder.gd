@@ -11,6 +11,7 @@ const SawBladeModel := preload("res://systems/saw_blade_model.gd")
 const BiomeRendererScript := preload("res://biomes/biome_renderer.gd")
 const LavaHazardModel := preload("res://systems/lava_hazard_model.gd")
 const CourseSurfaceIndexScript := preload("res://systems/course_surface_index.gd")
+const RunnerMotionScript := preload("res://systems/runner_motion.gd")
 
 const PLAYER_START_X := 180.0
 const WORLD_WIDTH := 960.0
@@ -20,6 +21,7 @@ const CEILING_START_Y := 80.0
 const SLOPE_WIDTH := CourseGenerator.SLOPE_WIDTH
 const SPIKE_GROUP_SPACING := CourseGenerator.SPIKE_GROUP_SPACING
 const STEP_SPIKE_CLEARANCE := CourseGenerator.STEP_SPIKE_CLEARANCE
+const GEN19_PURSUIT_MIN_TRIGGER_GAP := 4000.0
 
 func build(seed_value: int, course_length_px: int, generator_version: int = CourseGenerator.GENERATOR_VERSION) -> Dictionary:
 	if seed_value <= 0:
@@ -43,7 +45,7 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 	var source_events: Array[Dictionary] = generator.get_planned_events()
 	var manifest := ManifestScript.new() as MultiplayerCourseManifest
 	manifest.generator_version = generator_version
-	manifest.manifest_version = 10 if generator_version >= CourseGenerator.GENERATOR_VERSION_17 else (9 if generator_version >= CourseGenerator.GENERATOR_VERSION_16 else (8 if generator_version >= CourseGenerator.GENERATOR_VERSION_15 else (7 if generator_version >= CourseGenerator.GENERATOR_VERSION_14 else (6 if generator_version >= CourseGenerator.GENERATOR_VERSION_12 else (5 if generator_version >= CourseGenerator.GENERATOR_VERSION_10 else (4 if generator_version >= CourseGenerator.GENERATOR_VERSION_9 else (3 if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION else 2)))))))
+	manifest.manifest_version = 12 if generator_version >= CourseGenerator.GENERATOR_VERSION_19 else (11 if generator_version >= CourseGenerator.GENERATOR_VERSION_18 else (10 if generator_version >= CourseGenerator.GENERATOR_VERSION_17 else (9 if generator_version >= CourseGenerator.GENERATOR_VERSION_16 else (8 if generator_version >= CourseGenerator.GENERATOR_VERSION_15 else (7 if generator_version >= CourseGenerator.GENERATOR_VERSION_14 else (6 if generator_version >= CourseGenerator.GENERATOR_VERSION_12 else (5 if generator_version >= CourseGenerator.GENERATOR_VERSION_10 else (4 if generator_version >= CourseGenerator.GENERATOR_VERSION_9 else (3 if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION else 2)))))))))
 	manifest.course_identity = str(definition.call("get_course_identity"))
 	manifest.seed_value = seed_value
 	manifest.course_length_px = course_length_px
@@ -54,6 +56,10 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 	manifest.events = _resolve_events(source_events, course_length_px, generator_version, biome_start_offset)
 	if generator_version >= CourseGenerator.GENERATOR_VERSION_17:
 		manifest.events = filter_unsafe_gen17_biome_events(manifest.events)
+	if generator_version >= CourseGenerator.GENERATOR_VERSION_18:
+		manifest.events = filter_unsafe_gen18_flybys(manifest.events)
+	if generator_version >= CourseGenerator.GENERATOR_VERSION_19:
+		manifest.events = filter_unsafe_gen19_pursuits(manifest.events)
 	if generator_version >= CourseGenerator.GENERATOR_VERSION_15:
 		manifest.events = filter_unsafe_gen15_volcanoes(manifest.events, manifest.start_x)
 	if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION:
@@ -68,7 +74,155 @@ func resolve_runtime_events(source_events: Array[Dictionary], course_length_px: 
 	var resolved := _resolve_events(source_events, course_length_px, generator_version, biome_start_offset)
 	if generator_version >= CourseGenerator.GENERATOR_VERSION_17:
 		resolved = filter_unsafe_gen17_biome_events(resolved)
+	if generator_version >= CourseGenerator.GENERATOR_VERSION_18:
+		resolved = filter_unsafe_gen18_flybys(resolved)
+	if generator_version >= CourseGenerator.GENERATOR_VERSION_19:
+		resolved = filter_unsafe_gen19_pursuits(resolved)
 	return resolved
+
+func filter_unsafe_gen19_pursuits(events: Array[Dictionary]) -> Array[Dictionary]:
+	var surface_index := CourseSurfaceIndexScript.new()
+	surface_index.configure(events, FLOOR_START_Y, CEILING_START_Y)
+	var filtered: Array[Dictionary] = []
+	var last_pursuit_trigger := -INF
+	# A second lane-locked chase must not snapshot the escape lane while the
+	# previous one is still dangerous. At the model's maximum 800px/s this spacing
+	# separates triggers by 300 ticks, beyond the 90+200 tick warning/danger window.
+	# Other hazard types and the frozen Gen17/18 paths are retained unchanged.
+	for event in events:
+		if str(event.get("kind", "")) != "ghost" or int(event.get("ghost_variant", 0)) != 3:
+			filtered.append(event)
+			continue
+		var trigger_x := float(event.get("x", 0.0)) - float(event.get("trigger_lead", 2500.0))
+		var spacing_ok := trigger_x - last_pursuit_trigger >= GEN19_PURSUIT_MIN_TRIGGER_GAP
+		var start_lag := float(event.get("pursuit_start_lag", 330.0))
+		var warning_ticks := float(event.get("warning_ticks", 90))
+		var delta := float(event.get("pursuit_speed_delta", 220.0))
+		var relative_at_lock := -start_lag + delta * warning_ticks / 60.0
+		var exit_offset := 180.0 + float(event.get("width", 72.0)) * 0.5 + 600.0
+		var exit_ticks := maxf((exit_offset - relative_at_lock) / maxf(delta, 1.0) * 60.0, 0.0)
+		var max_speed := CourseGenerator.GHOST_FLYBY_MAX_RUN_SPEED
+		var route_start := trigger_x - start_lag - float(event.get("width", 72.0)) * 0.5 - 70.0
+		var route_end := trigger_x + max_speed * warning_ticks / 60.0 + (max_speed + delta) * exit_ticks / 60.0 + float(event.get("width", 72.0)) * 0.5 + 70.0
+		var visible_ticks := warning_ticks - maxf(start_lag - (180.0 - float(event.get("width", 72.0)) * 0.5), 0.0) / maxf(delta, 1.0) * 60.0
+		var route_geometry_valid := visible_ticks >= 36.0 and is_finite(route_start) and is_finite(route_end) and route_end > route_start
+		var both_supported := route_geometry_valid and bool(surface_index.call("interval_is_supported", route_start, route_end, false)) and bool(surface_index.call("interval_is_supported", route_start, route_end, true))
+		var stable_lanes := route_geometry_valid and _gen18_surface_stays_near(surface_index, route_start, route_end, false, float(event.get("floor_y", FLOOR_START_Y))) and _gen18_surface_stays_near(surface_index, route_start, route_end, true, float(event.get("ceiling_y", CEILING_START_Y)))
+		if spacing_ok and both_supported and stable_lanes:
+			filtered.append(event)
+			last_pursuit_trigger = trigger_x
+		else:
+			var fallback := _gen19_supported_single_lane_fallback(event, events, surface_index)
+			if not fallback.is_empty():
+				filtered.append(fallback)
+	return filtered
+
+func _gen19_supported_single_lane_fallback(source: Dictionary, events: Array[Dictionary], surface_index: RefCounted) -> Dictionary:
+	# A rejected both-lane chase may become a small floor block only where a
+	# verified, stable ceiling route exists for the complete contact/flip window.
+	# This deterministic filler is a lighter existing encounter, not a new hazard.
+	var x := float(source.get("x", 0.0))
+	const HALF_CONTACT := 48.0
+	const CLEARANCE := 500.0
+	var region_left := x - CLEARANCE
+	var region_right := x + CLEARANCE
+	var floor_sample: Dictionary = surface_index.call("surface_at", x, false)
+	var ceiling_sample: Dictionary = surface_index.call("surface_at", x, true)
+	if not bool(floor_sample.get("supported", false)) or not bool(ceiling_sample.get("supported", false)):
+		return {}
+	if float(floor_sample.get("y", FLOOR_START_Y)) - float(ceiling_sample.get("y", CEILING_START_Y)) < RunnerMotionScript.SIZE.y + 76.0:
+		return {}
+	if not bool(surface_index.call("interval_is_supported", region_left, region_right, true)):
+		return {}
+	if not _gen18_surface_stays_near(surface_index, region_left, region_right, true, float(ceiling_sample.y)):
+		return {}
+	if not bool(surface_index.call("interval_is_supported", x - HALF_CONTACT, x + HALF_CONTACT, false)):
+		return {}
+	if not _gen18_surface_stays_near(surface_index, x - HALF_CONTACT, x + HALF_CONTACT, false, float(floor_sample.y)):
+		return {}
+	for other in events:
+		if str(other.get("event_id", "")) == str(source.get("event_id", "")):
+			continue
+		var other_kind := str(other.get("kind", ""))
+		if other_kind in ["step", "slope", "gap"]:
+			continue
+		var other_x := float(other.get("x", 0.0))
+		var mask := int(other.get("blocked_lanes", 0))
+		if mask == 0:
+			mask = CourseGenerator.CEILING_LANE if bool(other.get("from_ceiling", false)) else CourseGenerator.FLOOR_LANE
+		var extent := float(other.get("width", 72.0)) * 0.5 + 50.0
+		if other_kind == "ghost":
+			if int(other.get("ghost_variant", 0)) in [2, 3]:
+				mask = CourseGenerator.BOTH_LANES
+				extent = maxf(extent, 900.0)
+			elif int(other.get("ghost_variant", 0)) == 1:
+				extent = maxf(extent, 700.0)
+		if (mask & CourseGenerator.CEILING_LANE) != 0 and absf(other_x - x) <= CLEARANCE + extent:
+			return {}
+		if (mask & CourseGenerator.FLOOR_LANE) != 0 and absf(other_x - x) <= HALF_CONTACT + extent:
+			return {}
+	var fallback := {
+		"event_id": str(source.get("event_id", "")),
+		"kind": "block",
+		"x": x,
+		"y": float(floor_sample.y),
+		"width": 44.0,
+		"height": 72.0,
+		"from_ceiling": false,
+		"blocked_lanes": CourseGenerator.FLOOR_LANE,
+		"gen19_supported_fallback": true,
+		"gen19_replaced_kind": "ghost_pursuit",
+	}
+	fallback["threats"] = [{"start": x - HALF_CONTACT, "end": x + HALF_CONTACT, "blocked_lanes": CourseGenerator.FLOOR_LANE}]
+	return fallback
+
+func filter_unsafe_gen18_flybys(events: Array[Dictionary]) -> Array[Dictionary]:
+	var surface_index := CourseSurfaceIndexScript.new()
+	surface_index.configure(events, FLOOR_START_Y, CEILING_START_Y)
+	var filtered: Array[Dictionary] = []
+	for event in events:
+		if str(event.get("kind", "")) != "ghost" or int(event.get("ghost_variant", 0)) != 2:
+			filtered.append(event)
+			continue
+		var trigger_x := float(event.get("x", 0.0)) - float(event.get("trigger_lead", 1500.0))
+		var start_lag := float(event.get("flyby_start_lag", 130.0))
+		var warning_ticks := float(event.get("warning_ticks", 72))
+		var danger_ticks := float(event.get("danger_ticks", 120))
+		var danger_end := trigger_x + 800.0 * warning_ticks / 60.0 + (800.0 + float(event.get("flyby_speed_delta", 500.0))) * danger_ticks / 60.0
+		var padding := float(event.get("width", 72.0)) * 0.5 + 70.0
+		var route_start := trigger_x - start_lag - padding
+		var route_end := danger_end + padding
+		var safe_both := bool(surface_index.call("interval_is_supported", route_start, route_end, false)) and bool(surface_index.call("interval_is_supported", route_start, route_end, true))
+		# Ghost pose is intentionally lane-locked after its warning; reject corridors
+		# where a long step/slope would leave that fixed pose far from the actual lane.
+		var lane_pose_stable := _gen18_surface_stays_near(surface_index, route_start, route_end, false, float(event.get("floor_y", FLOOR_START_Y))) and _gen18_surface_stays_near(surface_index, route_start, route_end, true, float(event.get("ceiling_y", CEILING_START_Y)))
+		if safe_both and lane_pose_stable:
+			filtered.append(event)
+	return filtered
+
+func _gen18_surface_stays_near(surface_index: RefCounted, start_x: float, end_x: float, ceiling: bool, reference_y: float) -> bool:
+	const MAX_LANE_POSE_DELTA := 40.0
+	var checks: Array[float] = [start_x, end_x]
+	var boundaries: Array = surface_index.call("support_boundaries", ceiling)
+	var in_range: Array[float] = []
+	for boundary_value in boundaries:
+		var boundary := float(boundary_value)
+		if boundary > start_x and boundary < end_x:
+			in_range.append(boundary)
+	in_range.sort()
+	var previous := start_x
+	for boundary in in_range:
+		checks.append((previous + boundary) * 0.5)
+		checks.append(boundary)
+		checks.append(boundary - 0.00002)
+		checks.append(boundary + 0.00002)
+		previous = boundary
+	checks.append((previous + end_x) * 0.5)
+	for x in checks:
+		var sample: Dictionary = surface_index.call("surface_at", x, ceiling)
+		if not bool(sample.get("supported", false)) or absf(float(sample.get("y", INF)) - reference_y) > MAX_LANE_POSE_DELTA:
+			return false
+	return true
 
 func filter_unsafe_gen15_volcanoes(events: Array[Dictionary], course_start_x: float) -> Array[Dictionary]:
 	var surface_index := CourseSurfaceIndexScript.new()
@@ -104,9 +258,17 @@ func filter_unsafe_gen17_biome_events(events: Array[Dictionary]) -> Array[Dictio
 func _make_multiplayer_ruleset(generator_version: int) -> Resource:
 	var ruleset := CourseRulesetScript.new() as Resource
 	ruleset.set("ruleset_id", &"multiplayer_race")
-	if generator_version == CourseGenerator.GENERATOR_VERSION_17:
+	if generator_version == CourseGenerator.GENERATOR_VERSION_19:
+		ruleset.set("revision", 16)
+		ruleset.set("event_density", 2.5)
+		ruleset.set("coin_revision", 2)
+	elif generator_version == CourseGenerator.GENERATOR_VERSION_17:
 		ruleset.set("revision", 14)
 		ruleset.set("event_density", 1.9)
+		ruleset.set("coin_revision", 2)
+	elif generator_version == CourseGenerator.GENERATOR_VERSION_18:
+		ruleset.set("revision", 15)
+		ruleset.set("event_density", 2.5)
 		ruleset.set("coin_revision", 2)
 	elif generator_version == CourseGenerator.GENERATOR_VERSION_16:
 		ruleset.set("revision", 13)
@@ -194,7 +356,10 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 			"block":
 				var block_width := float(source.get("width", 48.0))
 				var block_height := float(source.get("height", 72.0))
-				if floor_surface_y - ceiling_surface_y < block_height + 56.0:
+				var required_clearance := block_height + 56.0
+				if generator_version in [CourseGenerator.GENERATOR_VERSION_18, CourseGenerator.GENERATOR_VERSION_19] and _gen18_small_block_has_supported_runner_clearance(resolved, source_events, course_distance, block_width, block_height):
+					required_clearance = block_height + float(RunnerMotionScript.SIZE.y) + 4.0
+				if floor_surface_y - ceiling_surface_y < required_clearance:
 					event_index += 1
 					continue
 				resolved.append({
@@ -398,6 +563,14 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 					for key in ["ghost_variant", "chase_speed", "chase_start_lag"]:
 						if source.has(key):
 							ghost_event[key] = source[key]
+				if generator_version >= CourseGenerator.GENERATOR_VERSION_18:
+					for key in ["flyby_start_lag", "flyby_speed_delta"]:
+						if source.has(key):
+							ghost_event[key] = source[key]
+				if generator_version >= CourseGenerator.GENERATOR_VERSION_19:
+					for key in ["pursuit_start_lag", "pursuit_speed_delta"]:
+						if source.has(key):
+							ghost_event[key] = source[key]
 				resolved.append(ghost_event)
 			"lava_crack":
 				if generator_version < CourseGenerator.GENERATOR_VERSION_14 or BiomeRendererScript.biome_id_for_generator(course_distance + biome_start_offset, generator_version) != "lava":
@@ -495,5 +668,44 @@ func _has_floor_gap_over_interval(source_events: Array[Dictionary], course_dista
 		var gap_left := center - half_width
 		var gap_right := center + half_width
 		if gap_right >= course_distance - width * 0.5 and gap_left <= course_distance + width * 0.5:
+			return true
+	return false
+
+func _gen18_small_block_has_supported_runner_clearance(resolved_events: Array[Dictionary], source_events: Array[Dictionary], course_distance: float, block_width: float, block_height: float) -> bool:
+	# Permit only the smallest authored blocks in exceptionally narrow but flat,
+	# supported corridors. Leave four pixels beyond the real runner body and
+	# require both surfaces to remain continuous across the block plus runner width.
+	if block_height > 82.0 or block_width <= 0.0:
+		return false
+	var half_span := (block_width + RunnerMotionScript.SIZE.x) * 0.5
+	var start_x := PLAYER_START_X + course_distance - half_span
+	var end_x := PLAYER_START_X + course_distance + half_span
+	for ceiling in [false, true]:
+		if _has_gap_over_interval(source_events, course_distance, block_width + RunnerMotionScript.SIZE.x, bool(ceiling)):
+			return false
+	var surface_index := CourseSurfaceIndexScript.new()
+	surface_index.configure(resolved_events, FLOOR_START_Y, CEILING_START_Y)
+	if not bool(surface_index.call("interval_is_supported", start_x, end_x, false)) or not bool(surface_index.call("interval_is_supported", start_x, end_x, true)):
+		return false
+	var sample_xs: Array[float] = [start_x, end_x]
+	for ceiling in [false, true]:
+		for boundary in surface_index.call("support_boundaries", bool(ceiling)):
+			var boundary_x := float(boundary)
+			if boundary_x >= start_x and boundary_x <= end_x:
+				sample_xs.append(boundary_x)
+	var minimum_span := INF
+	for sample_x in sample_xs:
+		var floor_info: Dictionary = surface_index.call("surface_at", sample_x, false)
+		var ceiling_info: Dictionary = surface_index.call("surface_at", sample_x, true)
+		minimum_span = minf(minimum_span, float(floor_info.get("y", FLOOR_START_Y)) - float(ceiling_info.get("y", CEILING_START_Y)))
+	return minimum_span >= block_height + float(RunnerMotionScript.SIZE.y) + 4.0
+
+func _has_gap_over_interval(source_events: Array[Dictionary], course_distance: float, width: float, ceiling: bool) -> bool:
+	for source in source_events:
+		if str(source.get("kind", "")) != "gap" or bool(source.get("from_ceiling", false)) != ceiling:
+			continue
+		var center := float(source.get("course_distance", 0.0))
+		var half_width := float(source.get("width", 0.0)) * 0.5
+		if center + half_width >= course_distance - width * 0.5 and center - half_width <= course_distance + width * 0.5:
 			return true
 	return false

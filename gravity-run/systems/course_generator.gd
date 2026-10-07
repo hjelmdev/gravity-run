@@ -21,6 +21,7 @@ const SPIKE_HEIGHT := 32.0
 const BASE_EVENT_SPACING := 390.0
 # Base game tops out at 500 px/s. Reserve for a future 1.5x speed effect too.
 const MAX_RUN_SPEED := 750.0
+const GHOST_FLYBY_MAX_RUN_SPEED := 800.0
 ## Deterministic planning geometry shared across viewport sizes and devices.
 const REFERENCE_TRACK_HEIGHT := 900.0
 const EVENT_SPAWN_LEAD_DISTANCE := 820.0
@@ -43,12 +44,15 @@ const GENERATOR_VERSION_14 := 14
 const GENERATOR_VERSION_15 := 15
 const GENERATOR_VERSION_16 := 16
 const GENERATOR_VERSION_17 := 17
+const GENERATOR_VERSION_18 := 18
+const GENERATOR_VERSION_19 := 19
+const GEN19_PURSUIT_MIN_TRIGGER_GAP := 4000.0
 const GEN14_RHYTHM_SPACING_DELTAS := [-120.0, -120.0, 240.0]
 const GEN14_RHYTHM_BASE_SPACING_SCALE := 1.22
 const GEN16_RHYTHM_SPACING_DELTAS := [-90.0, -90.0, 180.0]
 const GEN16_RHYTHM_BASE_SPACING_SCALE := 0.98
-const PREVIOUS_CURRENT_GENERATOR_VERSION := GENERATOR_VERSION_14
-const GENERATOR_VERSION := GENERATOR_VERSION_17
+const PREVIOUS_CURRENT_GENERATOR_VERSION := GENERATOR_VERSION_18
+const GENERATOR_VERSION := GENERATOR_VERSION_19
 const PUBLISHED_SHARED_GENERATOR_VERSION := 5
 const LEGACY_GENERATOR_VERSION := 3
 const PREVIOUS_GENERATOR_VERSION := 4
@@ -71,7 +75,7 @@ var _spawn_lead_distance := 0.0
 var _configuration_failed := false
 var _spiked_barrel_corridors: Array[Dictionary] = []
 var _gen16_barrel_meeting_windows: Array[Dictionary] = []
-var _generation_stats := {"candidate_attempts": 0, "route_rejections": 0, "biome_rejections": 0, "accepted_events": 0, "fallback_events": 0}
+var _generation_stats := {"candidate_attempts": 0, "route_rejections": 0, "biome_rejections": 0, "pursuit_profile_fallbacks": 0, "accepted_events": 0, "fallback_events": 0}
 
 ## Spawn course events fully beyond the viewport so their geometry enters smoothly.
 ## The canonical lead remains a lower bound for stable planning on small screens.
@@ -139,7 +143,7 @@ func set_difficulty_profile(profile: Resource) -> void:
 func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> bool:
 	_configuration_failed = false
 	_generator_version = generator_version
-	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_16, GENERATOR_VERSION_15, GENERATOR_VERSION_14, GENERATOR_VERSION_13, GENERATOR_VERSION_12, GENERATOR_VERSION_11, GENERATOR_VERSION_10, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
+	if generator_version not in [GENERATOR_VERSION, GENERATOR_VERSION_18, GENERATOR_VERSION_17, GENERATOR_VERSION_16, GENERATOR_VERSION_15, GENERATOR_VERSION_14, GENERATOR_VERSION_13, GENERATOR_VERSION_12, GENERATOR_VERSION_11, GENERATOR_VERSION_10, GENERATOR_VERSION_9, GENERATOR_VERSION_8, ROCK_SAFE_GENERATOR_VERSION, GENERATOR_VERSION_6, PUBLISHED_SHARED_GENERATOR_VERSION, PREVIOUS_GENERATOR_VERSION, LEGACY_GENERATOR_VERSION]:
 		push_error("Unsupported course generator version: %d" % generator_version)
 		return false
 	_profiles.clear()
@@ -187,7 +191,7 @@ func register_profile(profile: CourseHazardProfile) -> void:
 func reset(seed: int = 0) -> void:
 	_seed = seed
 	_biome_start_offset = BiomeRenderer.start_biome_offset_for_seed(seed, _generator_version)
-	_generation_stats = {"candidate_attempts": 0, "route_rejections": 0, "biome_rejections": 0, "accepted_events": 0, "fallback_events": 0}
+	_generation_stats = {"candidate_attempts": 0, "route_rejections": 0, "biome_rejections": 0, "pursuit_profile_fallbacks": 0, "accepted_events": 0, "fallback_events": 0}
 	if seed == 0:
 		_rng.randomize()
 	else:
@@ -259,6 +263,20 @@ func is_plan_solvable(events: Array[Dictionary], switch_clearance: float = -1.0)
 			var edge_clearance := float(threat.get("switch_clearance", 0.0))
 			edges.append({"x": start, "floor_delta": 1 if mask & FLOOR_LANE else 0, "ceiling_delta": 1 if mask & CEILING_LANE else 0, "switch_clearance": edge_clearance})
 			edges.append({"x": end, "floor_delta": -1 if mask & FLOOR_LANE else 0, "ceiling_delta": -1 if mask & CEILING_LANE else 0, "switch_clearance": 0.0})
+		if str(event.get("kind", "")) == "ghost" and int(event.get("ghost_variant", 0)) in [2, 3]:
+			# Candidate events are checked before manifest resolution, when their
+			# canonical position is course_distance rather than world-space x.
+			var event_x := float(event.get("course_distance", event.get("x", 0.0)))
+			var trigger_x := event_x - float(event.get("trigger_lead", 1500.0))
+			var warning_ticks := int(event.get("warning_ticks", 72))
+			var danger_ticks := int(event.get("danger_ticks", 96))
+			var speed_delta := float(event.get("pursuit_speed_delta", event.get("flyby_speed_delta", 500.0)))
+			var danger_start := trigger_x + GHOST_FLYBY_MAX_RUN_SPEED * float(warning_ticks) / 60.0
+			var danger_end := danger_start + (GHOST_FLYBY_MAX_RUN_SPEED + speed_delta) * float(danger_ticks) / 60.0
+			var event_id := str(event.get("event_id", "%s@%.3f" % [str(event.get("id", "ghost")), float(event.get("course_distance", event.get("x", 0.0)))]))
+			edges.append({"x": trigger_x, "special": "ghost_snapshot", "event_id": event_id})
+			edges.append({"x": danger_start, "special": "ghost_lock", "event_id": event_id, "switch_clearance": clearance})
+			edges.append({"x": danger_end, "special": "ghost_release", "event_id": event_id})
 	if edges.is_empty():
 		return true
 	edges.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a["x"]) < float(b["x"]))
@@ -268,12 +286,30 @@ func is_plan_solvable(events: Array[Dictionary], switch_clearance: float = -1.0)
 	var floor_count := 0
 	var ceiling_count := 0
 	var edge_index := 0
+	var ghost_target_lanes: Dictionary = {}
 	while edge_index < edges.size() - 1:
 		var start := float(edges[edge_index]["x"])
 		var transition_clearance := clearance
 		while edge_index < edges.size() and is_equal_approx(float(edges[edge_index]["x"]), start):
-			floor_count += int(edges[edge_index]["floor_delta"])
-			ceiling_count += int(edges[edge_index]["ceiling_delta"])
+			var edge: Dictionary = edges[edge_index]
+			var special := str(edge.get("special", ""))
+			var event_id := str(edge.get("event_id", ""))
+			if special == "ghost_snapshot":
+				ghost_target_lanes[event_id] = current_lane
+			elif special == "ghost_lock":
+				var target_lane := int(ghost_target_lanes.get(event_id, 0))
+				if target_lane == FLOOR_LANE:
+					floor_count += 1
+				elif target_lane == CEILING_LANE:
+					ceiling_count += 1
+			elif special == "ghost_release":
+				var target_lane := int(ghost_target_lanes.get(event_id, 0))
+				if target_lane == FLOOR_LANE:
+					floor_count -= 1
+				elif target_lane == CEILING_LANE:
+					ceiling_count -= 1
+			floor_count += int(edge.get("floor_delta", 0))
+			ceiling_count += int(edge.get("ceiling_delta", 0))
 			transition_clearance = maxf(transition_clearance, float(edges[edge_index].get("switch_clearance", 0.0)))
 			edge_index += 1
 		if edge_index >= edges.size():
@@ -304,10 +340,20 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 			break
 		var candidate := profile.create_event(_rng, _next_event_distance, _difficulty, _preferred_lane())
 		_apply_generator_timing(candidate)
+		if _generator_version == GENERATOR_VERSION_19 and _gen19_pursuit_trigger_is_too_close(candidate):
+			var replacement_profile := _pick_gen19_non_pursuit_profile(_next_event_distance)
+			if replacement_profile != null:
+				profile = replacement_profile
+				candidate = profile.create_event(_rng, _next_event_distance, _difficulty, _preferred_lane())
+				_apply_generator_timing(candidate)
+				_generation_stats["pursuit_profile_fallbacks"] = int(_generation_stats.get("pursuit_profile_fallbacks", 0)) + 1
 		if str(candidate.get("kind", "")) == "ghost" and _biome_id_at(float(candidate.get("course_distance", 0.0))) != "haunted":
 			_generation_stats["biome_rejections"] = int(_generation_stats.get("biome_rejections", 0)) + 1
-			_next_event_distance += PLAN_RETRY_SPACING
-			spacing += PLAN_RETRY_SPACING
+			# Gen19 retries a haunted-only pick at the same deterministic slot.
+			# Older generator contracts keep their historical skip behavior.
+			if _generator_version != GENERATOR_VERSION_19:
+				_next_event_distance += PLAN_RETRY_SPACING
+				spacing += PLAN_RETRY_SPACING
 			continue
 		var candidate_is_rock := str(candidate.get("kind", "")) == "rock"
 		if candidate_is_rock and _generator_version >= ROCK_SAFE_GENERATOR_VERSION:
@@ -346,7 +392,7 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 				for threat in candidate["threats"]:
 					widest = maxf(widest, float(threat["end"]) - float(threat["start"]))
 				var conservative_spacing := maxf(spacing, widest + candidate_clearance)
-				if _generator_version == GENERATOR_VERSION_16 or _generator_version == GENERATOR_VERSION_17:
+				if _generator_version in [GENERATOR_VERSION_16, GENERATOR_VERSION_17, GENERATOR_VERSION_18, GENERATOR_VERSION_19]:
 					conservative_spacing = maxf(BASE_EVENT_SPACING, conservative_spacing * GEN16_RHYTHM_BASE_SPACING_SCALE + GEN16_RHYTHM_SPACING_DELTAS[phase])
 					_rhythm_event_index += 1
 				elif _generator_version >= GENERATOR_VERSION_14:
@@ -394,6 +440,24 @@ func _apply_generator_timing(event: Dictionary) -> void:
 				event.merge({"rock_variant": 1, "from_ceiling": true, "blocked_lanes": FLOOR_LANE, "trigger_lead": 1250.0, "warning_ticks": 48, "fall_ticks": 30, "lodged_ticks": 240, "burial_depth": 18.0, "width": 64.0, "height": 116.0}, true)
 			"lava_tidal_pool":
 				event.merge({"lava_variant": 1, "blocked_lanes": FLOOR_LANE, "from_ceiling": false, "pool_min_depth": 6.0, "pool_max_depth": 30.0, "pool_period_ticks": 180, "pool_phase_ticks": posmod(_seed + roundi(float(event.get("course_distance", 0.0))), 180)}, true)
+	if _generator_version in [GENERATOR_VERSION_18, GENERATOR_VERSION_19]:
+		match str(event.get("id", "")):
+			"haunted_ghost":
+				event.merge({"ghost_variant": 0, "trigger_lead": 1250.0, "warning_ticks": 60, "danger_ticks": 300, "fade_ticks": 45, "skin_variant": posmod(posmod(_seed, 3) + posmod(roundi(float(event.get("course_distance", 0.0)) / BASE_EVENT_SPACING), 3), 3)}, true)
+			"haunted_chaser":
+				var chaser_cell := roundi(float(event.get("course_distance", 0.0)) / BASE_EVENT_SPACING)
+				var starts_from_ceiling := posmod(_seed + chaser_cell, 2) == 0
+				if _generator_version == GENERATOR_VERSION_18:
+					event.merge({"ghost_variant": 2, "trigger_lead": 1500.0, "warning_ticks": 72, "danger_ticks": 120, "fade_ticks": 30, "flyby_start_lag": 130.0, "flyby_speed_delta": 500.0, "skin_variant": posmod(posmod(_seed, 3) + posmod(chaser_cell, 3), 3), "blocked_lanes": BOTH_LANES, "from_ceiling": starts_from_ceiling}, true)
+				else:
+					# Gen19 pursuit is distinct from both the frozen Gen17 chaser and
+					# Gen18 flyby. It stays just behind through warning, then locks the
+					# captured lane and overtakes out of view.
+					event.merge({"ghost_variant": 3, "trigger_lead": 2500.0, "warning_ticks": 90, "danger_ticks": 200, "fade_ticks": 60, "pursuit_start_lag": 330.0, "pursuit_speed_delta": 220.0, "skin_variant": posmod(posmod(_seed, 3) + posmod(chaser_cell, 3), 3), "blocked_lanes": BOTH_LANES, "from_ceiling": starts_from_ceiling}, true)
+			"cave_icicle":
+				event.merge({"rock_variant": 1, "from_ceiling": true, "blocked_lanes": FLOOR_LANE, "trigger_lead": 1250.0, "warning_ticks": 48, "fall_ticks": 30, "lodged_ticks": 240, "burial_depth": 18.0, "width": 64.0, "height": 116.0}, true)
+			"lava_tidal_pool":
+				event.merge({"lava_variant": 1, "blocked_lanes": FLOOR_LANE, "from_ceiling": false, "pool_min_depth": 6.0, "pool_max_depth": 30.0, "pool_period_ticks": 180, "pool_phase_ticks": posmod(_seed + roundi(float(event.get("course_distance", 0.0))), 180)}, true)
 	if str(event.get("kind", "")) == "saw" and _generator_version >= GENERATOR_VERSION_10:
 		var variant_roll := _rng.randf()
 		var variant := "floor_embedded"
@@ -409,7 +473,7 @@ func _apply_generator_timing(event: Dictionary) -> void:
 		var saw_profile: CourseHazardProfile = event.get("profile")
 		if saw_profile != null:
 			event["threats"] = saw_profile.build_threat_intervals(event)
-	if str(event.get("kind", "")) == "rock" and _generator_version >= ROCK_SAFE_GENERATOR_VERSION and not (_generator_version == GENERATOR_VERSION_17 and str(event.get("id", "")) == "cave_icicle"):
+	if str(event.get("kind", "")) == "rock" and _generator_version >= ROCK_SAFE_GENERATOR_VERSION and not (_generator_version in [GENERATOR_VERSION_17, GENERATOR_VERSION_18, GENERATOR_VERSION_19] and str(event.get("id", "")) == "cave_icicle"):
 		event["trigger_lead"] = 1800.0
 		event["warning_ticks"] = 90
 		event["fall_ticks"] = 42
@@ -612,6 +676,41 @@ func _candidate_overlaps_gen16_barrel_meeting_window(candidate: Dictionary) -> b
 				return true
 	return false
 
+func _gen19_pursuit_trigger_is_too_close(candidate: Dictionary) -> bool:
+	if str(candidate.get("kind", "")) != "ghost" or int(candidate.get("ghost_variant", 0)) != 3:
+		return false
+	var trigger_x := float(candidate.get("course_distance", 0.0)) - float(candidate.get("trigger_lead", 0.0))
+	for existing in _events:
+		if str(existing.get("kind", "")) != "ghost" or int(existing.get("ghost_variant", 0)) != 3:
+			continue
+		var existing_trigger := float(existing.get("course_distance", 0.0)) - float(existing.get("trigger_lead", 0.0))
+		if trigger_x - existing_trigger < GEN19_PURSUIT_MIN_TRIGGER_GAP:
+			return true
+	return false
+
+func _pick_gen19_non_pursuit_profile(course_distance: float) -> CourseHazardProfile:
+	var biome := _biome_id_at(course_distance)
+	var eligible: Array[CourseHazardProfile] = []
+	var total_weight := 0.0
+	for profile in _profiles:
+		if profile.profile_id == &"haunted_chaser":
+			continue
+		if profile.event_kind == &"ghost" and biome != "haunted":
+			continue
+		var weight := _get_versioned_profile_weight(profile, course_distance)
+		if weight <= 0.0:
+			continue
+		eligible.append(profile)
+		total_weight += weight
+	if eligible.is_empty() or total_weight <= 0.0:
+		return null
+	var choice := _rng.randf() * total_weight
+	for profile in eligible:
+		choice -= _get_versioned_profile_weight(profile, course_distance)
+		if choice <= 0.0:
+			return profile
+	return eligible.back()
+
 func _floor_unsupported_corridor_overlap(event: Dictionary, corridor: Dictionary) -> bool:
 	if str(event.get("kind", "")) != "gap" or bool(event.get("from_ceiling", false)):
 		return false
@@ -630,10 +729,10 @@ func _append_safe_fallback(speed: float, track_height: float) -> void:
 			var candidate := profile.create_event(_rng, safe_distance, _difficulty, 0)
 			_apply_generator_timing(candidate)
 			candidate["course_distance"] = safe_distance
+			candidate["threats"] = profile.build_threat_intervals(candidate)
 			if _candidate_crosses_spiked_barrel_corridor(candidate):
 				safe_distance += PLAN_RETRY_SPACING
 				continue
-			candidate["threats"] = profile.build_threat_intervals(candidate)
 			if is_plan_solvable(_events + [candidate], clearance):
 				if _generator_version >= GENERATOR_VERSION_14:
 					candidate["rhythm_phase"] = _rhythm_event_index % GEN14_RHYTHM_SPACING_DELTAS.size()
@@ -645,7 +744,7 @@ func _append_safe_fallback(speed: float, track_height: float) -> void:
 					widest = maxf(widest, float(threat["end"]) - float(threat["start"]))
 				var fallback_spacing := maxf(BASE_EVENT_SPACING, widest + clearance)
 				if _generator_version >= GENERATOR_VERSION_14:
-					if _generator_version == GENERATOR_VERSION_16 or _generator_version == GENERATOR_VERSION_17:
+					if _generator_version in [GENERATOR_VERSION_16, GENERATOR_VERSION_17, GENERATOR_VERSION_18, GENERATOR_VERSION_19]:
 						fallback_spacing = maxf(BASE_EVENT_SPACING, fallback_spacing * GEN16_RHYTHM_BASE_SPACING_SCALE + GEN16_RHYTHM_SPACING_DELTAS[_rhythm_event_index % GEN16_RHYTHM_SPACING_DELTAS.size()])
 					else:
 						fallback_spacing = maxf(BASE_EVENT_SPACING, fallback_spacing + GEN14_RHYTHM_SPACING_DELTAS[_rhythm_event_index % GEN14_RHYTHM_SPACING_DELTAS.size()])

@@ -82,6 +82,9 @@ var _rock_warning_accessibility_button: Button
 var _spawned_early_rock_ids: Dictionary = {}
 var _spawned_early_saw_ids: Dictionary = {}
 var _spawned_early_ghost_ids: Dictionary = {}
+var _singleplayer_resolved_ghost_events: Dictionary = {}
+var _singleplayer_spawned_gen19_fallback_ids: Dictionary = {}
+var _singleplayer_ghost_activation_snapshots: Dictionary = {}
 var _singleplayer_saw_activation_ticks: Dictionary = {}
 var _singleplayer_ghost_activation_ticks: Dictionary = {}
 var _singleplayer_saw_surface_indexes: Dictionary = {}
@@ -202,6 +205,9 @@ func _start_run() -> void:
 	_spawned_early_rock_ids.clear()
 	_spawned_early_saw_ids.clear()
 	_spawned_early_ghost_ids.clear()
+	_singleplayer_resolved_ghost_events.clear()
+	_singleplayer_spawned_gen19_fallback_ids.clear()
+	_singleplayer_ghost_activation_snapshots.clear()
 	_singleplayer_saw_activation_ticks.clear()
 	_singleplayer_ghost_activation_ticks.clear()
 	_singleplayer_saw_surface_indexes.clear()
@@ -454,10 +460,15 @@ func _physics_process(delta: float) -> void:
 						_spawned_early_saw_ids[saw_id] = true
 						_spawn_course_event(planned_event)
 				elif planned_kind == "ghost" and event_distance <= course_distance + float(planned_event.get("trigger_lead", 2200.0)):
+					var effective_ghost_event := _resolve_singleplayer_ghost_event(planned_event)
+					if bool(effective_ghost_event.get("gen19_supported_fallback", false)):
+						# Fallback blocks use the normal event spawn line, not the early warning lead.
+						continue
 					var ghost_id := _singleplayer_ghost_key(planned_event)
 					if not _spawned_early_ghost_ids.has(ghost_id):
 						_spawned_early_ghost_ids[ghost_id] = true
 						_spawn_course_event(planned_event)
+						_singleplayer_resolved_ghost_events.erase(ghost_id)
 		for event in course_generator.pop_events_until(spawn_line):
 			var event_kind := str(event.get("kind", ""))
 			if event_kind == "rock":
@@ -770,6 +781,18 @@ func _spawn_course_event(event: Dictionary) -> void:
 	var width := float(event.get("width", 48.0))
 	var height := float(event.get("height", 72.0))
 	var event_kind := StringName(event.get("kind", ""))
+	var resolved_ghost_event: Dictionary = {}
+	var ghost_source_key := ""
+	if event_kind == &"ghost":
+		ghost_source_key = _singleplayer_ghost_key(event)
+		resolved_ghost_event = _resolve_singleplayer_ghost_event(event)
+		if bool(resolved_ghost_event.get("gen19_supported_fallback", false)):
+			# Replacements are ordinary blocks, so they must wait for the normal
+			# spawn horizon rather than appearing at the source ghost's warning lead.
+			if float(event.get("course_distance", INF)) > course_distance + event_spawn_lead + 0.5:
+				return
+			if _singleplayer_spawned_gen19_fallback_ids.has(ghost_source_key):
+				return
 	if event_kind == &"block" or event_kind == &"barrels":
 		var lane_clearance := _floor_surface_y(event_x) - _ceiling_surface_y(event_x)
 		# Keep the authored hazard dimensions. If it cannot fit while leaving a
@@ -857,8 +880,14 @@ func _spawn_course_event(event: Dictionary) -> void:
 				saw.call("set_activation_tick", int(_singleplayer_saw_activation_ticks[saw_key]))
 				saw.call("set_simulation_tick", _singleplayer_simulation_tick)
 		&"ghost":
-			var ghost_event := _resolve_singleplayer_ghost_event(event)
+			var ghost_event := resolved_ghost_event
 			if ghost_event.is_empty():
+				_singleplayer_resolved_ghost_events.erase(ghost_source_key)
+				return
+			if bool(ghost_event.get("gen19_supported_fallback", false)) and str(ghost_event.get("kind", "")) == "block":
+				_singleplayer_spawned_gen19_fallback_ids[ghost_source_key] = true
+				_spawn_obstacle_scene(BLOCK_SCENE, float(ghost_event.get("width", 44.0)), float(ghost_event.get("height", 72.0)), false, float(ghost_event.get("x", event_x)))
+				_singleplayer_resolved_ghost_events.erase(ghost_source_key)
 				return
 			var ghost_id := str(ghost_event.get("event_id", _singleplayer_ghost_key(event)))
 			var ghost := GHOST_HAZARD_SCENE.instantiate() as Node2D
@@ -870,6 +899,10 @@ func _spawn_course_event(event: Dictionary) -> void:
 			if _singleplayer_ghost_activation_ticks.has(ghost_id):
 				ghost.call("set_activation_tick", int(_singleplayer_ghost_activation_ticks[ghost_id]))
 				ghost.call("set_simulation_tick", _singleplayer_simulation_tick)
+			elif _singleplayer_ghost_activation_snapshots.has(ghost_id):
+				ghost.call("set_activation_snapshot", _singleplayer_ghost_activation_snapshots[ghost_id])
+				ghost.call("set_simulation_tick", _singleplayer_simulation_tick)
+			_singleplayer_resolved_ghost_events.erase(ghost_source_key)
 		&"lava_crack", &"volcano":
 			_spawn_singleplayer_lava_event(event, event_x)
 		_:
@@ -954,6 +987,10 @@ func _resolve_singleplayer_saw_event(source_event: Dictionary) -> Dictionary:
 func _resolve_singleplayer_ghost_event(source_event: Dictionary) -> Dictionary:
 	if course_generator == null or _manifest_builder == null:
 		return {}
+	var source_key := _singleplayer_ghost_key(source_event)
+	if _singleplayer_resolved_ghost_events.has(source_key):
+		var cached: Variant = _singleplayer_resolved_ghost_events.get(source_key, {})
+		return (cached as Dictionary).duplicate(true)
 	var source_distance := float(source_event.get("course_distance", 0.0))
 	var support_horizon := source_distance + float(source_event.get("trigger_lead", 1700.0)) + float(source_event.get("chase_start_lag", 220.0)) + float(source_event.get("chase_speed", 760.0)) * float(source_event.get("danger_ticks", 210)) / 60.0 + 900.0
 	course_generator.ensure_horizon(support_horizon, _run_speed(), screen_height, COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE)
@@ -961,9 +998,12 @@ func _resolve_singleplayer_ghost_event(source_event: Dictionary) -> Dictionary:
 	var resolved_events: Array[Dictionary] = _manifest_builder.call("resolve_runtime_events", course_generator.get_planned_events(), ceili(support_horizon), _active_seed_version, biome_start_offset)
 	var target_x := PLAYER_X + source_distance
 	for resolved_event in resolved_events:
-		if str(resolved_event.get("kind", "")) == "ghost" and absf(float(resolved_event.get("x", INF)) - target_x) < 0.5:
+		var is_source_ghost := str(resolved_event.get("kind", "")) == "ghost"
+		var is_supported_fallback := bool(resolved_event.get("gen19_supported_fallback", false)) and str(resolved_event.get("gen19_replaced_kind", "")) == "ghost_pursuit"
+		if (is_source_ghost or is_supported_fallback) and absf(float(resolved_event.get("x", INF)) - target_x) < 0.5:
 			var result := resolved_event.duplicate(true)
-			result["source_ghost_key"] = _singleplayer_ghost_key(source_event)
+			result["source_ghost_key"] = source_key
+			_singleplayer_resolved_ghost_events[source_key] = result.duplicate(true)
 			return result
 	return {}
 
@@ -1020,7 +1060,13 @@ func _update_ghost_hazards(current_x: float) -> void:
 			continue
 		var event: Dictionary = obstacle.get("event")
 		var event_id := str(event.get("event_id", ""))
-		if not _singleplayer_ghost_activation_ticks.has(event_id) and current_x >= GHOST_HAZARD_MODEL.trigger_x(event):
+		if int(event.get("ghost_variant", 0)) in [2, 3]:
+			if not _singleplayer_ghost_activation_snapshots.has(event_id) and current_x >= GHOST_HAZARD_MODEL.trigger_x(event) and bool(player.get("grounded")):
+				var lane := COURSE_GENERATOR_SCRIPT.FLOOR_LANE if int(player.call("get_gravity_direction")) > 0 else COURSE_GENERATOR_SCRIPT.CEILING_LANE
+				var snapshot := {"activation_tick": _singleplayer_simulation_tick, "lane": lane, "world_x": float(player.get("world_x")), "speed": clampf(_run_speed(), 200.0, 800.0), "target_peer_id": 1}
+				_singleplayer_ghost_activation_snapshots[event_id] = snapshot
+				obstacle.call("set_activation_snapshot", snapshot)
+		elif not _singleplayer_ghost_activation_ticks.has(event_id) and current_x >= GHOST_HAZARD_MODEL.trigger_x(event):
 			_singleplayer_ghost_activation_ticks[event_id] = _singleplayer_simulation_tick
 			obstacle.call("set_activation_tick", _singleplayer_simulation_tick)
 		obstacle.call("set_simulation_tick", _singleplayer_simulation_tick)
@@ -1319,7 +1365,7 @@ func _earliest_lethal_contact_fraction(start_rect: Rect2, finish_rect: Rect2) ->
 		var fraction := -1.0
 		if obstacle.is_in_group("falling_rocks") or obstacle.is_in_group("saw_blades"):
 			fraction = float(obstacle.call("swept_contact_fraction", start_rect, finish_rect, maxi(_singleplayer_simulation_tick - 1, 0), _singleplayer_simulation_tick, Vector2(34.0, 44.0)))
-		elif obstacle.is_in_group("ghost_hazards") and obstacle.has_method("swept_contact_fraction") and int((obstacle.get("event") as Dictionary).get("ghost_variant", 0)) == 1:
+		elif obstacle.is_in_group("ghost_hazards") and obstacle.has_method("swept_contact_fraction") and int((obstacle.get("event") as Dictionary).get("ghost_variant", 0)) in [1, 2, 3]:
 			fraction = float(obstacle.call("swept_contact_fraction", start_rect, finish_rect, maxi(_singleplayer_simulation_tick - 1, 0), _singleplayer_simulation_tick, start_rect.size))
 		elif obstacle.is_in_group("lava_hazards") and obstacle.has_method("swept_contact_fraction"):
 			fraction = float(obstacle.call("swept_contact_fraction", start_rect, finish_rect, maxi(_singleplayer_simulation_tick - 1, 0), _singleplayer_simulation_tick, start_rect.size))

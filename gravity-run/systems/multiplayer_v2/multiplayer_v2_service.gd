@@ -46,7 +46,7 @@ signal results_received(result: Dictionary)
 signal lobby_returned
 signal membership_removed(reason: String)
 
-const V2_GAME_VERSION := "2.1.20261006.13"
+const V2_GAME_VERSION := "2.1.20261007.15"
 const MAX_PLAYERS := 5
 const POSITION_RATE_HZ := 30
 
@@ -1104,6 +1104,16 @@ func _maybe_activate_ghosts(peer_id: int, proposed: Dictionary) -> void:
 			continue
 		var activation_tick := int(world_simulation.tick)
 		var commit := {"world_revision": world_simulation.entity_ledger.revision + 1, "commit_id": "ghost-%s-%d" % [entity_id, activation_tick], "entity_id": entity_id, "incarnation": 1, "action": "activate_ghost", "effective_tick": activation_tick, "ghost_activation_tick": activation_tick, "trigger_peer_id": peer_id, "trigger_tick": int(proposed.get("simulation_tick", world_simulation.tick)), "state_before": "active", "state_after": "active"}
+		if int(event.get("ghost_variant", 0)) in [2, 3]:
+			var target := _select_ghost_flyby_target(event, peer_id, proposed)
+			if target.is_empty():
+				continue
+			commit["ghost_activation_lane"] = int(target.get("lane", 0))
+			commit["ghost_activation_world_x"] = float(target.get("world_x", -1.0))
+			commit["ghost_activation_speed"] = float(target.get("speed", 0.0))
+			commit["ghost_target_peer_id"] = int(target.get("peer_id", 0))
+			commit["trigger_peer_id"] = int(target.get("peer_id", peer_id))
+			commit["trigger_tick"] = int(target.get("simulation_tick", commit.trigger_tick))
 		var result := str(world_simulation.apply_world_commit(commit))
 		diagnostics.record_event("ghost_trigger", {"event_id": entity_id, "peer_id": peer_id, "trigger_tick": int(commit.trigger_tick), "activation_tick": activation_tick, "result": result})
 		if result != "applied":
@@ -1111,6 +1121,56 @@ func _maybe_activate_ghosts(peer_id: int, proposed: Dictionary) -> void:
 		world_event_committed.emit(commit.duplicate(true))
 		for target in connected_peer_ids():
 			send_control(int(target), "WORLD_COMMIT", commit)
+
+func _select_ghost_flyby_target(event: Dictionary, current_peer_id: int, proposed: Dictionary) -> Dictionary:
+	var trigger_x := GhostHazardModel.trigger_x(event)
+	var roster_peer_ids: Dictionary = {}
+	for member in get_active_round_roster():
+		roster_peer_ids[int(member.get("player_slot", 0))] = true
+	var samples_by_peer: Dictionary = {}
+	for peer_value in _validated_motion_history.keys():
+		var peer_id := int(peer_value)
+		if not roster_peer_ids.has(peer_id):
+			continue
+		var history: Array = _validated_motion_history.get(peer_id, [])
+		if not history.is_empty():
+			samples_by_peer[peer_id] = history.back()
+	var existing: Dictionary = samples_by_peer.get(current_peer_id, {})
+	if existing.is_empty() or int(proposed.get("simulation_tick", -1)) >= int(existing.get("simulation_tick", -1)):
+		samples_by_peer[current_peer_id] = proposed
+	var candidates: Array[Dictionary] = []
+	for peer_value in samples_by_peer.keys():
+		var candidate_peer := int(peer_value)
+		if terminal_status.has(candidate_peer):
+			continue
+		var sample: Dictionary = samples_by_peer[candidate_peer]
+		if str(sample.get("locomotion_state", "running")) != "running" or not bool(sample.get("grounded", false)):
+			continue
+		var sample_tick := int(sample.get("simulation_tick", -1))
+		var age_ticks := int(world_simulation.tick) - sample_tick
+		if sample_tick < 0 or age_ticks < -2 or age_ticks > 90:
+			continue
+		var speed := float(sample.get("velocity_x", NAN))
+		var world_x := float(sample.get("world_x", NAN))
+		var direction := int(sample.get("gravity_direction", 0))
+		if not is_finite(world_x) or not is_finite(speed) or speed < 200.0 or speed > 800.0 or direction not in [-1, 1]:
+			continue
+		world_x += speed * float(maxi(age_ticks, 0)) / 60.0
+		if world_x < trigger_x:
+			continue
+		var lane := CourseGeneratorScript.FLOOR_LANE if direction > 0 else CourseGeneratorScript.CEILING_LANE
+		var support: Dictionary = world_simulation.surface_at(world_x, lane == CourseGeneratorScript.CEILING_LANE)
+		if not bool(support.get("supported", false)):
+			continue
+		candidates.append({"peer_id": candidate_peer, "lane": lane, "world_x": world_x, "speed": speed, "simulation_tick": int(world_simulation.tick)})
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var distance_a := float(a.world_x) - trigger_x
+		var distance_b := float(b.world_x) - trigger_x
+		if not is_equal_approx(distance_a, distance_b):
+			return distance_a < distance_b
+		return int(a.peer_id) < int(b.peer_id)
+	)
+	return candidates[0] if not candidates.is_empty() else {}
 
 func _maybe_activate_saws(peer_id: int, _previous: Dictionary, proposed: Dictionary) -> void:
 	if world_simulation == null or current_manifest == null or terminal_status.has(peer_id):
