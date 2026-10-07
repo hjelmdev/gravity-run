@@ -1,6 +1,6 @@
 # Gen20 narrow-corridor spacing, barrel relevance, and coin trace
 
-Status: REVIEW_READY. No commit, migration apply, or publication. Preserve Gen17–19 outputs and all unrelated dirty work.
+Status: RELEASE_COMPLETE. Gen20 source is pushed, the reviewed database migration is applied, and the Web build is live. Gen17–19 outputs and unrelated dirty work were preserved.
 
 ## Scope and candidate
 
@@ -49,6 +49,15 @@ The refreshed MP captures are offline match-scene fixtures, not connected multip
 
 ## Version/migration draft and limits
 
-Source version draft is generator 20 / game API `.16`; project build label is `2026.10.07-gen20-barrel-gap-rhythm`; manifest stays format 13 and baseline stays format 4. Draft migration: `supabase/migrations/202610070002_generator20_narrow_gaps_barrels.sql`, copied from `.001` with only current game/generator tuples and achievement receipt allowlist updated. It has not been applied. Root review of migration and contract test is pending. No live database or web changes have been made.
+Source version is generator 20 / game API `.16`; project build label is `2026.10.07-gen20-barrel-gap-rhythm`; manifest stays format 13 and baseline stays format 4. Migration `supabase/migrations/202610070002_generator20_narrow_gaps_barrels.sql` was the only pending migration in linked history/dry-run and is now applied; post-apply linked history shows local and remote through `202610070002`.
+
+## Release verification
+
+- Azure source: `codex/current-prototype` at `af10f72b2625d0ef6612973dd2ae219784017813` (Gen20 implementation commit `8dd7e4793a0d41ebd93afb51354cf33859295a38`, followed by standalone barrel-spacing test correction `af10f72b2625d0ef6612973dd2ae219784017813`).
+- Clean source snapshot: detached worktree `.codex-clean-gen20-af10f72`, exact commit `af10f72b2625d0ef6612973dd2ae219784017813`; Godot 4.7.2 import, targeted gameplay tests, legacy freezes, route, parity, and version gates passed.
+- Supabase: linked history matched local through migration `202610070002` after applying only that reviewed migration.
+- Pages: `main` at `a6a025df60f56cfe3e7ee98c7899fd1c4723c4e0`; workflow `37700770707` completed successfully on that exact head. Root and `docs/game/BUILD_ID` are `gen20-hazard-spacing-af10f72-20261008`.
+- Live loader selects `index.gen20-hazard-spacing-af10f72-20261008.pck`. Public pack size is 3,690,868 bytes; SHA-256 is `221B194DB63522D0310D73B75EF23406D3B25249BE8D9F9B44924AC090603892`, matching the clean local export. Test URL: `https://hjelmdev.github.io/gravity-run/`.
+- The source and Pages commits exclude pre-existing unrelated capture, pacing, and menu edits. No full authenticated multiplayer/browser lifecycle test was run; the MP evidence remains an offline match-scene fixture. The reported missed pickup and long browser callback stalls remain unconfirmed/unfixed; the new coin trace is diagnostic instrumentation only.
 
 Known limitations: no full authenticated multiplayer/browser test. The MP images are offline match-scene presentation fixtures with a grounded runner and live shared barrels; they do not verify lobby prepare/countdown or a network-connected round. Route and barrel metrics are bounded generated cohorts and model-based floor contacts. The Gen19 coin report still lacks direct award/node-state data; the new opt-in trace provides evidence collection for a future reproduction, but does not prove the reported pickup issue is fixed. Total replan CPU cost is below Gen19 in the measured adapter, but worst single refresh rose from 15.77ms to 19.34ms at 45km. No claim is made that the missed coin, in-run lag, or all long empty stretches are fixed.
