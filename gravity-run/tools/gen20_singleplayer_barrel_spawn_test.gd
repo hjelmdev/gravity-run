@@ -6,7 +6,7 @@ const Builder := preload("res://systems/course_manifest_builder.gd")
 const RunDefinition := preload("res://systems/course_run_definition.gd")
 const Generator := preload("res://systems/course_generator.gd")
 const PLAYER_X := 180.0
-const BARREL_SPACING := 42.0
+const BARREL_SPACING := HazardRules.BARREL_CHAIN_SPACING
 
 var failures: Array[String] = []
 
