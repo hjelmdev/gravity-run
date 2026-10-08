@@ -3,6 +3,7 @@ extends CanvasLayer
 const COPY_ICON_SCRIPT := preload("res://ui/copy_icon.gd")
 const GameIconScript := preload("res://ui/game_icon.gd")
 
+var _run_modified := false
 var _diagnostic_save_button: Button
 var _distance_m := 0
 var _coins := 0
@@ -47,7 +48,9 @@ func _ready() -> void:
 	AccountProgress.run_loot_resolved.connect(_on_run_loot_resolved)
 	AchievementService.run_unlocks_changed.connect(_on_run_achievements_changed)
 
-func show_result(raw_distance: float, coins: int, challenge_code: String = "", is_challenge_run: bool = false, run_id: String = "") -> void:
+## `modified` is true when effect items were equipped; submitted scores carry it.
+func show_result(raw_distance: float, coins: int, challenge_code: String = "", is_challenge_run: bool = false, run_id: String = "", modified: bool = false) -> void:
+	_run_modified = modified
 	_diagnostic_save_button.visible = bool(get_parent().get("render_diagnostics_enabled"))
 	_shown_run_id = run_id
 	_distance_m = int(raw_distance / 10.0)
@@ -81,7 +84,7 @@ func show_result(raw_distance: float, coins: int, challenge_code: String = "", i
 		if _is_public_nickname(challenge_player_name):
 			PlayerProfile.set_leaderboard_name(challenge_player_name)
 			_challenge_share_status.text = tr("Saving your public seed result...")
-			ChallengeService.submit_current_run(challenge_player_name, _distance_m)
+			ChallengeService.submit_current_run(challenge_player_name, _distance_m, _run_modified)
 		else:
 			_share_challenge_button.visible = true
 			_challenge_share_status.text = tr("Enter a nickname to save your result to this seed.")
@@ -333,7 +336,7 @@ func _submit_score() -> void:
 	PlayerProfile.set_leaderboard_name(player_name)
 	_submit_button.disabled = true
 	_status_label.text = tr("Submitting score...")
-	Leaderboard.submit_run(player_name, _distance_m, _coins)
+	Leaderboard.submit_run(player_name, _distance_m, _coins, _run_modified)
 
 func _on_mobile_text_submitted(field: String, value: String) -> void:
 	if field == "run_end_nickname" and is_instance_valid(_name_edit):
@@ -369,7 +372,7 @@ func _on_challenge_created(success: bool, challenge_code: String, _error_message
 		_challenge_code_edit.text = ChallengeService.get_challenge_link()
 	_copy_challenge_link()
 	_challenge_share_status.text = tr("Saving your public seed result...")
-	ChallengeService.submit_current_run(_preferred_leaderboard_name(), _distance_m)
+	ChallengeService.submit_current_run(_preferred_leaderboard_name(), _distance_m, _run_modified)
 
 func _is_public_nickname(player_name: String) -> bool:
 	var nickname_pattern := RegEx.new()

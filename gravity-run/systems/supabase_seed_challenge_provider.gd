@@ -37,12 +37,16 @@ func fetch_challenge(challenge_code: String) -> void:
 func fetch_leaderboard(challenge_code: String) -> void:
 	_request_rpc("leaderboard", "get_seed_challenge_leaderboard", {"p_challenge_code": challenge_code.strip_edges().to_upper()})
 
-func submit_run(challenge_code: String, nickname: String, distance_m: int) -> void:
-	_request_rpc("submit", "submit_seed_challenge_run", {
+func submit_run(challenge_code: String, nickname: String, distance_m: int, modified: bool = false) -> void:
+	var fields := {
 		"p_challenge_code": challenge_code.strip_edges().to_upper(),
 		"p_nickname": nickname.strip_edges(),
 		"p_distance_m": distance_m,
-	})
+	}
+	# Only sent for modified runs: servers without the parameter keep working for clean runs.
+	if modified:
+		fields["p_modified"] = true
+	_request_rpc("submit", "submit_seed_challenge_run", fields)
 
 func save_to_library(challenge_code: String) -> void:
 	_request_rpc("save_library", "save_seed_challenge_to_library", {"p_challenge_code": challenge_code.strip_edges().to_upper()})

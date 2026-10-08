@@ -60,16 +60,10 @@ func create_run_loadout_snapshot(character_stats: Resource) -> Resource:
 			var owned := _find_owned_item(instance_id)
 			if owned.is_empty():
 				continue
-			var raw: Dictionary = owned.get("definition", {})
-			var definition = ItemDefinitionScript.new()
-			definition.item_id = str(raw.get("item_id", ""))
-			definition.slot_type = str(raw.get("slot_type", ""))
-			definition.rarity = str(raw.get("rarity", "common"))
-			definition.name_key = str(raw.get("name_key", ""))
-			definition.description_key = str(raw.get("description_key", ""))
-			definition.icon_key = str(raw.get("icon_key", "unknown"))
-			var modifiers: Variant = raw.get("stat_modifiers", {})
-			definition.stat_modifiers = modifiers if modifiers is Dictionary else {}
+			var definition: Resource = ItemDefinitionScript.from_catalog_entry(owned.get("definition", {}))
+			if definition == null or str(slot) != str(definition.slot_type):
+				# A slot or item type this client does not know: ignore, do not fail the run.
+				continue
 			entries.append({"slot_type": str(slot), "instance_id": instance_id, "definition": definition})
 	var version := 1
 	var catalog: Variant = inventory_state.get("catalog", [])

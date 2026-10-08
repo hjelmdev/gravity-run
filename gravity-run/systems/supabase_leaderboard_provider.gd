@@ -32,15 +32,19 @@ func fetch_top_runs() -> void:
 		push_warning("Leaderboard GET could not start. Godot error: %d" % error)
 		top_runs_received.emit([], tr("Could not start loading the leaderboard (code %d).") % error)
 
-func submit_run(player_name: String, distance_m: int, coins: int) -> void:
+func submit_run(player_name: String, distance_m: int, coins: int, modified: bool = false) -> void:
 	if _write_request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
 		submission_finished.emit(false, tr("A score is already being submitted."))
 		return
-	var payload := JSON.stringify({
+	var fields := {
 		"player_name": player_name,
 		"distance_m": distance_m,
 		"coins": coins,
-	})
+	}
+	# Only sent for modified runs: a table without the column keeps accepting clean runs.
+	if modified:
+		fields["modified"] = true
+	var payload := JSON.stringify(fields)
 	var headers := _headers()
 	headers.append("Content-Type: application/json")
 	headers.append("Prefer: return=minimal")

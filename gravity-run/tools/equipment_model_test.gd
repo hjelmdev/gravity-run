@@ -17,6 +17,7 @@ func _run_tests() -> void:
 	_test_modifiers_are_summed_deterministically()
 	_test_invalid_modifiers_and_slots_are_rejected()
 	_test_snapshot_is_stable_and_returns_copies()
+	_test_effect_items_validate_and_reach_the_snapshot()
 	await _test_player_uses_snapshot_cooldown()
 	await _test_player_falls_away_from_stepped_surfaces()
 	if failures == 0:
@@ -103,6 +104,38 @@ func _test_snapshot_is_stable_and_returns_copies() -> void:
 	var invalid_snapshot = RunLoadoutSnapshotScript.create([], 0, TEST_BASE_STATS)
 	_check(not invalid_snapshot.is_valid(), "snapshot should reject invalid catalog versions")
 	_check(is_equal_approx(float(snapshot.get_resolved_stats()["run_speed_percent"]) / 10000.0, 1.025), "a +2.5% loadout should resolve to a 1.025 speed multiplier")
+
+func _test_effect_items_validate_and_reach_the_snapshot() -> void:
+	var bubble := _item("helmet_bubble_test", "helmet")
+	bubble.set("effect_id", &"bubble_shield")
+	_check(str(bubble.call("validate")).is_empty(), "an allowlisted effect on a helmet should validate")
+	bubble.set("effect_level", 4)
+	_check(not str(bubble.call("validate")).is_empty(), "effect levels above the maximum should be rejected")
+	bubble.set("effect_level", 1)
+	bubble.set("effect_id", &"laser_beam")
+	_check(not str(bubble.call("validate")).is_empty(), "unknown effect IDs should be rejected")
+	var magnet := _item("pack_magnet_test", "backpack")
+	magnet.set("effect_id", &"coin_magnet")
+	_check(str(magnet.call("validate")).is_empty(), "the coin magnet should validate in the backpack slot")
+	var wrong_slot := _item("helmet_magnet_test", "helmet")
+	wrong_slot.set("effect_id", &"coin_magnet")
+	_check(not str(wrong_slot.call("validate")).is_empty(), "an effect cannot be carried by a slot it does not belong to")
+	var plate := _item("helmet_plate_test", "helmet")
+	plate.set("effect_id", &"spike_plate")
+	plate.set("effect_level", 2)
+	var snapshot = RunLoadoutSnapshotScript.create([
+		{"slot_type": "backpack", "instance_id": "pack-1", "definition": magnet},
+		{"slot_type": "helmet", "instance_id": "helmet-1", "definition": plate},
+	], 3, TEST_BASE_STATS)
+	_check(snapshot.is_valid(), "helmet plus backpack should resolve into a valid snapshot")
+	var effects: Array[Dictionary] = snapshot.get_effects()
+	_check(effects.size() == 2 and effects[0].effect_id == "spike_plate" and int(effects[0].level) == 2 and effects[1].effect_id == "coin_magnet", "snapshot should carry effects in slot order")
+	_check("effect=spike_plate:2" in snapshot.get_loadout_signature(), "the signature should include effects")
+	var plain = RunLoadoutSnapshotScript.create([{"slot_type": "helmet", "instance_id": "h", "definition": _item("plain_helmet", "helmet")}], 3, TEST_BASE_STATS)
+	_check(not plain.has_effects() and not "effect=" in plain.get_loadout_signature(), "plain items leave the signature unchanged")
+	var from_server: Resource = ItemDefinitionScript.from_catalog_entry({"item_id": "helmet_bubble_01", "slot_type": "helmet", "name_key": "a", "description_key": "b", "icon_key": "c", "effect_id": null, "effect_level": null})
+	_check(from_server != null and from_server.effect_id == &"" and str(from_server.call("validate")).is_empty(), "null effect columns from the server mean no effect")
+	_check(ItemDefinitionScript.from_catalog_entry({"item_id": "cape", "slot_type": "cape"}) == null, "unknown slot types are skipped")
 
 func _test_player_uses_snapshot_cooldown() -> void:
 	var boots := _item("boots_gravity_test", "boots", {"flip_cooldown_percent": -300})

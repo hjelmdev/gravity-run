@@ -19,5 +19,5 @@ func _ready() -> void:
 func fetch_top_runs() -> void:
 	_provider.fetch_top_runs()
 
-func submit_run(player_name: String, distance_m: int, coins: int) -> void:
-	_provider.submit_run(player_name, distance_m, coins)
+func submit_run(player_name: String, distance_m: int, coins: int, modified: bool = false) -> void:
+	_provider.submit_run(player_name, distance_m, coins, modified)

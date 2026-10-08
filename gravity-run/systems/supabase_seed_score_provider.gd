@@ -32,18 +32,22 @@ func fetch_scores(version: int, seed: int) -> void:
 	if error != OK:
 		request_finished.emit("fetch", version, seed, false, [], "network_error_%d" % error)
 
-func submit_run(version: int, seed: int, nickname: String, distance_m: int) -> void:
+func submit_run(version: int, seed: int, nickname: String, distance_m: int, modified: bool = false) -> void:
 	if _submit_request.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
 		request_finished.emit("submit", version, seed, false, null, "request_in_progress")
 		return
 	_submit_context = Vector2i(version, seed)
 	var url := "%s/rest/v1/rpc/submit_seed_challenge_run" % Config.PROJECT_URL
-	var payload := JSON.stringify({
+	var fields := {
 		"p_generator_version": version,
 		"p_seed": seed,
 		"p_nickname": nickname.strip_edges(),
 		"p_distance_m": distance_m
-	})
+	}
+	# Only sent for modified runs: servers without the parameter keep working for clean runs.
+	if modified:
+		fields["p_modified"] = true
+	var payload := JSON.stringify(fields)
 	var error := _submit_request.request(url, _headers(), HTTPClient.METHOD_POST, payload)
 	if error != OK:
 		request_finished.emit("submit", version, seed, false, null, "network_error_%d" % error)

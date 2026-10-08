@@ -41,6 +41,24 @@ msgstr "Gravity Boots"
 msgid "item.boots_gravity_01.description"
 msgstr "Sturdy soles built for changing gravity."
 
+msgid "item.helmet_bubble_01.name"
+msgstr "Bubble Helmet"
+
+msgid "item.helmet_bubble_01.description"
+msgstr "A bubble shields you from one deadly hit, then slowly refills."
+
+msgid "item.helmet_spikeplate_01.name"
+msgstr "Spike Plate"
+
+msgid "item.helmet_spikeplate_01.description"
+msgstr "Spikes cannot hurt you for a moment after each flip."
+
+msgid "item.backpack_magnet_01.name"
+msgstr "Coin Magnet"
+
+msgid "item.backpack_magnet_01.description"
+msgstr "Coins near you fly into your pack."
+
 msgid "Music settings"
 msgstr "Music settings"
 

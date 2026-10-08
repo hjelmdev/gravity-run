@@ -224,14 +224,16 @@ func fetch_current_scores() -> void:
 	else:
 		_score_provider.fetch_scores(generation_version, seed_value)
 
-func submit_current_run(nickname: String, distance_m: int) -> void:
+## `modified` marks a run played with effect items; the server must store it so
+## the board can show clean and modified runs apart.
+func submit_current_run(nickname: String, distance_m: int, modified: bool = false) -> void:
 	if seed_value <= 0:
 		score_submission_finished.emit(false, "no_active_seed")
 		return
 	if _custom_challenge_mode:
-		_challenge_provider.submit_run(active_challenge_code, nickname, distance_m)
+		_challenge_provider.submit_run(active_challenge_code, nickname, distance_m, modified)
 	else:
-		_score_provider.submit_run(generation_version, seed_value, nickname, distance_m)
+		_score_provider.submit_run(generation_version, seed_value, nickname, distance_m, modified)
 
 func _on_score_request_finished(action: String, version: int, seed: int, success: bool, data: Variant, error_message: String) -> void:
 	if action == "fetch":

@@ -13,6 +13,7 @@ var _base_stats: Dictionary = {}
 var _stat_bonuses: Dictionary = {}
 var _resolved_stats: Dictionary = {}
 var _stat_sources: Dictionary = {}
+var _effects: Array[Dictionary] = []
 var _loadout_signature := ""
 
 static func create(equipped_items: Array, catalog_version: int, base_stats: Dictionary) -> RunLoadoutSnapshot:
@@ -36,6 +37,13 @@ static func create(equipped_items: Array, catalog_version: int, base_stats: Dict
 		var slot_key := str(entry.slot_type)
 		snapshot._equipped_instance_ids[slot_key] = str(entry.instance_id)
 		snapshot._equipped_item_ids[slot_key] = str(definition.get("item_id"))
+	for slot_key in EquipmentStatsScript.SLOT_ORDER:
+		for entry in equipped_items:
+			if str(entry.slot_type) != slot_key:
+				continue
+			var effect_id := str(entry.definition.get("effect_id"))
+			if not effect_id.is_empty():
+				snapshot._effects.append({"slot_type": slot_key, "effect_id": effect_id, "level": int(entry.definition.get("effect_level"))})
 	snapshot._loadout_signature = snapshot._build_signature()
 	return snapshot
 
@@ -66,6 +74,13 @@ func get_resolved_stats() -> Dictionary:
 func get_stat_sources() -> Dictionary:
 	return _stat_sources.duplicate(true)
 
+## Effect entries ({slot_type, effect_id, level}) in slot order; empty without effect items.
+func get_effects() -> Array[Dictionary]:
+	return _effects.duplicate(true)
+
+func has_effects() -> bool:
+	return not _effects.is_empty()
+
 func get_loadout_signature() -> String:
 	return _loadout_signature
 
@@ -76,4 +91,6 @@ func _build_signature() -> String:
 			parts.append("%s=%s" % [slot_key, str(_equipped_item_ids[slot_key])])
 	for stat_id in EquipmentStatsScript.STAT_ORDER:
 		parts.append("%s=%d" % [stat_id, int(_resolved_stats[stat_id])])
+	for effect in _effects:
+		parts.append("effect=%s:%d" % [effect.effect_id, int(effect.level)])
 	return "|".join(parts)

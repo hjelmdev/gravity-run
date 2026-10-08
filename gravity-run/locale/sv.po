@@ -1043,6 +1043,36 @@ msgstr "Gravitationsstövlar"
 msgid "item.boots_gravity_01.description"
 msgstr "Stadiga sulor gjorda för att byta gravitation."
 
+msgid "item.helmet_bubble_01.name"
+msgstr "Bubbelhjälm"
+
+msgid "item.helmet_bubble_01.description"
+msgstr "En bubbla skyddar dig från en dödlig träff och laddas sedan långsamt om."
+
+msgid "item.helmet_spikeplate_01.name"
+msgstr "Spikplåt"
+
+msgid "item.helmet_spikeplate_01.description"
+msgstr "Spikar skadar dig inte en kort stund efter varje flip."
+
+msgid "item.backpack_magnet_01.name"
+msgstr "Myntmagnet"
+
+msgid "item.backpack_magnet_01.description"
+msgstr "Mynt i närheten flyger till din ryggsäck."
+
+msgid "Backpack"
+msgstr "Ryggsäck"
+
+msgid "Survives one hit, recharges in %d s"
+msgstr "Tål en träff, laddar om på %d s"
+
+msgid "Immune to spikes for %s s after each flip"
+msgstr "Immun mot spikar i %s s efter varje flip"
+
+msgid "Pulls in coins within %d px"
+msgstr "Drar till sig mynt inom %d px"
+
 msgid "Gravity flip cooldown"
 msgstr "Väntetid mellan gravitationsbyten"
 

@@ -15,6 +15,9 @@ var loadout_snapshot: Resource
 var loadout_signature := ""
 var loot_pickup_indexes: Array[int] = []
 var last_run_id := ""
+## True when an effect item changed how this run could be played (bubble, plate,
+## magnet). Submitted scores carry it so they are not shown as clean runs.
+var modified := false
 
 func set_loadout_snapshot(snapshot: Resource) -> void:
 	if snapshot == null or not snapshot.has_method("is_valid") or not bool(snapshot.call("is_valid")):

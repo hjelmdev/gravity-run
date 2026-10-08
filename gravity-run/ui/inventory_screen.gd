@@ -173,6 +173,9 @@ func _build_character() -> void:
 	for slot in EquipmentStatsScript.SLOT_ORDER:
 		var instance_id := str(equipment.get(slot, "")) if equipment is Dictionary else ""
 		var owned := _find_owned_item(instance_id)
+		if instance_id.is_empty() and not _catalog_has_slot(str(slot)):
+			# A slot the server catalog has no items for yet (server not updated).
+			continue
 		var slot_control := _make_character_slot(str(slot), instance_id, owned)
 		character_stage.add_child(slot_control)
 	character_column.add_child(_make_character_picker())
@@ -303,7 +306,7 @@ func _make_character_slot(slot: String, instance_id: String, owned: Dictionary) 
 	slot_button.accessibility_name = slot_button.tooltip_text
 	slot_button.add_theme_color_override("font_color", _rarity_color(str(definition.get("rarity", "common"))) if not definition.is_empty() else Color("8292aa"))
 	var slot_icon: Control = GameIconScript.new()
-	slot_icon.icon_key = str(definition.get("icon_key", "helmet_copper_01" if slot == "helmet" else "boots_canvas_01"))
+	slot_icon.icon_key = str(definition.get("icon_key", _default_slot_icon(slot)))
 	slot_icon.custom_minimum_size = Vector2(30, 30)
 	slot_icon.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 	slot_icon.position = Vector2(-15, -15)
@@ -318,6 +321,8 @@ func _make_character_slot(slot: String, instance_id: String, owned: Dictionary) 
 	slot_column.add_child(slot_label)
 	if slot == "helmet":
 		slot_column.position = Vector2(2.0, 5.0)
+	elif slot == "backpack":
+		slot_column.position = Vector2(2.0, 88.0)
 	else:
 		# Left of the figure, under the helmet: the sprite occupies x 52..110.
 		slot_column.position = Vector2(2.0, 62.0)
@@ -656,16 +661,9 @@ func _resolve_equipment() -> Dictionary:
 			var owned := _find_owned_item(str(equipped[slot]))
 			if owned.is_empty():
 				continue
-			var raw: Dictionary = owned.get("definition", {})
-			var definition = ItemDefinitionScript.new()
-			definition.item_id = str(raw.get("item_id", ""))
-			definition.slot_type = str(raw.get("slot_type", ""))
-			definition.rarity = str(raw.get("rarity", "common"))
-			definition.name_key = str(raw.get("name_key", ""))
-			definition.description_key = str(raw.get("description_key", ""))
-			definition.icon_key = str(raw.get("icon_key", "unknown"))
-			var modifiers: Variant = raw.get("stat_modifiers", {})
-			definition.stat_modifiers = modifiers if modifiers is Dictionary else {}
+			var definition: Resource = ItemDefinitionScript.from_catalog_entry(owned.get("definition", {}))
+			if definition == null or str(slot) != str(definition.slot_type):
+				continue
 			entries.append({"slot_type": str(slot), "instance_id": str(equipped[slot]), "definition": definition})
 	var character_stats: Resource = PlayerProfile.get_character_stats()
 	var base_stats: Dictionary = character_stats.call("get_base_stats") if character_stats != null and character_stats.has_method("get_base_stats") else {}
@@ -684,7 +682,23 @@ func _display_item_description(definition: Dictionary) -> String:
 	return ItemPresentationScript.item_description(definition)
 
 func _slot_name(slot: String) -> String:
-	return tr("Helmet") if slot == "helmet" else tr("Boots")
+	return ItemPresentationScript.slot_name(slot)
+
+func _default_slot_icon(slot: String) -> String:
+	match slot:
+		"helmet":
+			return "helmet_copper_01"
+		"backpack":
+			return "backpack_magnet_01"
+	return "boots_canvas_01"
+
+func _catalog_has_slot(slot: String) -> bool:
+	if slot in ["helmet", "boots"]:
+		return true
+	for definition in _catalog_by_id().values():
+		if definition is Dictionary and str(definition.get("slot_type", "")) == slot:
+			return true
+	return false
 
 func _rarity_name(rarity: String) -> String:
 	return tr(rarity.capitalize())

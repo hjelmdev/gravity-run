@@ -20,6 +20,19 @@ func _ready() -> void:
 		push_error("Equipped Lärkor should resolve to 101 percent speed and a 100 basis-point bonus: %s" % [result])
 		get_tree().quit(1)
 		return
+	var magnet_payload: Dictionary = {"item_id": "backpack_magnet_01", "slot_type": "backpack", "rarity": "uncommon", "name_key": "item.backpack_magnet_01.name", "description_key": "item.backpack_magnet_01.description", "icon_key": "backpack_magnet_01", "stat_modifiers": {}, "effect_id": "coin_magnet", "effect_level": 1, "catalog_version": 3}
+	screen.set("_state", {
+		"equipment": {"backpack": "owned-pack", "cape": "owned-cape"},
+		"items": [{"instance_id": "owned-pack", "item_id": "backpack_magnet_01"}, {"instance_id": "owned-cape", "item_id": "cape_x"}],
+		"catalog": [magnet_payload, {"item_id": "cape_x", "slot_type": "cape", "name_key": "x", "description_key": "y"}]
+	})
+	screen.call("_render")
+	await get_tree().process_frame
+	var backpack_tooltip: String = ItemPresentationScript.tooltip(magnet_payload)
+	if not ("Coin Magnet" in backpack_tooltip and "Backpack" in backpack_tooltip and "Pulls in coins within 90 px" in backpack_tooltip):
+		push_error("Backpack effect item should show its slot and effect: %s" % backpack_tooltip)
+		get_tree().quit(1)
+		return
 	_test_item_presentation()
 	if presentation_failures > 0:
 		get_tree().quit(1)

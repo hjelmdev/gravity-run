@@ -5,8 +5,16 @@ class_name EquipmentStats
 const SLOT_REGISTRY := {
 	"helmet": {"allowed_item_types": [&"helmet"]},
 	"boots": {"allowed_item_types": [&"boots"]},
+	"backpack": {"allowed_item_types": [&"backpack"]},
 }
-const SLOT_ORDER: Array[String] = ["helmet", "boots"]
+const SLOT_ORDER: Array[String] = ["helmet", "boots", "backpack"]
+## Allowlisted gameplay effects. The simulation lives in RunEffects; an item only
+## names an effect and a level. `slots` limits which item types may carry it.
+const EFFECT_REGISTRY := {
+	"bubble_shield": {"max_level": 3, "slots": [&"helmet"]},
+	"spike_plate": {"max_level": 3, "slots": [&"helmet"]},
+	"coin_magnet": {"max_level": 3, "slots": [&"backpack"]},
+}
 const STAT_ORDER: Array[String] = ["run_speed_percent", "flip_cooldown_percent"]
 const STAT_REGISTRY := {
 	"run_speed_percent": {
@@ -37,6 +45,20 @@ static func validate_modifiers(modifiers: Dictionary) -> String:
 		var stat_definition: Dictionary = STAT_REGISTRY[stat_key]
 		if int(value) < int(stat_definition.minimum_modifier) or int(value) > int(stat_definition.maximum_modifier):
 			return "Equipment stat '%s' is outside its supported modifier range." % stat_key
+	return ""
+
+## Returns an empty string when the (possibly empty) effect is acceptable.
+static func validate_effect(effect_id: StringName, effect_level: int, item_type: StringName) -> String:
+	if effect_id == StringName():
+		return ""
+	var key := String(effect_id)
+	if not EFFECT_REGISTRY.has(key):
+		return "Unknown item effect '%s'." % key
+	var definition: Dictionary = EFFECT_REGISTRY[key]
+	if effect_level < 1 or effect_level > int(definition.max_level):
+		return "Item effect '%s' level must be between 1 and %d." % [key, int(definition.max_level)]
+	if not definition.slots.has(item_type):
+		return "Item effect '%s' cannot be used by this item type." % key
 	return ""
 
 static func is_known_item_type(item_type: StringName) -> bool:

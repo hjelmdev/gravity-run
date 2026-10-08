@@ -25,6 +25,7 @@ const COIN_SCENE := preload("res://collectibles/coin.tscn")
 const LOOT_PICKUP_SCENE := preload("res://collectibles/loot_pickup.tscn")
 const LOOT_PLANNER_SCRIPT := preload("res://systems/loot_spawn_planner.gd")
 const SHARED_COIN_PLANNER_SCRIPT := preload("res://systems/shared_coin_planner.gd")
+const RUN_EFFECTS_SCRIPT := preload("res://systems/run_effects.gd")
 const FALLING_ROCK_SCENE := preload("res://hazards/falling_rock.tscn")
 const FALLING_ROCK_MODEL := preload("res://systems/falling_rock_model.gd")
 const SAW_BLADE_SCENE := preload("res://hazards/saw_blade.tscn")
@@ -84,6 +85,10 @@ var course_generator: CourseGenerator
 var loot_spawn_planner: LootSpawnPlanner
 var course_distance := 0.0
 var coin_distance := 0.0
+## Effect items of the equipped loadout (bubble helmet, spike plate, coin magnet).
+## Only singleplayer endless and seed runs use it; campaign, demo and multiplayer
+## runs configure it empty.
+var _run_effects: RefCounted = RUN_EFFECTS_SCRIPT.new()
 var _spawned_shared_coin_ids: Dictionary = {}
 var _pending_shared_coins: Array[Dictionary] = []
 var _shared_coin_planner: RefCounted
@@ -178,6 +183,7 @@ func _ready() -> void:
 	run_state.connect("run_finished", Callable(hud, "show_game_over"))
 	player.connect("gravity_flipped", Callable(run_state, "record_gravity_flip"))
 	player.connect("gravity_flipped", Callable(self, "_on_singleplayer_gravity_flipped"))
+	player.connect("gravity_flipped", Callable(_run_effects, "on_flip"))
 	player.connect("status_changed", Callable(hud, "update_player_status"))
 	ChallengeService.leaderboard_received.connect(_on_seed_leaderboard_received)
 	if demo_mode:
@@ -220,6 +226,11 @@ func _start_run() -> void:
 	var loadout_snapshot: Resource = InventoryService.create_run_loadout_snapshot(PlayerProfile.get_character_stats())
 	run_state.call("set_loadout_snapshot", loadout_snapshot)
 	player.call("set_loadout_snapshot", loadout_snapshot)
+	var effects_enabled := not demo_mode and Campaign.active_level == null
+	_run_effects.call("configure", loadout_snapshot if effects_enabled else null)
+	player.call("set_run_effects", _run_effects)
+	run_state.set("modified", effects_enabled and loadout_snapshot != null and bool(loadout_snapshot.call("has_effects")))
+	hud.call("set_effect_entries", _run_effects.call("get_hud_entries"))
 	run_state.call("start_run")
 	course_distance = 0.0
 	_campaign_level = null if demo_mode else Campaign.active_level
@@ -832,9 +843,15 @@ func _physics_process(delta: float) -> void:
 	var lethal_fraction := _earliest_lethal_contact_fraction(previous_player_rect, final_player_rect)
 	if lethal_fraction >= 0.0 and lethal_fraction <= 1.0:
 		run_end_requested = true
+	var left_the_world := player.position.y < -64.0 or player.position.y > WORLD_HEIGHT + 64.0
+	if run_end_requested and not left_the_world and _campaign_runout_ticks < 0 and bool(_run_effects.call("on_lethal_contact")):
+		# A bubble absorbed the hit. Forget the contact so coins past it still count.
+		run_end_requested = false
+		lethal_fraction = -1.0
 	run_blocked = blocked_by_edge and not game_over
 	hud.call("set_run_blocked", run_blocked)
 	if not demo_mode:
+		_pull_coins_toward_runner(delta)
 		for coin in coins:
 			if not is_instance_valid(coin) or bool(coin.call("is_collected")):
 				continue
@@ -866,7 +883,27 @@ func _physics_process(delta: float) -> void:
 		_record_uncollected_coin_expiry(camera_left)
 	coins = _prune_passed_nodes(coins, camera_left - 100.0, true)
 	loot_pickups = _prune_passed_nodes(loot_pickups, camera_left - 100.0, false)
+	_run_effects.call("tick")
+	hud.call("set_effect_entries", _run_effects.call("get_hud_entries"))
 	queue_redraw()
+
+## Coin magnet: coins inside the radius fly to the runner and are then picked up
+## by the normal pickup sweep. A pulled coin stays pulled even if it leaves the
+## radius while flying.
+func _pull_coins_toward_runner(delta: float) -> void:
+	var radius := float(_run_effects.call("coin_pickup_radius"))
+	if radius <= 0.0:
+		return
+	var target: Vector2 = player.position
+	var step := RUN_EFFECTS_SCRIPT.MAGNET_PULL_SPEED * delta
+	for coin in coins:
+		if not is_instance_valid(coin) or bool(coin.call("is_collected")):
+			continue
+		var to_runner := target - coin.position
+		if to_runner.length() > radius and not bool(coin.get_meta("magnet_pulled", false)):
+			continue
+		coin.set_meta("magnet_pulled", true)
+		coin.position = target if to_runner.length() <= step else coin.position + to_runner.normalized() * step
 
 func _end_run() -> void:
 	if game_over:
@@ -893,7 +930,7 @@ func _end_run() -> void:
 	if not demo_mode:
 		AchievementService.finish_run()
 		run_state.call("finish_run")
-		run_end_panel.call("show_result", float(run_state.get("distance_m")), int(run_state.get("coins")), ChallengeService.get_challenge_code(), ChallengeService.active, str(run_state.get("last_run_id")))
+		run_end_panel.call("show_result", float(run_state.get("distance_m")), int(run_state.get("coins")), ChallengeService.get_challenge_code(), ChallengeService.active, str(run_state.get("last_run_id")), bool(run_state.get("modified")))
 
 ## The runner crossed the finish line: let it run out calmly, then score.
 func _begin_campaign_runout() -> void:
@@ -1908,6 +1945,7 @@ func _draw() -> void:
 	_draw_falling_rock_warning_markers()
 	_draw_rock_hud_warning()
 	_draw_ghost_hud_warning()
+	_draw_bubble_shield()
 	if render_diagnostics_enabled and not _render_diagnostic_frames.is_empty():
 		var frame_record: Dictionary = _render_diagnostic_frames.back()
 		if int(frame_record.get("render_callback_index", -1)) == _render_callback_index:
@@ -1916,6 +1954,26 @@ func _draw() -> void:
 			frame_record["canvas_submission_usec"] = Time.get_ticks_usec() - draw_started_usec
 			frame_record["canvas_submission_end_usec"] = Time.get_ticks_usec()
 			_render_diagnostic_frames[_render_diagnostic_frames.size() - 1] = frame_record
+
+## Bubble helmet: a faint bubble while the shield is ready, a pulsing ring while
+## the runner is invulnerable after a hit, and an expanding pop ring.
+func _draw_bubble_shield() -> void:
+	if demo_mode or game_over:
+		return
+	var center := _render_player_position
+	if bool(_run_effects.call("bubble_ready")):
+		draw_circle(center, 31.0, Color(0.26, 0.84, 0.77, 0.14))
+		draw_arc(center, 31.0, 0.0, TAU, 32, Color(0.26, 0.84, 0.77, 0.7), 2.0, true)
+		draw_arc(center, 24.0, PI * 1.1, PI * 1.5, 8, Color(0.93, 0.95, 1.0, 0.8), 2.0, true)
+	elif bool(_run_effects.call("is_invulnerable")):
+		var pulse := 0.5 + 0.5 * sin(float(_singleplayer_simulation_tick) * 0.9)
+		draw_arc(center, 31.0, 0.0, TAU, 32, Color(0.93, 0.95, 1.0, 0.25 + 0.4 * pulse), 2.0, true)
+	var pop := float(_run_effects.call("pop_progress"))
+	if pop >= 0.0:
+		draw_arc(center, 31.0 + 40.0 * pop, 0.0, TAU, 40, Color(0.93, 0.95, 1.0, 1.0 - pop), 3.0, true)
+		for index in range(8):
+			var direction := Vector2.from_angle(TAU * float(index) / 8.0)
+			draw_circle(center + direction * (31.0 + 52.0 * pop), 3.0 * (1.0 - pop), Color(0.26, 0.84, 0.77, 1.0 - pop))
 
 func _draw_falling_rock_warning_markers() -> void:
 	if not is_instance_valid(camera):

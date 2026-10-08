@@ -45,6 +45,8 @@ func _draw_item() -> void:
 			draw_line(Vector2(8, 22), Vector2(17, 22), accent, 2.0, true)
 		elif key == "boots_gravity_01":
 			draw_line(Vector2(7, 25), Vector2(16, 25), accent, 2.0, true)
+	elif not EffectIcons.effect_for_icon_key(key).is_empty():
+		EffectIcons.draw_glyph(self, EffectIcons.effect_for_icon_key(key), Vector2(16, 16), 28.0, ink, accent)
 	else:
 		# Deliberate neutral item marker for unknown future catalogue keys.
 		draw_rect(Rect2(5, 5, 22, 22), Color("8292aa"), false, 2.0)

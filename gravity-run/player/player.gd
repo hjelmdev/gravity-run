@@ -18,6 +18,7 @@ var grounded := true
 var cooldown_left := 0.0
 var input_enabled := true
 var _flip_cooldown_multiplier := 1.0
+var _run_effects: RefCounted
 var _touch_gesture: RefCounted = TouchGestureLifecycleScript.new()
 var _skin_id := -1
 var _character_offset_y := 0.0
@@ -118,7 +119,11 @@ func get_speed_multiplier() -> float:
 	return float(effects.call("get_speed_multiplier"))
 
 func is_spike_immune() -> bool:
-	return bool(effects.call("is_spike_immune"))
+	return bool(effects.call("is_spike_immune")) or (_run_effects != null and bool(_run_effects.call("is_spike_immune")))
+
+## Singleplayer only: item effects owned by the scene (spike plate window).
+func set_run_effects(run_effects: RefCounted) -> void:
+	_run_effects = run_effects
 
 func advance(delta: float, floor_surface_y: float, ceiling_surface_y: float, floor_supported: bool = true, ceiling_supported: bool = true) -> void:
 	effects.call("tick", delta)

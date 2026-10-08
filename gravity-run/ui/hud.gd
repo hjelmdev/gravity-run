@@ -29,6 +29,8 @@ var campaign_star_total := 0
 var campaign_boss_hp := -1
 var campaign_boss_max_hp := 3
 var _callouts: Array[Dictionary] = []
+## Effect item meters from RunEffects.get_hud_entries(); empty hides the row.
+var effect_entries: Array[Dictionary] = []
 const CALLOUT_SECONDS := 2.6
 
 func _ready() -> void:
@@ -107,6 +109,12 @@ func update_stats(new_distance_m: float, new_coins: int) -> void:
 		_shared_run_hud.call("set_coins", new_coins)
 	queue_redraw()
 
+func set_effect_entries(entries: Array[Dictionary]) -> void:
+	if entries.is_empty() and effect_entries.is_empty():
+		return
+	effect_entries = entries
+	queue_redraw()
+
 func set_loot_pending_count(count: int) -> void:
 	loot_pending_count = maxi(count, 0)
 	queue_redraw()
@@ -163,6 +171,7 @@ func _draw() -> void:
 		draw_string(ThemeDB.fallback_font, Vector2(21.0, 46.0), debug_text, HORIZONTAL_ALIGNMENT_LEFT, 348.0, 12, Color("8ee0a1"))
 	if loot_pending_count > 0:
 		draw_string(ThemeDB.fallback_font, Vector2(viewport_width - 250.0, 42.0), tr("LOOT PENDING · %d") % loot_pending_count, HORIZONTAL_ALIGNMENT_RIGHT, 180.0, 10, Color("42d6c5"))
+	_draw_effect_row(viewport_height)
 	if campaign_level != null:
 		_draw_campaign_bar(viewport_width)
 		_draw_campaign_callout(viewport_width, viewport_height)
@@ -181,6 +190,13 @@ func _draw() -> void:
 		draw_string(ThemeDB.fallback_font, Vector2(0.0, viewport_height * 0.42), tr("RUN OVER"), HORIZONTAL_ALIGNMENT_CENTER, viewport_width, 42, Color("ff647c"))
 		draw_string(ThemeDB.fallback_font, Vector2(0.0, viewport_height * 0.51), tr("Distance: %d m") % int(distance_m / 10.0), HORIZONTAL_ALIGNMENT_CENTER, viewport_width, 22, Color("f4f7ff"))
 		draw_string(ThemeDB.fallback_font, Vector2(0.0, viewport_height * 0.60), tr("Tap the screen, press ENTER or SPACE to try again"), HORIZONTAL_ALIGNMENT_CENTER, viewport_width, 17, Color("b8c7dc"))
+
+func _draw_effect_row(viewport_height: float) -> void:
+	var x := 14.0
+	var y := viewport_height - EffectIcons.SLOT_SIZE - 14.0
+	for entry in effect_entries:
+		EffectIcons.draw_slot(self, Rect2(x, y, EffectIcons.SLOT_SIZE, EffectIcons.SLOT_SIZE), entry)
+		x += EffectIcons.SLOT_SIZE + EffectIcons.SLOT_GAP
 
 func _draw_campaign_bar(viewport_width: float) -> void:
 	var font := ThemeDB.fallback_font

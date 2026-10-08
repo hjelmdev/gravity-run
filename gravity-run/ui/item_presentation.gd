@@ -15,6 +15,12 @@ const ENGLISH_FALLBACKS := {
 	"item.boots_runner_01.description": "Durable shoes made for long runs.",
 	"item.boots_gravity_01.name": "Gravity Boots",
 	"item.boots_gravity_01.description": "Sturdy soles built for changing gravity.",
+	"item.helmet_bubble_01.name": "Bubble Helmet",
+	"item.helmet_bubble_01.description": "A bubble shields you from one deadly hit, then slowly refills.",
+	"item.helmet_spikeplate_01.name": "Spike Plate",
+	"item.helmet_spikeplate_01.description": "Spikes cannot hurt you for a moment after each flip.",
+	"item.backpack_magnet_01.name": "Coin Magnet",
+	"item.backpack_magnet_01.description": "Coins near you fly into your pack.",
 }
 static var _warned_invalid_modifiers: Dictionary = {}
 
@@ -75,7 +81,29 @@ static func effects(definition: Dictionary) -> Array[Dictionary]:
 			"text": "%s %s%s%%" % [stat_name, prefix, value],
 			"beneficial": favorable,
 		})
+	var effect_line := effect_text(definition)
+	if not effect_line.is_empty():
+		result.append({"stat_id": "effect", "amount_bps": 0, "text": effect_line, "beneficial": true})
 	return result
+
+## One line describing the gameplay effect of an item, or "" for plain items.
+static func effect_text(definition: Dictionary) -> String:
+	var effect_id := str(definition.get("effect_id", "")) if definition.get("effect_id") != null else ""
+	var level := int(definition.get("effect_level", 1)) if definition.get("effect_level") != null else 1
+	if not EquipmentStatsScript.validate_effect(StringName(effect_id), level, StringName(str(definition.get("slot_type", "")))).is_empty() or effect_id.is_empty():
+		return ""
+	match effect_id:
+		"bubble_shield":
+			var seconds: Array[int] = [20, 15, 10]
+			return TranslationServer.translate("Survives one hit, recharges in %d s") % seconds[level - 1]
+		"spike_plate":
+			var plate_seconds: Array[String] = ["1", "1.25", "1.5"]
+			var plate_text := TranslationServer.translate("Immune to spikes for %s s after each flip") % plate_seconds[level - 1]
+			return plate_text.replace(".", ",") if TranslationServer.get_locale().begins_with("sv") else plate_text
+		"coin_magnet":
+			var radius: Array[int] = [90, 140, 190]
+			return TranslationServer.translate("Pulls in coins within %d px") % radius[level - 1]
+	return ""
 
 static func tooltip(definition: Dictionary, context: Dictionary = {}) -> String:
 	if definition.is_empty():
@@ -99,4 +127,5 @@ static func slot_name(slot: String) -> String:
 	match slot:
 		"helmet": return TranslationServer.translate("Helmet")
 		"boots": return TranslationServer.translate("Boots")
+		"backpack": return TranslationServer.translate("Backpack")
 		_: return TranslationServer.translate("Unknown slot")

@@ -13,6 +13,9 @@ const RARITIES := [&"common", &"uncommon", &"rare", &"epic", &"legendary"]
 @export var icon_key: StringName
 ## Integer basis-point modifiers keyed by an allowlisted stat ID.
 @export var stat_modifiers: Dictionary = {}
+## Allowlisted gameplay effect (see EquipmentStats.EFFECT_REGISTRY); empty for none.
+@export var effect_id: StringName = &""
+@export_range(0, 9, 1) var effect_level := 1
 @export_range(0, 1000000, 1) var shop_price := 0
 @export var shop_enabled := false
 @export var drop_enabled := false
@@ -34,7 +37,32 @@ func validate() -> String:
 		return "Shop price cannot be negative."
 	if catalog_version < 1:
 		return "Catalog version must be positive."
+	var effect_error := EquipmentStatsScript.validate_effect(effect_id, effect_level, slot_type)
+	if not effect_error.is_empty():
+		return effect_error
 	return EquipmentStatsScript.validate_modifiers(stat_modifiers)
+
+## Builds a definition from a server catalog entry. Entries this client cannot
+## represent (unknown slot) return null; an unknown or invalid effect is dropped
+## so the item still works as a plain item instead of invalidating the loadout.
+static func from_catalog_entry(raw: Dictionary) -> ItemDefinition:
+	var definition := ItemDefinition.new()
+	definition.item_id = str(raw.get("item_id", ""))
+	definition.slot_type = str(raw.get("slot_type", ""))
+	if not EquipmentStatsScript.is_known_item_type(definition.slot_type):
+		return null
+	definition.rarity = str(raw.get("rarity", "common"))
+	definition.name_key = str(raw.get("name_key", ""))
+	definition.description_key = str(raw.get("description_key", ""))
+	definition.icon_key = str(raw.get("icon_key", "unknown"))
+	var modifiers: Variant = raw.get("stat_modifiers", {})
+	definition.stat_modifiers = modifiers if modifiers is Dictionary else {}
+	var raw_effect := str(raw.get("effect_id", "")) if raw.get("effect_id") != null else ""
+	var raw_level := int(raw.get("effect_level", 1)) if raw.get("effect_level") != null else 1
+	if EquipmentStatsScript.validate_effect(StringName(raw_effect), raw_level, definition.slot_type).is_empty():
+		definition.effect_id = StringName(raw_effect)
+		definition.effect_level = raw_level
+	return definition
 
 func _is_safe_key(value: String) -> bool:
 	if value.is_empty():
