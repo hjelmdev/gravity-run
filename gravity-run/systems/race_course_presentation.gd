@@ -35,6 +35,7 @@ var _render_floor_gaps: Array[Dictionary] = []
 var _render_terrain_boundaries: Array[float] = []
 var _render_step_positions: Array[float] = []
 var _camera_left := 0.0
+var _weather_presentation_seconds := 0.0
 var _world_height := 720.0
 var _render_profile_total_usec := 0
 var _render_profile_max_usec := 0
@@ -137,6 +138,7 @@ func load_manifest(course_manifest: Resource) -> String:
 					var barrel := create_hazard(BarrelScene, Vector2(x + spawn_offset - chain_width * 0.5 + float(index) * spacing, float(event.get("y", floor_y))), Vector2(HazardRules.BARREL_WIDTH, float(event.get("height", HazardRules.BARREL_WIDTH))), false)
 					barrel.call("set_motion_speed_multiplier", speed_multiplier)
 					barrel.call("set_spiked", bool(event.get("spiked", false)))
+					barrel.call("set_rubber_variant", int(event.get("barrel_variant", 0)) == 1)
 					barrel.connect("destruction_started", Callable(self, "_on_barrel_destruction_started"))
 					barrel.name = "Barrel_%s" % barrel_id
 					_tag_presentation_target(barrel, barrel_id, "barrel", true)
@@ -302,6 +304,7 @@ func take_start_draw_profile() -> Dictionary:
 	return result
 
 func set_world_state(world_state: Dictionary) -> void:
+	_weather_presentation_seconds = float(world_state.get("tick", 0)) / 60.0
 	var lava: Variant = world_state.get("lava", [])
 	if lava is Array:
 		for lava_state in lava:
@@ -350,9 +353,10 @@ func set_world_state(world_state: Dictionary) -> void:
 			if not is_instance_valid(node_value) or not node_value is Node2D:
 				continue
 			var node: Node2D = node_value
-			node.call("apply_replicated_motion", Vector2(float(state.get("x", node.position.x)), float(state.get("y", node.position.y))), float(state.get("roll_angle", 0.0)), float(state.get("rotation", 0.0)), bool(state.get("spawned", false)))
-			if node.has_method("set_spiked"):
-				node.call("set_spiked", bool(state.get("spiked", node.get("is_spiked"))))
+			if node.has_method("apply_shared_barrel_state"):
+				node.call("apply_shared_barrel_state", state)
+			else:
+				node.call("apply_replicated_motion", Vector2(float(state.get("x", node.position.x)), float(state.get("y", node.position.y))), float(state.get("roll_angle", 0.0)), float(state.get("rotation", 0.0)), bool(state.get("spawned", false)))
 			if bool(state.get("destroyed", false)):
 				apply_destroyed_entity(str(state.get("entity_id", "")))
 	var destroyed: Variant = world_state.get("destroyed_event_ids", [])
@@ -512,7 +516,7 @@ func _draw() -> void:
 	var course_start_x := float(manifest.start_x)
 	var generator_version := int(manifest.get("generator_version"))
 	var biome_start_offset := BiomeRendererScript.start_biome_offset_for_seed(int(manifest.get("seed_value")), generator_version)
-	BiomeRendererScript.draw_backdrop(self, _camera_left, get_viewport_rect().size, BiomeRendererScript.course_distance_at_world_x(_camera_left + course_start_x, course_start_x) + biome_start_offset, generator_version)
+	BiomeRendererScript.draw_backdrop(self, _camera_left, get_viewport_rect().size, BiomeRendererScript.course_distance_at_world_x(_camera_left + course_start_x, course_start_x) + biome_start_offset, generator_version, _weather_presentation_seconds)
 	CourseSurfaceRenderer.draw_track_cached(self, _camera_left, get_viewport_rect().size, _render_ceiling_gaps, _render_floor_gaps, _render_terrain_boundaries, _render_step_positions, Callable(self, "_surface_y_at"), 0.0, null, BiomeRendererScript.course_distance_at_world_x(course_start_x, 0.0) - biome_start_offset, generator_version)
 	_draw_rock_warning_markers()
 	_draw_rock_hud_warning()

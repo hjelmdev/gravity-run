@@ -910,9 +910,12 @@ func _spawn_course_event(event: Dictionary) -> void:
 			var motion_speed_multiplier := float(event.get("motion_speed_multiplier", 1.0))
 			# Keep the barrel's encounter timing tied to the canonical planner lead
 			# even when a wide desktop viewport requires spawning it much earlier.
-			var early_spawn_offset := maxf(event_spawn_lead - COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE, 0.0) * (motion_speed_multiplier - 1.0)
+			var canonical_barrel_lead := event_spawn_lead
+			if _active_seed_version < COURSE_GENERATOR_SCRIPT.GENERATOR_VERSION_21:
+				canonical_barrel_lead = maxf(event_spawn_lead - COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE, 0.0)
+			var early_spawn_offset := canonical_barrel_lead * (motion_speed_multiplier - 1.0)
 			for index in range(count):
-				_spawn_obstacle_scene(BARREL_SCENE, HAZARD_RULES_SCRIPT.BARREL_WIDTH, height, false, event_x + early_spawn_offset - chain_width * 0.5 + float(index) * HAZARD_RULES_SCRIPT.BARREL_CHAIN_SPACING, motion_speed_multiplier, bool(event.get("spiked", false)))
+				_spawn_obstacle_scene(BARREL_SCENE, HAZARD_RULES_SCRIPT.BARREL_WIDTH, height, false, event_x + early_spawn_offset - chain_width * 0.5 + float(index) * HAZARD_RULES_SCRIPT.BARREL_CHAIN_SPACING, motion_speed_multiplier, bool(event.get("spiked", false)), int(event.get("barrel_variant", 0)) == 1, float(event.get("rubber_target_x", -1.0)))
 		&"gap":
 			var gap := TRACK_GAP_SCRIPT.new() as TrackGap
 			gap.position = Vector2(event_x, 0.0)
@@ -1215,11 +1218,14 @@ func _spawn_course_slope(event: Dictionary, center_x: float) -> void:
 
 func _resolve_obstacle_interactions() -> void:
 	for barrel in obstacles:
-		if not is_instance_valid(barrel) or barrel.is_queued_for_deletion() or bool(barrel.call("is_destroying_now")) or not barrel.is_in_group("barrels"):
+		if not is_instance_valid(barrel) or barrel.is_queued_for_deletion() or not barrel.is_in_group("barrels"):
+			continue
+		if bool(barrel.call("is_destroying_now")) or bool(barrel.get("retired")):
 			continue
 		var barrel_size: Vector2 = barrel.get("size")
 		var radius := HAZARD_RULES_SCRIPT.barrel_radius(barrel_size.x, barrel_size.y)
 		var center := HAZARD_RULES_SCRIPT.barrel_center(barrel.global_position, barrel_size.x, barrel_size.y, bool(barrel.get("from_ceiling")))
+		var rubber_barrel := bool(barrel.get("is_rubber"))
 		for obstacle in obstacles:
 			if obstacle == barrel or not is_instance_valid(obstacle) or obstacle.is_queued_for_deletion() or bool(obstacle.call("is_destroying_now")):
 				continue
@@ -1229,6 +1235,22 @@ func _resolve_obstacle_interactions() -> void:
 					barrel.call("destroy")
 					break
 		if bool(barrel.call("is_destroying_now")):
+			continue
+		var rubber_bounced := false
+		# Rubber contacts choose blocks before steps in both SP and the shared MP
+		# resolver. The authored target only describes the generated pairing; any
+		# active block physically touched can reverse the barrel.
+		if rubber_barrel:
+			for obstacle in obstacles:
+				if obstacle == barrel or not is_instance_valid(obstacle) or obstacle.is_queued_for_deletion() or bool(obstacle.call("is_destroying_now")) or not obstacle.is_in_group("breakable"):
+					continue
+				var rubber_block_rect: Rect2 = obstacle.call("get_hitbox_rect")
+				var rubber_block_impact: int = HAZARD_RULES_SCRIPT.barrel_impact(center, radius, "block", rubber_block_rect, [], true)
+				if rubber_block_impact == HAZARD_RULES_SCRIPT.BarrelImpact.RUBBER_BOUNCE:
+					barrel.call("bounce_from_rect", rubber_block_rect)
+					rubber_bounced = true
+					break
+		if rubber_bounced:
 			continue
 		for terrain in slopes:
 			if not terrain.has_method("is_terrain_step") or not bool(terrain.call("is_terrain_step")):
@@ -1240,18 +1262,33 @@ func _resolve_obstacle_interactions() -> void:
 					break
 			# Barrels travel left with the world; allow them to roll off a floor drop.
 			var is_floor_drop := not bool(terrain.call("is_ceiling_slope")) and float(terrain.call("get_start_y")) > float(terrain.call("get_end_y"))
-			var step_impact: int = HAZARD_RULES_SCRIPT.barrel_impact(center, radius, "step", terrain.call("get_wall_rect"))
+			var wall_rect: Rect2 = terrain.call("get_wall_rect")
+			var step_impact: int = HAZARD_RULES_SCRIPT.barrel_impact(center, radius, "step", wall_rect, [], rubber_barrel)
+			if not is_floor_drop and step_impact == HAZARD_RULES_SCRIPT.BarrelImpact.RUBBER_BOUNCE:
+				barrel.call("bounce_from_rect", wall_rect)
+				rubber_bounced = true
+				break
 			if not is_floor_drop and step_impact == HAZARD_RULES_SCRIPT.BarrelImpact.BARREL_DESTROYED:
 				barrel.call("destroy")
 				break
+		if rubber_bounced:
+			continue
 		if bool(barrel.call("is_destroying_now")):
+			continue
+		# Rubber blocks have already been resolved above so their precedence over
+		# steps is stable; ordinary and spiked barrels retain their legacy path.
+		if rubber_barrel:
 			continue
 		for obstacle in obstacles:
 			if obstacle == barrel or not is_instance_valid(obstacle) or obstacle.is_queued_for_deletion() or bool(obstacle.call("is_destroying_now")):
 				continue
 			if not obstacle.is_in_group("breakable"):
 				continue
-			var block_impact: int = HAZARD_RULES_SCRIPT.barrel_impact(center, radius, "block", obstacle.call("get_hitbox_rect"))
+			var block_rect: Rect2 = obstacle.call("get_hitbox_rect")
+			var block_impact: int = HAZARD_RULES_SCRIPT.barrel_impact(center, radius, "block", block_rect, [], rubber_barrel)
+			if block_impact == HAZARD_RULES_SCRIPT.BarrelImpact.RUBBER_BOUNCE:
+				barrel.call("bounce_from_rect", block_rect)
+				break
 			if block_impact == HAZARD_RULES_SCRIPT.BarrelImpact.BARREL_AND_TARGET_DESTROYED:
 				obstacle.call("destroy")
 				if not bool(barrel.get("is_spiked")):
@@ -1261,7 +1298,7 @@ func _resolve_obstacle_interactions() -> void:
 		return is_instance_valid(obstacle) and not obstacle.is_queued_for_deletion()
 	)
 
-func _spawn_obstacle_scene(scene: PackedScene, width: float, height: float, from_ceiling: bool, x: float, motion_speed_multiplier: float = 1.0, spiked_barrel: bool = false) -> void:
+func _spawn_obstacle_scene(scene: PackedScene, width: float, height: float, from_ceiling: bool, x: float, motion_speed_multiplier: float = 1.0, spiked_barrel: bool = false, rubber_barrel: bool = false, rubber_target_x: float = -1.0) -> void:
 	var obstacle := CoursePresentation.create_hazard(scene, Vector2(x, _ceiling_surface_y(x) if from_ceiling else _floor_surface_y(x)), Vector2(width, height), from_ceiling, _surface_angle_at(x, from_ceiling))
 	obstacle.connect("destroyed", Callable(self, "_on_obstacle_destroyed"))
 	if obstacle.is_in_group("barrels") and obstacle.has_signal("destruction_started"):
@@ -1270,6 +1307,8 @@ func _spawn_obstacle_scene(scene: PackedScene, width: float, height: float, from
 		obstacle.call("set_motion_speed_multiplier", motion_speed_multiplier)
 	if obstacle.has_method("set_spiked"):
 		obstacle.call("set_spiked", spiked_barrel)
+	if obstacle.has_method("set_rubber_variant"):
+		obstacle.call("set_rubber_variant", rubber_barrel, rubber_target_x)
 	add_child(obstacle)
 	obstacles.append(obstacle)
 
@@ -1646,7 +1685,7 @@ func _draw_background() -> void:
 	# SP world coordinates begin at PLAYER_X, matching manifest.start_x in MP.
 	# Normalize backdrop phase by that same origin so absolute world points match.
 	var biome_start_offset := BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(_active_seed, _active_seed_version)
-	BIOME_RENDERER_SCRIPT.draw_backdrop(self, view_left, Vector2(screen_width, screen_height), BIOME_RENDERER_SCRIPT.course_distance_at_world_x(view_left + PLAYER_X, PLAYER_X) + biome_start_offset, _active_seed_version)
+	BIOME_RENDERER_SCRIPT.draw_backdrop(self, view_left, Vector2(screen_width, screen_height), BIOME_RENDERER_SCRIPT.course_distance_at_world_x(view_left + PLAYER_X, PLAYER_X) + biome_start_offset, _active_seed_version, float(_singleplayer_simulation_tick) / 60.0)
 
 func _draw_track() -> void:
 	var surface_gaps: Array[Dictionary] = []

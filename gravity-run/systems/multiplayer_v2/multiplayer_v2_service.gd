@@ -46,7 +46,7 @@ signal results_received(result: Dictionary)
 signal lobby_returned
 signal membership_removed(reason: String)
 
-const V2_GAME_VERSION := "2.1.20261007.16"
+const V2_GAME_VERSION := "2.1.20261008.17"
 const MAX_PLAYERS := 5
 const POSITION_RATE_HZ := 30
 
@@ -1815,7 +1815,7 @@ func world_baseline_payload_size_bytes() -> int:
 	if world_simulation == null:
 		return 0
 	var packet := _session_envelope()
-	packet["world_baseline"] = world_simulation.entity_ledger.baseline()
+	packet["world_baseline"] = world_simulation.baseline()
 	return var_to_bytes(["WORLD_BASELINE", packet]).size()
 
 func _note_local_coin_award(commit: Dictionary) -> void:
@@ -2054,7 +2054,7 @@ func _broadcast_world_baseline() -> void:
 	if not is_room_owner() or world_simulation == null:
 		return
 	for target in connected_peer_ids():
-		send_control(int(target), "WORLD_BASELINE", {"world_baseline": world_simulation.entity_ledger.baseline()})
+		send_control(int(target), "WORLD_BASELINE", {"world_baseline": world_simulation.baseline()})
 
 func configure_world_simulation(world: MultiplayerV2WorldSimulation) -> void:
 	world_simulation = world
@@ -2234,7 +2234,7 @@ func _send_reconnect_sync_request() -> void:
 
 func _send_reconnect_sync_response(peer_id: int, request: Dictionary) -> void:
 	if world_simulation != null and not _round_id.is_empty():
-		send_control(peer_id, "WORLD_BASELINE", {"world_baseline": world_simulation.entity_ledger.baseline()})
+		send_control(peer_id, "WORLD_BASELINE", {"world_baseline": world_simulation.baseline()})
 	var host_tick: int = world_simulation.tick if world_simulation != null else 0
 	var host_revision: int = world_simulation.entity_ledger.revision if world_simulation != null else 0
 	diagnostics.record_event("reconnect_sync_response_sent", {"peer_id": peer_id, "round_id": _round_id, "client_tick": int(request.get("client_tick", -1)), "client_world_tick": int(request.get("world_tick", -1)), "client_world_revision": int(request.get("world_revision", -1)), "host_tick": host_tick, "host_world_revision": host_revision})

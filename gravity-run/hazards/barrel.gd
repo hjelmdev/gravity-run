@@ -7,6 +7,12 @@ var roll_angle := 0.0
 var fall_velocity := 0.0
 var is_falling := false
 var is_spiked := false
+var is_rubber := false
+var rubber_target_x := -1.0
+var travel_direction := 1
+var bounce_count := 0
+var bounce_ticks := 0
+var retired := false
 var motion_speed_multiplier := 1.0
 var _local_render_motion := false
 var _previous_position := Vector2.ZERO
@@ -38,6 +44,28 @@ func set_spiked(value: bool) -> void:
 	is_spiked = value
 	queue_redraw()
 
+func set_rubber_variant(value: bool, target_x: float = -1.0) -> void:
+	is_rubber = value
+	rubber_target_x = target_x if value else -1.0
+	travel_direction = 1
+	bounce_count = 0
+	bounce_ticks = 0
+	retired = false
+	queue_redraw()
+
+func bounce_from_rect(obstacle_rect: Rect2) -> bool:
+	if not is_rubber or retired:
+		return false
+	var state := {"x": position.x, "width": size.x, "height": size.y, "travel_direction": travel_direction, "bounce_count": bounce_count}
+	var bounced := HazardRules.bounce_rubber_barrel(state, obstacle_rect)
+	position.x = float(state.x)
+	travel_direction = int(state.get("travel_direction", travel_direction))
+	bounce_count = int(state.get("bounce_count", bounce_count))
+	bounce_ticks = int(state.get("bounce_ticks", 0))
+	retired = bool(state.get("retired", false))
+	queue_redraw()
+	return bounced
+
 func apply_replicated_motion(new_position: Vector2, new_roll_angle: float, new_rotation: float, should_be_visible: bool) -> void:
 	position = new_position
 	roll_angle = new_roll_angle
@@ -45,8 +73,24 @@ func apply_replicated_motion(new_position: Vector2, new_roll_angle: float, new_r
 	visible = should_be_visible
 	queue_redraw()
 
+func apply_shared_barrel_state(state: Dictionary) -> void:
+	position = Vector2(float(state.get("x", position.x)), float(state.get("y", position.y)))
+	roll_angle = float(state.get("roll_angle", roll_angle))
+	rotation = float(state.get("rotation", rotation))
+	is_spiked = bool(state.get("spiked", is_spiked))
+	is_rubber = int(state.get("barrel_variant", 0)) == 1
+	rubber_target_x = float(state.get("rubber_target_x", rubber_target_x))
+	travel_direction = int(state.get("travel_direction", 1))
+	bounce_count = int(state.get("bounce_count", 0))
+	bounce_ticks = int(state.get("bounce_ticks", 0))
+	retired = bool(state.get("retired", false))
+	visible = bool(state.get("spawned", false)) and not bool(state.get("destroyed", false))
+	queue_redraw()
+
 func advance_motion(delta: float, movement: float, _player_position: Vector2, floor_y_at: Callable, surface_angle_at: Callable, surface_supported_at: Callable = Callable()) -> void:
 	if is_destroying:
+		return
+	if retired:
 		return
 	_local_render_motion = true
 	set_process(true)
@@ -59,13 +103,15 @@ func advance_motion(delta: float, movement: float, _player_position: Vector2, fl
 		"width": size.x,
 		"height": size.y,
 		"motion_speed_multiplier": motion_speed_multiplier,
+		"travel_direction": travel_direction,
+		"bounce_ticks": bounce_ticks,
 		"fall_velocity": fall_velocity,
 		"is_falling": is_falling,
 		"roll_angle": roll_angle,
 		"rotation": rotation,
 	}
 	var reference_movement := movement if movement > 0.0 else RunnerMotion.BASE_RUN_SPEED * maxf(delta, 0.0)
-	var projected_x := position.x - reference_movement * (motion_speed_multiplier - 1.0)
+	var projected_x := position.x - reference_movement * (motion_speed_multiplier - 1.0) * float(travel_direction)
 	var floor_y := float(floor_y_at.call(projected_x))
 	var floor_supported := not surface_supported_at.is_valid() or bool(surface_supported_at.call(projected_x, false))
 	HazardRules.advance_barrel(state, delta, movement, floor_y, float(surface_angle_at.call(projected_x, false)), floor_supported)
@@ -75,6 +121,9 @@ func advance_motion(delta: float, movement: float, _player_position: Vector2, fl
 	is_falling = bool(state.is_falling)
 	roll_angle = float(state.roll_angle)
 	rotation = float(state.rotation)
+	travel_direction = int(state.get("travel_direction", travel_direction))
+	bounce_ticks = int(state.get("bounce_ticks", bounce_ticks))
+	retired = bool(state.get("retired", retired))
 	queue_redraw()
 
 func _begin_destruction() -> void:
@@ -94,14 +143,31 @@ func _draw() -> void:
 		rendered_roll = lerpf(_previous_roll, roll_angle, fraction)
 	var radius := HazardRules.barrel_radius(size.x, size.y)
 	var center_y := radius if from_ceiling else -radius
-	draw_circle(Vector2(0.0, center_y), radius, Color("d98245"))
-	draw_arc(Vector2(0.0, center_y), radius - 8.0, 0.0, TAU, 24, Color("743e35"), 4.0)
+	var body_color := Color("40b7ae") if is_rubber else Color("d98245")
+	var detail_color := Color("143f57") if is_rubber else Color("743e35")
+	if retired:
+		# A spent rubber barrel is parked, not destroyed or hidden. Muted color and
+		# a double band distinguish its stationary state while it remains lethal.
+		body_color = Color("397c78")
+		detail_color = Color("143f57")
+	if is_rubber and bounce_ticks > 0:
+		body_color = Color("77e2d3")
+	draw_circle(Vector2(0.0, center_y), radius, body_color)
+	draw_arc(Vector2(0.0, center_y), radius - 8.0, 0.0, TAU, 24, detail_color, 4.0)
+	if is_rubber:
+		for stripe in range(3):
+			var stripe_x := float(stripe - 1) * radius * 0.52
+			draw_line(Vector2(stripe_x, center_y - radius * 0.54), Vector2(stripe_x, center_y + radius * 0.54), detail_color, 5.0)
+		if retired:
+			draw_line(Vector2(-radius * 0.44, center_y - 3.0), Vector2(radius * 0.44, center_y - 3.0), Color("b6e6dc"), 3.0)
+			draw_line(Vector2(-radius * 0.44, center_y + 3.0), Vector2(radius * 0.44, center_y + 3.0), Color("b6e6dc"), 3.0)
 	var first_start := Vector2(-radius * 0.55, -radius * 0.45).rotated(rendered_roll) + Vector2(0.0, center_y)
 	var first_end := Vector2(radius * 0.55, radius * 0.45).rotated(rendered_roll) + Vector2(0.0, center_y)
 	var second_start := Vector2(radius * 0.55, -radius * 0.45).rotated(rendered_roll) + Vector2(0.0, center_y)
 	var second_end := Vector2(-radius * 0.55, radius * 0.45).rotated(rendered_roll) + Vector2(0.0, center_y)
-	draw_line(first_start, first_end, Color("743e35"), 4.0)
-	draw_line(second_start, second_end, Color("743e35"), 4.0)
+	if not is_rubber:
+		draw_line(first_start, first_end, detail_color, 4.0)
+		draw_line(second_start, second_end, detail_color, 4.0)
 	if is_spiked:
 		for index in range(8):
 			var angle := TAU * float(index) / 8.0 + rendered_roll

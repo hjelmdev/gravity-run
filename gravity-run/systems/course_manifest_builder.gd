@@ -45,7 +45,7 @@ func build(seed_value: int, course_length_px: int, generator_version: int = Cour
 	var source_events: Array[Dictionary] = generator.get_planned_events()
 	var manifest := ManifestScript.new() as MultiplayerCourseManifest
 	manifest.generator_version = generator_version
-	manifest.manifest_version = 13 if generator_version >= CourseGenerator.GENERATOR_VERSION_20 else (12 if generator_version >= CourseGenerator.GENERATOR_VERSION_19 else (11 if generator_version >= CourseGenerator.GENERATOR_VERSION_18 else (10 if generator_version >= CourseGenerator.GENERATOR_VERSION_17 else (9 if generator_version >= CourseGenerator.GENERATOR_VERSION_16 else (8 if generator_version >= CourseGenerator.GENERATOR_VERSION_15 else (7 if generator_version >= CourseGenerator.GENERATOR_VERSION_14 else (6 if generator_version >= CourseGenerator.GENERATOR_VERSION_12 else (5 if generator_version >= CourseGenerator.GENERATOR_VERSION_10 else (4 if generator_version >= CourseGenerator.GENERATOR_VERSION_9 else (3 if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION else 2))))))))))
+	manifest.manifest_version = 14 if generator_version >= CourseGenerator.GENERATOR_VERSION_21 else (13 if generator_version >= CourseGenerator.GENERATOR_VERSION_20 else (12 if generator_version >= CourseGenerator.GENERATOR_VERSION_19 else (11 if generator_version >= CourseGenerator.GENERATOR_VERSION_18 else (10 if generator_version >= CourseGenerator.GENERATOR_VERSION_17 else (9 if generator_version >= CourseGenerator.GENERATOR_VERSION_16 else (8 if generator_version >= CourseGenerator.GENERATOR_VERSION_15 else (7 if generator_version >= CourseGenerator.GENERATOR_VERSION_14 else (6 if generator_version >= CourseGenerator.GENERATOR_VERSION_12 else (5 if generator_version >= CourseGenerator.GENERATOR_VERSION_10 else (4 if generator_version >= CourseGenerator.GENERATOR_VERSION_9 else (3 if generator_version >= CourseGenerator.PUBLISHED_SHARED_GENERATOR_VERSION else 2)))))))))))
 	manifest.course_identity = str(definition.call("get_course_identity"))
 	manifest.seed_value = seed_value
 	manifest.course_length_px = course_length_px
@@ -262,7 +262,7 @@ func filter_unsafe_gen17_biome_events(events: Array[Dictionary]) -> Array[Dictio
 func _make_multiplayer_ruleset(generator_version: int) -> Resource:
 	var ruleset := CourseRulesetScript.new() as Resource
 	ruleset.set("ruleset_id", &"multiplayer_race")
-	if generator_version in [CourseGenerator.GENERATOR_VERSION_19, CourseGenerator.GENERATOR_VERSION_20]:
+	if generator_version in [CourseGenerator.GENERATOR_VERSION_19, CourseGenerator.GENERATOR_VERSION_20, CourseGenerator.GENERATOR_VERSION_21]:
 		ruleset.set("revision", 16)
 		ruleset.set("event_density", 2.5)
 		ruleset.set("coin_revision", 2)
@@ -361,7 +361,7 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 				var block_width := float(source.get("width", 48.0))
 				var block_height := float(source.get("height", 72.0))
 				var required_clearance := block_height + 56.0
-				if generator_version in [CourseGenerator.GENERATOR_VERSION_18, CourseGenerator.GENERATOR_VERSION_19, CourseGenerator.GENERATOR_VERSION_20] and _gen18_small_block_has_supported_runner_clearance(resolved, source_events, course_distance, block_width, block_height):
+				if generator_version in [CourseGenerator.GENERATOR_VERSION_18, CourseGenerator.GENERATOR_VERSION_19, CourseGenerator.GENERATOR_VERSION_20, CourseGenerator.GENERATOR_VERSION_21] and _gen18_small_block_has_supported_runner_clearance(resolved, source_events, course_distance, block_width, block_height):
 					required_clearance = block_height + float(RunnerMotionScript.SIZE.y) + 4.0
 				if floor_surface_y - ceiling_surface_y < required_clearance:
 					event_index += 1
@@ -394,6 +394,9 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 				}
 				if generator_version >= CourseGenerator.GENERATOR_VERSION_12 and bool(source.get("spiked", false)):
 					barrel_record["spiked"] = true
+				if generator_version == CourseGenerator.GENERATOR_VERSION_21 and int(source.get("barrel_variant", 0)) == 1:
+					barrel_record["barrel_variant"] = 1
+					barrel_record["rubber_target_x"] = PLAYER_START_X + float(source.get("rubber_target_course_distance", NAN))
 				resolved.append(barrel_record)
 			"gap":
 				resolved.append({

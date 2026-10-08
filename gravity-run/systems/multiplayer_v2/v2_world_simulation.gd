@@ -13,6 +13,7 @@ const LavaModel := preload("res://systems/lava_hazard_model.gd")
 
 const TICK_RATE := 60.0
 const FIXED_DELTA := 1.0 / TICK_RATE
+const GEN21_BARREL_BASELINE_FORMAT_VERSION := 5
 
 var manifest: Resource
 var _previous_render_barrels: Dictionary = {}
@@ -72,7 +73,8 @@ func configure(course_manifest: Resource) -> String:
 			for index in range(count):
 				var entity_id := "%s_%d" % [event_id, index]
 				var is_spiked := bool(event.get("spiked", false))
-				var barrel := {"entity_id": entity_id, "event_id": event_id, "incarnation": 1, "kind": "spiked_barrel" if is_spiked else "barrel", "spiked": is_spiked, "x": float(event.get("x", 0.0)) + lead * (multiplier - 1.0) - float(count - 1) * spacing * 0.5 + float(index) * spacing, "y": float(event.get("y", manifest.initial_floor_y)), "width": width, "height": height, "motion_speed_multiplier": multiplier, "spawn_time": maxf(0.0, float(event.get("x", 0.0)) - lead - float(manifest.start_x)) / Motion.BASE_RUN_SPEED, "spawned": false, "fall_velocity": 0.0, "falling": false, "roll_angle": 0.0, "rotation": 0.0, "destroyed": false}
+				var is_rubber := int(event.get("barrel_variant", 0)) == 1
+				var barrel := {"entity_id": entity_id, "event_id": event_id, "incarnation": 1, "kind": "rubber_barrel" if is_rubber else ("spiked_barrel" if is_spiked else "barrel"), "spiked": is_spiked, "rubber": is_rubber, "barrel_variant": int(event.get("barrel_variant", 0)), "rubber_target_x": float(event.get("rubber_target_x", -1.0)), "travel_direction": 1, "bounce_count": 0, "bounce_ticks": 0, "retired": false, "x": float(event.get("x", 0.0)) + lead * (multiplier - 1.0) - float(count - 1) * spacing * 0.5 + float(index) * spacing, "y": float(event.get("y", manifest.initial_floor_y)), "width": width, "height": height, "motion_speed_multiplier": multiplier, "spawn_time": maxf(0.0, float(event.get("x", 0.0)) - lead - float(manifest.start_x)) / Motion.BASE_RUN_SPEED, "spawned": false, "fall_velocity": 0.0, "falling": false, "roll_angle": 0.0, "rotation": 0.0, "destroyed": false}
 				barrels.append(barrel)
 				entities.append({"entity_id": entity_id, "incarnation": 1, "kind": str(barrel.kind), "health": 1})
 				_entity_by_event[entity_id] = {"kind": str(barrel.kind), "event_id": event_id}
@@ -108,14 +110,14 @@ func step_to(next_tick: int) -> bool:
 	tick = next_tick
 	elapsed = float(tick) * FIXED_DELTA
 	for barrel in barrels:
-		if bool(barrel.get("destroyed", false)):
+		if bool(barrel.get("destroyed", false)) or bool(barrel.get("retired", false)):
 			continue
 		if not bool(barrel.get("spawned", false)):
 			if elapsed < float(barrel.get("spawn_time", INF)):
 				continue
 			barrel.spawned = true
 		var movement := Motion.BASE_RUN_SPEED * FIXED_DELTA
-		var projected_x := float(barrel.x) - movement * (float(barrel.motion_speed_multiplier) - 1.0)
+		var projected_x := float(barrel.x) - movement * (float(barrel.motion_speed_multiplier) - 1.0) * float(barrel.get("travel_direction", 1))
 		var floor_info := surface_at(projected_x, false)
 		HazardRules.advance_barrel(barrel, FIXED_DELTA, movement, float(floor_info.y), _surface_angle_at(projected_x, false), bool(floor_info.supported))
 		_resolve_barrel_interactions(barrel)
@@ -133,7 +135,7 @@ func render_state(fraction: float) -> Dictionary:
 	var rendered := barrels.duplicate(true)
 	for barrel in rendered:
 		var previous: Dictionary = _previous_render_barrels.get(str(barrel.get("entity_id", "")), barrel)
-		if bool(previous.get("spawned", false)) and not bool(barrel.get("destroyed", false)):
+		if bool(previous.get("spawned", false)) and not bool(barrel.get("destroyed", false)) and not bool(barrel.get("retired", false)):
 			for key in ["x", "y", "roll_angle", "rotation"]:
 				barrel[key] = lerpf(float(previous.get(key, barrel.get(key, 0.0))), float(barrel.get(key, 0.0)), clampf(fraction, 0.0, 1.0))
 	var rendered_rocks: Array[Dictionary] = []
@@ -460,13 +462,102 @@ func apply_world_commit(commit: Dictionary) -> String:
 	return result
 
 func apply_baseline(value: Dictionary) -> bool:
+	var baseline_version := int(value.get("baseline_format_version", -1))
+	if baseline_version == GEN21_BARREL_BASELINE_FORMAT_VERSION:
+		if manifest == null or int(manifest.get("generator_version")) != CourseGeneratorScript.GENERATOR_VERSION_21:
+			return false
+		if not _restore_gen21_barrel_states(value):
+			return false
 	if not entity_ledger.restore_baseline(value):
 		return false
+	if baseline_version == GEN21_BARREL_BASELINE_FORMAT_VERSION:
+		_apply_gen21_barrel_states(value)
+		# Gen21 baselines carry a host simulation tick. Set it before reconstructing
+		# saw history so barrel and saw collision histories share the same tick.
+		tick = int(value.get("simulation_tick", tick))
+		elapsed = float(tick) * FIXED_DELTA
+		for barrel in barrels:
+			var entity: Dictionary = entity_ledger.entities.get(str(barrel.entity_id), {})
+			barrel.destroyed = str(entity.get("state", "active")) != "active"
+		_rebuild_saw_history()
+		_barrel_history.clear()
+		_barrel_history[tick] = barrels.duplicate(true)
+		_previous_render_barrels.clear()
+		for barrel in barrels:
+			_previous_render_barrels[str(barrel.get("entity_id", ""))] = barrel.duplicate(true)
+		return true
+	# Older baseline formats preserve their historical ordering and clock behavior.
 	_rebuild_saw_history()
 	for barrel in barrels:
 		var entity: Dictionary = entity_ledger.entities.get(str(barrel.entity_id), {})
 		barrel.destroyed = str(entity.get("state", "active")) != "active"
 	return true
+
+func baseline() -> Dictionary:
+	var value: Dictionary = entity_ledger.baseline()
+	if manifest == null or int(manifest.get("generator_version")) != CourseGeneratorScript.GENERATOR_VERSION_21:
+		return value
+	value["baseline_format_version"] = GEN21_BARREL_BASELINE_FORMAT_VERSION
+	value["simulation_tick"] = tick
+	var barrel_states: Array[Dictionary] = []
+	for barrel in barrels:
+		barrel_states.append({"id": str(barrel.get("entity_id", "")), "variant": int(barrel.get("barrel_variant", 0)), "spiked": bool(barrel.get("spiked", false)), "rubber": bool(barrel.get("rubber", false)), "x": float(barrel.get("x", 0.0)), "y": float(barrel.get("y", 0.0)), "fall_velocity": float(barrel.get("fall_velocity", 0.0)), "spawned": bool(barrel.get("spawned", false)), "falling": bool(barrel.get("falling", false)), "roll_angle": float(barrel.get("roll_angle", 0.0)), "rotation": float(barrel.get("rotation", 0.0)), "travel_direction": int(barrel.get("travel_direction", 1)), "bounce_count": int(barrel.get("bounce_count", 0)), "bounce_ticks": int(barrel.get("bounce_ticks", 0)), "retired": bool(barrel.get("retired", false))})
+	value["barrels"] = barrel_states
+	return value
+
+func _restore_gen21_barrel_states(value: Dictionary) -> bool:
+	var rows: Variant = value.get("barrels", null)
+	var simulation_tick: Variant = value.get("simulation_tick", null)
+	if not rows is Array or not (simulation_tick is int) or int(simulation_tick) < 0:
+		return false
+	var barrels_by_id: Dictionary = {}
+	for barrel in barrels:
+		barrels_by_id[str(barrel.get("entity_id", ""))] = barrel
+	if rows.size() != barrels_by_id.size():
+		return false
+	var seen: Dictionary = {}
+	for row_value in rows:
+		if not row_value is Dictionary:
+			return false
+		var row: Dictionary = row_value
+		var entity_id := str(row.get("id", ""))
+		if entity_id.is_empty() or seen.has(entity_id) or not barrels_by_id.has(entity_id):
+			return false
+		var expected: Dictionary = barrels_by_id[entity_id]
+		if row.get("variant", null) is not int or int(row.variant) != int(expected.get("barrel_variant", 0)):
+			return false
+		if row.get("spiked", null) is not bool or bool(row.spiked) != bool(expected.get("spiked", false)):
+			return false
+		if row.get("rubber", null) is not bool or bool(row.rubber) != bool(expected.get("rubber", false)):
+			return false
+		for key in ["x", "y", "fall_velocity", "roll_angle", "rotation"]:
+			var value_number: Variant = row.get(key, null)
+			if not (value_number is float or value_number is int) or not is_finite(float(value_number)):
+				return false
+		for key in ["spawned", "falling", "retired"]:
+			if not row.get(key, null) is bool:
+				return false
+		for key in ["travel_direction", "bounce_count", "bounce_ticks"]:
+			if not row.get(key, null) is int:
+				return false
+		if int(row.travel_direction) not in [-1, 1] or int(row.bounce_count) < 0 or int(row.bounce_count) > HazardRules.RUBBER_BARREL_MAX_BOUNCES or int(row.bounce_ticks) < 0 or int(row.bounce_ticks) > 8:
+			return false
+		if not bool(row.rubber) and (int(row.bounce_count) != 0 or bool(row.retired)):
+			return false
+		seen[entity_id] = true
+	for entity_id in barrels_by_id:
+		if not seen.has(str(entity_id)):
+			return false
+	return true
+
+func _apply_gen21_barrel_states(value: Dictionary) -> void:
+	var by_id: Dictionary = {}
+	for barrel in barrels:
+		by_id[str(barrel.get("entity_id", ""))] = barrel
+	for row in value.get("barrels", []):
+		var barrel: Dictionary = by_id[str(row.get("id", ""))]
+		for key in ["x", "y", "fall_velocity", "spawned", "falling", "roll_angle", "rotation", "travel_direction", "bounce_count", "bounce_ticks", "retired"]:
+			barrel[key] = row[key]
 
 func apply_deterministic_destruction(entity_id: String, simulation_tick: int) -> String:
 	if not entity_ledger.is_active(entity_id):
@@ -486,7 +577,14 @@ func state_hash() -> String:
 		normalized.append({"id": str(entity_id), "incarnation": int(state.incarnation), "kind": str(state.kind), "state": str(state.state), "hp": int(state.shared_health), "winner_peer_id": int(state.get("winner_peer_id", 0)), "award_value": int(state.get("award_value", 0)), "rock_activation_tick": int(state.get("rock_activation_tick", -1)), "saw_activation_tick": int(state.get("saw_activation_tick", -1)), "ghost_activation_tick": int(state.get("ghost_activation_tick", -1)), "ghost_activation_lane": int(state.get("ghost_activation_lane", 0)), "ghost_activation_world_x_sixteenth": int(round(float(state.get("ghost_activation_world_x", -1.0)) * 16.0)), "ghost_activation_speed_sixteenth": int(round(float(state.get("ghost_activation_speed", 0.0)) * 16.0)), "ghost_target_peer_id": int(state.get("ghost_target_peer_id", 0))})
 	var barrel_state := []
 	for barrel in barrels:
-		barrel_state.append({"id": str(barrel.entity_id), "x": int(round(float(barrel.x) * 16.0)), "y": int(round(float(barrel.y) * 16.0)), "spawned": bool(barrel.spawned), "falling": bool(barrel.falling), "destroyed": bool(barrel.destroyed), "spiked": bool(barrel.get("spiked", false))})
+		var normalized_barrel := {"id": str(barrel.entity_id), "x": int(round(float(barrel.x) * 16.0)), "y": int(round(float(barrel.y) * 16.0)), "spawned": bool(barrel.spawned), "falling": bool(barrel.falling), "destroyed": bool(barrel.destroyed), "spiked": bool(barrel.get("spiked", false))}
+		if manifest != null and int(manifest.get("generator_version")) == CourseGeneratorScript.GENERATOR_VERSION_21:
+			normalized_barrel["variant"] = int(barrel.get("barrel_variant", 0))
+			normalized_barrel["travel_direction"] = int(barrel.get("travel_direction", 1))
+			normalized_barrel["bounce_count"] = int(barrel.get("bounce_count", 0))
+			normalized_barrel["bounce_ticks"] = int(barrel.get("bounce_ticks", 0))
+			normalized_barrel["retired"] = bool(barrel.get("retired", false))
+		barrel_state.append(normalized_barrel)
 	var saw_state := []
 	for saw in saws:
 		var state: Dictionary = saw.get("state", {})
@@ -591,6 +689,7 @@ func _rebuild_saw_history_for_event(event_id: String) -> void:
 func _resolve_barrel_interactions(barrel: Dictionary) -> void:
 	var radius := HazardRules.barrel_radius(float(barrel.width), float(barrel.height))
 	var center := HazardRules.barrel_center(Vector2(float(barrel.x), float(barrel.y)), float(barrel.width), float(barrel.height))
+	var rubber := bool(barrel.get("rubber", false))
 	for event in manifest.events:
 		var event_id := str(event.get("event_id", ""))
 		if str(event.get("kind", "")) == "spikes":
@@ -605,7 +704,11 @@ func _resolve_barrel_interactions(barrel: Dictionary) -> void:
 			var edge_y := float(event.get("y", 0.0))
 			var block_y := edge_y - height if not bool(event.get("from_ceiling", false)) else edge_y
 			var target := Rect2(Vector2(float(event.get("x", 0.0)) - width * 0.5, block_y), Vector2(width, height))
-			if HazardRules.barrel_impact(center, radius, "block", target) == HazardRules.BarrelImpact.BARREL_AND_TARGET_DESTROYED:
+			var block_impact := HazardRules.barrel_impact(center, radius, "block", target, [], rubber)
+			if block_impact == HazardRules.BarrelImpact.RUBBER_BOUNCE:
+				HazardRules.bounce_rubber_barrel(barrel, target)
+				return
+			if block_impact == HazardRules.BarrelImpact.BARREL_AND_TARGET_DESTROYED:
 				if not bool(barrel.get("spiked", false)):
 					barrel.destroyed = true
 					apply_deterministic_destruction(str(barrel.entity_id), tick)
@@ -617,7 +720,13 @@ func _resolve_barrel_interactions(barrel: Dictionary) -> void:
 			continue
 		var rect := HazardRules.step_wall_rect(float(event.get("x", 0.0)), float(event.get("start_y", 0.0)), float(event.get("end_y", 0.0)))
 		var floor_drop := not bool(event.get("from_ceiling", false)) and float(event.get("start_y", 0.0)) > float(event.get("end_y", 0.0))
-		if not floor_drop and HazardRules.barrel_impact(center, radius, "step", rect) == HazardRules.BarrelImpact.BARREL_DESTROYED:
+		if floor_drop:
+			continue
+		var step_impact := HazardRules.barrel_impact(center, radius, "step", rect, [], rubber)
+		if step_impact == HazardRules.BarrelImpact.RUBBER_BOUNCE:
+			HazardRules.bounce_rubber_barrel(barrel, rect)
+			return
+		if step_impact == HazardRules.BarrelImpact.BARREL_DESTROYED:
 			barrel.destroyed = true
 			apply_deterministic_destruction(str(barrel.entity_id), tick)
 			return

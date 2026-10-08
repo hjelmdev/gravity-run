@@ -3,7 +3,7 @@ class_name HazardInteractionRules
 
 const RunnerMotion := preload("res://systems/runner_motion.gd")
 
-enum BarrelImpact { NONE, BARREL_DESTROYED, BARREL_AND_TARGET_DESTROYED }
+enum BarrelImpact { NONE, BARREL_DESTROYED, BARREL_AND_TARGET_DESTROYED, RUBBER_BOUNCE }
 enum PlayerImpact { NONE, LETHAL, BLOCKED }
 
 const STEP_WALL_THICKNESS := 4.0
@@ -11,6 +11,8 @@ const BARREL_WIDTH := 54.0
 const BARREL_CHAIN_SPACING := 70.0
 const BARREL_FALL_GRAVITY := 1800.0
 const BARREL_STEP_FALL_THRESHOLD := 14.0
+const RUBBER_BARREL_MAX_BOUNCES := 2
+const RUBBER_BARREL_OFFSCREEN_MARGIN := 240.0
 
 static func spike_group_intersects_rect(start_x: float, surface_y: float, count: int, spacing: float, width: float, height: float, from_ceiling: bool, rect: Rect2) -> bool:
 	for triangle in spike_group_triangles(start_x, surface_y, count, spacing, width, height, from_ceiling):
@@ -144,17 +146,40 @@ static func barrel_center(base_position: Vector2, width: float, height: float, f
 	var radius := barrel_radius(width, height)
 	return base_position + Vector2(0.0, radius if from_ceiling else -radius)
 
-static func barrel_impact(center: Vector2, radius: float, target_kind: String, target_rect: Rect2 = Rect2(), target_triangles: Array = []) -> BarrelImpact:
+static func barrel_impact(center: Vector2, radius: float, target_kind: String, target_rect: Rect2 = Rect2(), target_triangles: Array = [], rubber := false) -> BarrelImpact:
 	if target_kind == "spikes":
 		for triangle in target_triangles:
 			if triangle is PackedVector2Array and circle_intersects_triangle(center, radius, triangle):
 				return BarrelImpact.BARREL_DESTROYED
 		return BarrelImpact.NONE
 	if target_kind == "step":
-		return BarrelImpact.BARREL_DESTROYED if circle_intersects_rect(center, radius, target_rect) else BarrelImpact.NONE
+		if circle_intersects_rect(center, radius, target_rect):
+			return BarrelImpact.RUBBER_BOUNCE if rubber else BarrelImpact.BARREL_DESTROYED
+		return BarrelImpact.NONE
 	if target_kind == "block" and circle_intersects_rect(center, radius, target_rect):
+		if rubber:
+			return BarrelImpact.RUBBER_BOUNCE
 		return BarrelImpact.BARREL_AND_TARGET_DESTROYED
 	return BarrelImpact.NONE
+
+static func bounce_rubber_barrel(state: Dictionary, obstacle_rect: Rect2) -> bool:
+	## Reverse course-space motion and move the circle clear of the contact face.
+	## The target and barrel remain active. At the bounded bounce limit the barrel
+	## parks visibly against the solid and stays a lethal, non-moving hazard.
+	var direction := int(state.get("travel_direction", 1))
+	var radius := minf(float(state.get("width", BARREL_WIDTH)), float(state.get("height", BARREL_WIDTH))) * 0.5
+	if direction >= 0:
+		state["x"] = obstacle_rect.end.x + radius + 1.0
+	else:
+		state["x"] = obstacle_rect.position.x - radius - 1.0
+	if int(state.get("bounce_count", 0)) >= RUBBER_BARREL_MAX_BOUNCES:
+		state["retired"] = true
+		state["bounce_ticks"] = 0
+		return false
+	state["travel_direction"] = -direction
+	state["bounce_count"] = int(state.get("bounce_count", 0)) + 1
+	state["bounce_ticks"] = 8
+	return true
 
 static func step_wall_rect(x: float, start_y: float, end_y: float) -> Rect2:
 	return Rect2(Vector2(x - STEP_WALL_THICKNESS * 0.5, minf(start_y, end_y)), Vector2(STEP_WALL_THICKNESS, absf(end_y - start_y)))
@@ -188,8 +213,11 @@ static func player_impact(player_rect: Rect2, target_kind: String, target_rect: 
 static func advance_barrel(state: Dictionary, delta: float, movement: float, floor_y: float, surface_angle: float, floor_supported: bool) -> float:
 	var multiplier := maxf(float(state.get("motion_speed_multiplier", 1.0)), 1.0)
 	var motion_reference := movement if movement > 0.0 else RunnerMotion.BASE_RUN_SPEED * maxf(delta, 0.0)
-	var relative_travel := motion_reference * (multiplier - 1.0)
+	var direction := -1.0 if int(state.get("travel_direction", 1)) < 0 else 1.0
+	var relative_travel := motion_reference * (multiplier - 1.0) * direction
 	state["x"] = float(state.get("x", 0.0)) - relative_travel
+	if int(state.get("bounce_ticks", 0)) > 0:
+		state["bounce_ticks"] = int(state.get("bounce_ticks", 0)) - 1
 	if bool(state.get("is_falling", state.get("falling", false))):
 		var previous_y := float(state.get("y", 0.0))
 		var fall_velocity := float(state.get("fall_velocity", 0.0)) + BARREL_FALL_GRAVITY * delta

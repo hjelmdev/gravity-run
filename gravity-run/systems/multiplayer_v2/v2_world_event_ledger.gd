@@ -113,7 +113,7 @@ func baseline() -> Dictionary:
 
 func restore_baseline(value: Dictionary) -> bool:
 	var baseline_version := int(value.get("baseline_format_version", -1))
-	if baseline_version not in [2, 3, BASELINE_FORMAT_VERSION]:
+	if baseline_version not in [2, 3, BASELINE_FORMAT_VERSION, 5]:
 		return false
 	var next_revision := int(value.get("world_revision", -1))
 	var incoming_entities: Variant = value.get("entities", null)
@@ -127,7 +127,7 @@ func restore_baseline(value: Dictionary) -> bool:
 		if typeof(row[0]) != TYPE_STRING or typeof(row[1]) != TYPE_INT or typeof(row[2]) != TYPE_STRING:
 			return false
 		for field_index in range(3, row.size()):
-			if baseline_version == 4 and field_index in [11, 12]:
+			if baseline_version >= 4 and field_index in [11, 12]:
 				if typeof(row[field_index]) != TYPE_FLOAT and typeof(row[field_index]) != TYPE_INT:
 					return false
 			elif typeof(row[field_index]) != TYPE_INT:

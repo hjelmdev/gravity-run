@@ -1,0 +1,9 @@
+# Gen21 root review — rubber barrel and biome weather
+
+Status: APPROVED FOR SCOPED RELEASE (2026-10-08). No claim of a connected browser multiplayer test.
+
+Reviewed the Gen21 source diff, actual SP and started offline MP scene captures, moving renderer sequence, generator/manifest version gates, and draft SQL migration. Rubber contact uses one shared rule and leaves blocks intact. Root review found and Luna corrected contacts with non-target blocks, SP/MP block-versus-step priority, complete dynamic barrel baseline5 restoration, and saw-history reconstruction at the restored host tick. Ordinary/spiked rules and Gen17/18 frozen fixtures remain intact; the Gen21 test compares a matched Gen20 course route. Dedicated immutable Gen19/20 hash suites were not available.
+
+Focused regressions pass after the corrections: actual `main.tscn` SP adapter, shared MP simulation, mixed ordinary/rubber/saw late-join baseline at tick 684, world codec, release contract, weather contract, Gen17/18 freeze, and bounded actual scene captures. Gen21 seed `100000009` has local full-manifest safe routes at 250/500/750 px/s; seed `100000007` has an inherited Gen20 ceiling-rock failure at 750 px/s and is not claimed safe there. The weather layer creates no nodes/textures/RNG per frame; small lava polygons are allocated per visible ember. Offline MP evidence does not replace a connected session.
+
+Approve only the Gen21 gameplay/renderer/version/test files and the reviewed `202610080001` migration for commit and release. Preserve all unrelated dirty capture, diagnostics, audio, menu, and review hunks. Require clean exact-commit tests/export, scoped Azure push, linked migration-history check before apply, Pages-root publication, and independent exact-head/workflow/BUILD_ID/loader/public-PCK verification.

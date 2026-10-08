@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="Gravity Run"
-config/version="2026.10.07-gen20-barrel-gap-rhythm"
+config/version="2026.10.08-gen21-rubber-barrel-weather"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.svg"
 run/main_scene="res://ui/main_menu.tscn"

@@ -8,6 +8,7 @@ const HAUNTED: BiomeDefinition = preload("res://assets/biomes/definitions/haunte
 const LAVA: BiomeDefinition = preload("res://assets/biomes/definitions/lava.tres")
 const GENERATOR_VERSION_14 := 14
 const GENERATOR_VERSION_16 := 16
+const GENERATOR_VERSION_21 := 21
 const THEME_LENGTH := 4800.0
 const CYCLE_LENGTH := THEME_LENGTH * 3.0
 const GEN14_CYCLE_LENGTH := THEME_LENGTH * 4.0
@@ -54,7 +55,7 @@ static func course_distance_at_world_x(world_x: float, course_start_x: float) ->
 	## SP and manifest-backed MP share this world-to-course coordinate contract.
 	return maxf(world_x - course_start_x, 0.0)
 
-static func draw_backdrop(canvas: CanvasItem, view_left: float, view_size: Vector2, course_distance: float, generator_version: int = GENERATOR_VERSION_14 - 1) -> void:
+static func draw_backdrop(canvas: CanvasItem, view_left: float, view_size: Vector2, course_distance: float, generator_version: int = GENERATOR_VERSION_14 - 1, presentation_time_seconds: float = 0.0) -> void:
 	var cursor := view_left
 	var right := view_left + view_size.x
 	var cycle_length := cycle_length_for_generator(generator_version)
@@ -78,7 +79,112 @@ static func draw_backdrop(canvas: CanvasItem, view_left: float, view_size: Vecto
 		if biome.biome_id == &"haunted":
 			_draw_haunted_backdrop(canvas, cursor, layout_size, distance, view_left, Vector2(view_size.x, layout_size.y), course_distance, biome, cycle_length)
 		_draw_atlas_decorations(canvas, biome, cursor, layout_size, distance)
+		if generator_version >= GENERATOR_VERSION_21:
+			_draw_weather_layer(canvas, biome, cursor, layout_size, distance, course_distance + fragment_offset, presentation_time_seconds)
 		cursor = segment_end
+
+static func _draw_weather_layer(canvas: CanvasItem, biome: BiomeDefinition, left: float, size: Vector2, distance: float, view_course_left: float, presentation_time_seconds: float) -> void:
+	## Small deterministic primitives only: no per-frame nodes, textures, or RNG.
+	## Lava ember polygons are tiny CPU-side arrays bounded by visible cells.
+	## Cell identity uses course position; every motif stays inside its biome fragment.
+	if size.x <= 8.0 or size.y <= 32.0:
+		return
+	var kind := str(biome.biome_id)
+	var period := 138.0
+	var speed := 14.0
+	var salt := 3101
+	match kind:
+		"cave":
+			period = 96.0
+			speed = 8.0
+			salt = 3119
+		"haunted":
+			period = 156.0
+			speed = 18.0
+			salt = 3137
+		"lava":
+			period = 94.0
+			speed = 11.0
+			salt = 3163
+	var drift := maxf(presentation_time_seconds, 0.0) * speed
+	var first_cell := floori((view_course_left - drift - period) / period)
+	var last_cell := ceili((view_course_left + size.x - drift + period) / period)
+	for cell in range(first_cell, last_cell + 1):
+		var motif := _landmark_for_cell(cell, period, salt)
+		var course_x := motif.x + drift
+		var x := weather_canvas_x(left, course_x, view_course_left)
+		# draw_backdrop renders adjacent biomes as sibling fragments without a
+		# canvas scissor. Keep every primitive wholly inside this fragment; merely
+		# clamping its center still lets antialiasing/line width bleed across a seam.
+		var extent := weather_primitive_extent(kind)
+		if not weather_primitive_fits_fragment(left, size.x, x, extent):
+			continue
+		var edge_fade := clampf(minf(x - left, left + size.x - x) / 42.0, 0.0, 1.0)
+		if edge_fade <= 0.0:
+			continue
+		var y := size.y * (0.17 + motif.y * 0.56)
+		if kind == "haunted":
+			# Keep the fog in the shared play corridor instead of losing most
+			# motifs behind the usual solid ceiling/floor silhouettes.
+			y = size.y * (0.44 + motif.y * 0.18)
+		match kind:
+			"cave":
+				var frost := Color(0.72, 0.95, 1.0, 0.43 * edge_fade)
+				var frost_edge := Color(0.87, 0.98, 1.0, 0.28 * edge_fade)
+				# A compact six-arm ice crystal (about 12 px across), rather than
+				# isolated pinpricks. It stays well below coin/hazard scale.
+				canvas.draw_line(Vector2(x - 6.0, y), Vector2(x + 6.0, y), frost, 1.8, true)
+				canvas.draw_line(Vector2(x - 3.0, y - 5.2), Vector2(x + 3.0, y + 5.2), frost, 1.8, true)
+				canvas.draw_line(Vector2(x - 3.0, y + 5.2), Vector2(x + 3.0, y - 5.2), frost, 1.8, true)
+				canvas.draw_line(Vector2(x - 6.0, y), Vector2(x - 3.8, y - 1.8), frost_edge, 1.2, true)
+				canvas.draw_line(Vector2(x - 6.0, y), Vector2(x - 3.8, y + 1.8), frost_edge, 1.2, true)
+				canvas.draw_line(Vector2(x + 6.0, y), Vector2(x + 3.8, y - 1.8), frost_edge, 1.2, true)
+				canvas.draw_line(Vector2(x + 6.0, y), Vector2(x + 3.8, y + 1.8), frost_edge, 1.2, true)
+				canvas.draw_circle(Vector2(x, y), 1.1, Color(0.91, 0.99, 1.0, 0.62 * edge_fade))
+			"haunted":
+				var fog := Color(0.73, 0.80, 0.98, 0.065 * edge_fade)
+				# A diffuse wisp built from overlapping soft lobes rather than a
+				# hard-edged bar that might read as a platform or collision object.
+				canvas.draw_circle(Vector2(x - 20.0, y + 3.0), 9.0, fog)
+				canvas.draw_circle(Vector2(x - 12.0, y + 1.5), 9.0, fog)
+				canvas.draw_circle(Vector2(x - 4.0, y), 9.0, fog)
+				canvas.draw_circle(Vector2(x + 4.0, y - 1.5), 9.0, fog)
+				canvas.draw_circle(Vector2(x + 12.0, y - 3.0), 9.0, fog)
+				canvas.draw_circle(Vector2(x + 20.0, y - 4.5), 9.0, fog)
+				canvas.draw_line(Vector2(x - 19.0, y + 3.0), Vector2(x + 19.0, y - 4.0), Color(0.82, 0.87, 1.0, 0.035 * edge_fade), 2.0, true)
+			"lava":
+				var ember := Color(1.0, 0.40, 0.12, 0.68 * edge_fade)
+				var ember_core := Color(1.0, 0.76, 0.36, 0.58 * edge_fade)
+				# Small tilted ember with a visible head and short tail, 10–12 px
+				# overall. This reads as drifting ash, not a collectible or projectile.
+				var ember_shape := PackedVector2Array([
+					Vector2(x + 6.0, y - 4.5), Vector2(x + 2.0, y - 1.5),
+					Vector2(x + 1.0, y + 4.5), Vector2(x - 4.0, y + 6.0),
+					Vector2(x - 2.0, y), Vector2(x - 0.5, y - 5.5)
+				])
+				canvas.draw_colored_polygon(ember_shape, ember)
+				canvas.draw_line(Vector2(x - 3.5, y + 5.0), Vector2(x - 6.0, y + 8.0), Color(1.0, 0.54, 0.19, 0.42 * edge_fade), 2.0, true)
+				canvas.draw_circle(Vector2(x + 1.0, y - 1.0), 1.6, ember_core)
+			"_":
+				var sparkle := Color(0.91, 0.96, 1.0, 0.24 * edge_fade)
+				canvas.draw_circle(Vector2(x, y), 1.5, sparkle)
+
+static func weather_canvas_x(fragment_left: float, motif_course_x: float, fragment_course_left: float) -> float:
+	## Spatial phase is anchored to course position. A biome fragment changes both
+	## left values by the same amount, so splitting the viewport cannot move weather.
+	return fragment_left + motif_course_x - fragment_course_left
+
+static func weather_primitive_extent(biome_kind: String) -> float:
+	match biome_kind:
+		"cave": return 7.0
+		"lava": return 9.0
+		"haunted": return 35.0
+		_: return 2.0
+
+static func weather_primitive_fits_fragment(fragment_left: float, fragment_width: float, center_x: float, extent: float) -> bool:
+	## Draw calls have no global canvas scissor, so require the full antialiased
+	## primitive bounds to fit instead of allowing a neighboring biome bleed.
+	return fragment_width > 0.0 and center_x - extent >= fragment_left and center_x + extent <= fragment_left + fragment_width
 
 static func draw_surface_tiles(canvas: CanvasItem, biome: BiomeDefinition, ceiling: bool, start_x: float, end_x: float, canvas_origin_x: float, surface_y_at: Callable, tint := Color.WHITE, biome_distance_offset := 0.0, generator_version: int = GENERATOR_VERSION_14 - 1) -> bool:
 	if end_x <= start_x:
