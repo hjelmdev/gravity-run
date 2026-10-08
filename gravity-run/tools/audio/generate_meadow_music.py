@@ -3,7 +3,7 @@
 
     python3 tools/audio/generate_meadow_music.py
 
-Writes assets/audio/music/meadow_summer.ogg (a seamless ~61 s loop at 126 BPM,
+Writes assets/audio/music/meadow_summer.ogg (a seamless ~55 s loop at 140 BPM,
 C major: pulse lead, pulse arpeggio, triangle bass, noise drums and a few
 bird-like trills) and assets/audio/sfx/gravity_star.wav. Everything is
 synthesised here, so the files carry no third-party rights. Needs numpy and
@@ -17,7 +17,9 @@ import numpy as np
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 RATE = 44100
-BPM = 126.0
+## Footsteps of the pixel runners land on every eighth note (main.gd syncs the
+## run cycle to the music), so this is also the running cadence.
+BPM = 140.0
 EIGHTH = 60.0 / BPM / 2.0
 NOTES = {"C": 0, "C#": 1, "D": 2, "D#": 3, "E": 4, "F": 5, "F#": 6, "G": 7, "G#": 8, "A": 9, "A#": 10, "B": 11}
 
@@ -162,11 +164,13 @@ def build_music():
             n = int(0.09 * RATE)
             snare = rng.uniform(-1, 1, n) * np.exp(-np.arange(n) / RATE * 38)
             mix[t0:t0 + n] += snare[: max(0, min(n, total - t0))] * 0.07
-        h0 = int((b * beat + EIGHTH) * RATE)
-        n = int(0.03 * RATE)
-        hat = rng.uniform(-1, 1, n) * np.exp(-np.arange(n) / RATE * 140)
-        hat = np.diff(hat, prepend=0.0)
-        mix[h0:h0 + n] += hat[: max(0, min(n, total - h0))] * 0.05
+        # Hats on every eighth (the footsteps), accented off-beats.
+        for half in (0, 1):
+            h0 = int((b * beat + half * EIGHTH) * RATE)
+            n = int(0.03 * RATE)
+            hat = rng.uniform(-1, 1, n) * np.exp(-np.arange(n) / RATE * 140)
+            hat = np.diff(hat, prepend=0.0)
+            mix[h0:h0 + n] += hat[: max(0, min(n, total - h0))] * (0.055 if half else 0.03)
     # A few bird trills in the airy bridge.
     for bar in (25, 27, 29):
         start = int((bar * 8 + 5) * EIGHTH * RATE)

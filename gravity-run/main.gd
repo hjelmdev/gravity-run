@@ -50,6 +50,9 @@ const SfxAudibilityRules := preload("res://systems/sfx_audibility_rules.gd")
 const SfxAudioDiagnosticCapture := preload("res://systems/sfx_audio_diagnostic_capture.gd")
 const CampaignRunScript := preload("res://campaign/campaign_run.gd")
 const MEADOW_MUSIC: AudioStream = preload("res://assets/audio/music/meadow_summer.ogg")
+## tools/audio/generate_meadow_music.py writes the track at this tempo; the
+## run cycle puts a footstep on every eighth note.
+const MEADOW_MUSIC_BPM := 140.0
 const CampaignResultPanelScript := preload("res://campaign/campaign_result_panel.gd")
 const CampaignBannerScript := preload("res://campaign/campaign_banner.gd")
 ## Ticks the runner keeps running past the finish line before the result.
@@ -299,6 +302,30 @@ const HUD_BAND_BOTTOM := 52.0
 const HUD_FADED_ALPHA := 0.3
 var _hud_alpha := 1.0
 
+## On the meadow the runner's feet follow the music: two footsteps per run
+## cycle, one per eighth note. Other runs keep the authored animation speed.
+func _sync_run_cycle_to_music() -> void:
+	var sprite := player.get_node("AnimatedSprite2D") as AnimatedSprite2D
+	if sprite == null:
+		return
+	var synced := _campaign_level != null and _campaign_level.get_presentation_biome() == &"meadow"
+	if not synced or sprite.animation != &"run" or sprite.sprite_frames == null:
+		sprite.speed_scale = 1.0
+		return
+	var frame_count := sprite.sprite_frames.get_frame_count(&"run")
+	var eighth := 30.0 / MEADOW_MUSIC_BPM
+	var frames_per_step := float(frame_count) / 2.0
+	var music_time := float(MusicController.get_audible_position(MEADOW_MUSIC))
+	if music_time < 0.0 or not sprite.is_playing():
+		# No music (muted or not started): same cadence, free running.
+		var base_fps := maxf(sprite.sprite_frames.get_animation_speed(&"run"), 1.0)
+		sprite.speed_scale = frames_per_step / eighth / base_fps
+		return
+	sprite.speed_scale = 0.0
+	var frame := int(floor(music_time / eighth * frames_per_step)) % frame_count
+	if sprite.frame != frame:
+		sprite.frame = frame
+
 func _update_hud_fade(delta: float) -> void:
 	if demo_mode or not is_instance_valid(hud):
 		return
@@ -449,6 +476,7 @@ func _process(delta: float) -> void:
 	sprite.position = _render_player_position - player.position + Vector2(0.0, -float(player.call("get_gravity_direction")))
 	_update_camera()
 	_update_hud_fade(delta)
+	_sync_run_cycle_to_music()
 	if is_instance_valid(_campaign_run):
 		_campaign_run.call("update_presentation", float(camera.get("left")), screen_width, Callable(self, "_surface_y_at"))
 	_update_singleplayer_rock_warning_pulse(delta)

@@ -51,6 +51,13 @@ func _process(_delta: float) -> void:
 		_menu_start_pending = false
 		_autoplay_probe_position = position
 
+## Audible position (seconds) of a track, compensated for mix latency, or -1
+## when that track is not the one playing. Used to keep the run cycle on beat.
+func get_audible_position(track: AudioStream) -> float:
+	if not is_instance_valid(_player) or track == null or _player.stream != track or not _player.playing or _player.stream_paused:
+		return -1.0
+	return maxf(_player.get_playback_position() + AudioServer.get_time_since_last_mix() - AudioServer.get_output_latency(), 0.0)
+
 ## Menus always use the default track.
 func use_menu_track() -> void:
 	if _use_track(null) and PlayerProfile.music_enabled:
