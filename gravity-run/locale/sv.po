@@ -1426,3 +1426,6 @@ msgstr "Musikvolym"
 
 msgid "My coins"
 msgstr "Mina mynt"
+
+msgid "Skin"
+msgstr "Utseende"

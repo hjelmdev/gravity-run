@@ -38,6 +38,7 @@ var _active_view := "home"
 var _mobile_text_entry := false
 var _busy := false
 var _skin_request_pending := false
+var _preferred_skin_room_key := ""
 var _lobby_buttons: Array[Button] = []
 
 func _ready() -> void:
@@ -256,13 +257,28 @@ func _toggle_ready() -> void:
 			MultiplayerV2Service.set_ready(not ready_here)
 			return
 
+func _suggest_preferred_skin(room: Dictionary, current_skin: int) -> void:
+	# Apply the hub's saved skin once when we first see ourselves in a room. A
+	# later manual change in the lobby wins, and nothing is sent outside OPEN.
+	var room_key := "%s:%s" % [str(room.get("room_id", "")), str(room.get("room_code", ""))]
+	if room_key == _preferred_skin_room_key:
+		return
+	_preferred_skin_room_key = room_key
+	var preferred := posmod(int(PlayerProfile.preferred_skin_id), SkinPalette.SKIN_COUNT)
+	if preferred == current_skin or _skin_request_pending or str(room.get("phase", "OPEN")) != "OPEN":
+		return
+	_skin_request_pending = true
+	MultiplayerV2Service.set_skin_id(preferred)
+
 func _change_skin(direction: int) -> void:
 	if _skin_request_pending:
 		return
 	for member_value in _room.get("members", []):
 		if member_value is Dictionary and str(member_value.get("user_id", "")) == MultiplayerV2Service.identity_user_id:
 			_skin_request_pending = true
-			MultiplayerV2Service.set_skin_id(posmod(int(member_value.get("skin_id", 0)) + direction, SkinPalette.SKIN_COUNT))
+			var next_skin := posmod(int(member_value.get("skin_id", 0)) + direction, SkinPalette.SKIN_COUNT)
+			PlayerProfile.set_preferred_skin_id(next_skin)
+			MultiplayerV2Service.set_skin_id(next_skin)
 			_refresh_controls()
 			return
 
@@ -319,6 +335,7 @@ func _on_room_changed(room: Dictionary) -> void:
 			row.add_child(link_label)
 		var skin_id := posmod(int(member.get("skin_id", 0)), SkinPalette.SKIN_COUNT)
 		if is_local:
+			_suggest_preferred_skin(room, skin_id)
 			var previous_skin := _button("<")
 			previous_skin.custom_minimum_size = Vector2(36, 34)
 			previous_skin.tooltip_text = tr("Previous skin")

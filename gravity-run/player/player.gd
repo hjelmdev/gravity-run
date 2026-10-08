@@ -78,7 +78,8 @@ func set_skin_id(skin_id: int) -> void:
 		return
 	_skin_id = resolved_skin
 	if is_instance_valid(sprite):
-		sprite.material = SkinPalette.make_material(_skin_id)
+		# Hue shift 0 is the authored palette, so skip the shader entirely.
+		sprite.material = null if _skin_id == 0 else SkinPalette.make_material(_skin_id)
 
 func get_player_rect() -> Rect2:
 	return Rect2(global_position - PLAYER_SIZE * 0.5, PLAYER_SIZE)

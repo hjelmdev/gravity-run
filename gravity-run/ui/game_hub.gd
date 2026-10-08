@@ -1,6 +1,8 @@
 extends Control
 
 const ActionIconScript := preload("res://ui/action_icon.gd")
+const SkinPalette := preload("res://player/skin_palette.gd")
+const RunnerFrames := preload("res://assets/character/run_frames.tres")
 
 signal start_run_requested
 signal challenges_requested
@@ -18,6 +20,8 @@ var _seed_edit: LineEdit
 var _seed_label: Label
 var _seed_mobile_button: Button
 var _mobile_text_entry := false
+var _skin_preview: TextureRect
+var _skin_preview_frame := 0.0
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -112,6 +116,7 @@ func _build() -> void:
 	equipment_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	equipment_row.add_theme_constant_override("separation", 16)
 	layout.add_child(equipment_row)
+	equipment_row.add_child(_make_skin_picker())
 	equipment_row.add_child(_make_icon_action("inventory", tr("Character and inventory"), tr("Character / Inventory"), character_requested.emit))
 	equipment_row.add_child(_make_icon_action("shop", tr("Shop"), tr("Shop"), shop_requested.emit))
 	var main_menu_button := _make_button(tr("Main menu"), 30.0)
@@ -122,6 +127,67 @@ func _build() -> void:
 	AuthService.auth_state_changed.connect(_on_account_changed)
 	AccountProgress.progress_changed.connect(_on_progress_changed)
 	PlayerAccountProfile.profile_changed.connect(_on_profile_changed)
+
+## Runner colour picker. The choice is stored locally (PlayerProfile) and used
+## for singleplayer runs and as the default skin in multiplayer lobbies.
+func _make_skin_picker() -> Control:
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 3)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 4)
+	column.add_child(row)
+	var previous := Button.new()
+	previous.text = "<"
+	previous.custom_minimum_size = Vector2(30.0, 48.0)
+	previous.tooltip_text = tr("Previous skin")
+	previous.accessibility_name = previous.tooltip_text
+	previous.pressed.connect(_cycle_skin.bind(-1))
+	row.add_child(previous)
+	_skin_preview = TextureRect.new()
+	_skin_preview.custom_minimum_size = Vector2(48.0, 48.0)
+	_skin_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_skin_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_skin_preview.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_skin_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_skin_preview.texture = RunnerFrames.get_frame_texture("run", 0)
+	row.add_child(_skin_preview)
+	var next := Button.new()
+	next.text = ">"
+	next.custom_minimum_size = Vector2(30.0, 48.0)
+	next.tooltip_text = tr("Next skin")
+	next.accessibility_name = next.tooltip_text
+	next.pressed.connect(_cycle_skin.bind(1))
+	row.add_child(next)
+	var label := Label.new()
+	label.text = tr("Skin")
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 11)
+	column.add_child(label)
+	_apply_skin_preview()
+	return column
+
+func _cycle_skin(direction: int) -> void:
+	PlayerProfile.set_preferred_skin_id(PlayerProfile.preferred_skin_id + direction)
+	_apply_skin_preview()
+
+func _apply_skin_preview() -> void:
+	if not is_instance_valid(_skin_preview):
+		return
+	var skin_id := int(PlayerProfile.preferred_skin_id)
+	_skin_preview.material = null if skin_id == 0 else SkinPalette.make_material(skin_id)
+
+func _process(delta: float) -> void:
+	# Let the preview runner jog in place so the picker reads as a character.
+	if not is_instance_valid(_skin_preview) or not is_visible_in_tree():
+		return
+	var frame_count := RunnerFrames.get_frame_count("run")
+	if frame_count <= 0:
+		return
+	var previous_frame := int(_skin_preview_frame)
+	_skin_preview_frame = fmod(_skin_preview_frame + delta * RunnerFrames.get_animation_speed("run"), float(frame_count))
+	if int(_skin_preview_frame) != previous_frame:
+		_skin_preview.texture = RunnerFrames.get_frame_texture("run", int(_skin_preview_frame))
 
 func _make_icon_action(icon_name: String, accessible_name: String, caption: String, callback: Callable) -> Control:
 	var column := VBoxContainer.new()

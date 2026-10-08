@@ -124,3 +124,6 @@ msgstr "Capture ZIP saved: %d frames, %d bytes."
 
 msgid "Could not save capture ZIP."
 msgstr "Could not save capture ZIP."
+
+msgid "Skin"
+msgstr "Skin"

@@ -4,9 +4,11 @@ signal music_volume_changed(value: float)
 signal music_enabled_changed(enabled: bool)
 signal sfx_volume_changed(value: float)
 signal sfx_enabled_changed(enabled: bool)
+signal preferred_skin_changed(skin_id: int)
 
 const DEFAULT_CHARACTER_STATS := preload("res://characters/runner_stats.tres")
 const SAVE_PATH := "user://gravity_run_profile.cfg"
+const SkinPalette := preload("res://player/skin_palette.gd")
 
 var best_distance_m := 0.0
 var flip_control := "keyboard"
@@ -18,6 +20,9 @@ var music_volume := DEFAULT_MUSIC_VOLUME
 var music_enabled := true
 var sfx_volume := DEFAULT_SFX_VOLUME
 var sfx_enabled := true
+## Runner colour used in singleplayer and suggested when joining a multiplayer
+## lobby. Bounded by SkinPalette.SKIN_COUNT (the lobby RPC accepts 0..3).
+var preferred_skin_id := 0
 var character_stats: Resource
 var _saved_challenges: Array[Dictionary] = []
 var _music_save_timer: Timer
@@ -57,6 +62,7 @@ func _load_profile() -> void:
 		return
 	best_distance_m = float(config.get_value("profile", "best_distance_m", 0.0))
 	leaderboard_name = str(config.get_value("profile", "leaderboard_name", ""))
+	preferred_skin_id = posmod(int(config.get_value("profile", "preferred_skin_id", 0)), SkinPalette.SKIN_COUNT)
 	var saved_challenges: Variant = config.get_value("profile", "saved_challenges", [])
 	_saved_challenges.clear()
 	if saved_challenges is Array:
@@ -149,6 +155,7 @@ func _save_profile() -> void:
 	config.load(SAVE_PATH)
 	config.set_value("profile", "best_distance_m", best_distance_m)
 	config.set_value("profile", "leaderboard_name", leaderboard_name)
+	config.set_value("profile", "preferred_skin_id", preferred_skin_id)
 	config.set_value("profile", "saved_challenges", _saved_challenges)
 	config.set_value("settings", "flip_control", flip_control)
 	config.set_value("settings", "language", language)
@@ -159,6 +166,14 @@ func _save_profile() -> void:
 	var error := config.save(SAVE_PATH)
 	if error != OK:
 		push_warning("Could not save Gravity Run profile (error %s)." % error)
+
+func set_preferred_skin_id(skin_id: int) -> void:
+	var resolved := posmod(skin_id, SkinPalette.SKIN_COUNT)
+	if resolved == preferred_skin_id:
+		return
+	preferred_skin_id = resolved
+	_save_profile()
+	preferred_skin_changed.emit(preferred_skin_id)
 
 func set_leaderboard_name(value: String) -> void:
 	leaderboard_name = value.strip_edges().left(16)

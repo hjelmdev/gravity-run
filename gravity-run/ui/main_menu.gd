@@ -71,6 +71,7 @@ func _ready() -> void:
 	demo_background.name = "AutoplayBackground"
 	demo_background.set("demo_mode", true)
 	get_parent().get_parent().get_node("WorldBackground").add_child(demo_background)
+	child_entered_tree.connect(_on_menu_child_entered)
 	_build_menu()
 	if AppNavigation.consume_multiplayer_lobby_request():
 		_show_game_hub()
@@ -92,6 +93,16 @@ func _ready() -> void:
 			_challenge_preview_ready = true
 			_challenge_join_button.text = tr("Start challenge")
 			ChallengeService.fetch_current_scores()
+
+## Every menu screen is rebuilt as a new child; fade it in instead of popping.
+func _on_menu_child_entered(node: Node) -> void:
+	if not node is Control or node is ColorRect:
+		return
+	var control := node as Control
+	control.modulate.a = 0.0
+	var tween := control.create_tween()
+	tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tween.tween_property(control, "modulate:a", 1.0, 0.16)
 
 func _build_menu() -> void:
 	var tint := ColorRect.new()

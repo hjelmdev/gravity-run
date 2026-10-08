@@ -184,6 +184,7 @@ func _start_run() -> void:
 		MusicController.start_round(_singleplayer_audio_round_id)
 		SfxController.begin_round(_singleplayer_audio_round_id)
 	player.call("reset_to_floor", WORLD_HEIGHT - 80.0)
+	player.call("set_skin_id", randi_range(0, 3) if demo_mode else PlayerProfile.preferred_skin_id)
 	var loadout_snapshot: Resource = InventoryService.create_run_loadout_snapshot(PlayerProfile.get_character_stats())
 	run_state.call("set_loadout_snapshot", loadout_snapshot)
 	player.call("set_loadout_snapshot", loadout_snapshot)
