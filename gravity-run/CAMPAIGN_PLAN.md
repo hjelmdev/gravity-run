@@ -9,7 +9,7 @@ Mockup av kartan: `docs/campaign_map_mockup.png`, genererad av
 Det är en skiss, inte slutlig grafik.
 
 **Beslut 2026-10-08:** guldföremålen heter *gravitationsstjärnor*, steg 1 har inga
-checkpoints, banorna ska vara 90–120 sekunder, egenskaper och upplåsningar tas senare,
+checkpoints, banorna ska vara 30–45 sekunder (ändrat efter speltest, först 90–120), egenskaper och upplåsningar tas senare,
 Rullaren byggs som prototyp först, och fler biom ger fler världar längre fram.
 
 ## Status 2026-10-08: fas 0–2 är byggda
@@ -75,7 +75,7 @@ Medvetet utanför fas 0–2:
   generatorversion, eller en "frusen" händelselista (se 4.1). Samma bana ger samma
   hinder, mynt och stjärnor varje gång och för alla spelare.
 - **Banorna har ett mål.** En målflagga efter en fast längd ersätter dagens ändlösa
-  löpning. Längden är **90–120 sekunder** vid 500 px/s, vilket blir 45 000–60 000 px.
+  löpning. Längden är **30–45 sekunder** vid 500 px/s, vilket blir 15 000–22 500 px (90–120 s var för långt i speltest).
 
 ## 2. Spelarens loop
 
@@ -107,7 +107,7 @@ Medvetet utanför fas 0–2:
 ### 3.3 Poäng och liv
 - **Poäng** = mynt × 10 + stjärnor × 500 + hemlighet × 1 000. Farten är konstant, så tid
   används inte i poängen.
-- **Inga checkpoints i steg 1:** dör man börjar banan om. Med 90–120 sekunder per bana kan
+- **Inga checkpoints i steg 1:** dör man börjar banan om. Med 30–45 sekunder per bana behövs de troligen inte, men
   checkpoints behövas för de svåraste banorna. Det utvärderas efter speltest (se 4.3).
 - **Inga liv eller game over** på kartnivå. Det passar en webb- och mobilrunner bäst.
 
@@ -211,7 +211,7 @@ anges i px vid 500 px/s.
 | 5 | + fallande sten + såg | mix, täthet 1,3 | mix, täthet 1,4 | mix, täthet 1,5 |
 | 6 | examen: allt, täthet 1,2, marginal 1,0 | examen 1,5 | examen 1,6 | examen 1,8, marginal 0,85 |
 
-- Längden ökar från cirka 45 000 px (90 s, 1-1) till cirka 60 000 px (120 s, bana 6 och
+- Längden ökar från cirka 15 000 px (30 s, 1-1) till cirka 22 500 px (45 s, bana 6 och
   senare världar). Långa banor kräver tydliga "andningspauser": lugnare 5–8-sekunders
   sektioner med mynt mellan intensiva partier, styrt av seed-sökarens betyg.
 - Senare världar börjar något svårare än förra världens bana 6, men bana 1 i varje värld
@@ -274,7 +274,7 @@ Fas 0–2 kan jag göra utan backend. Fas 4 kräver att Gravity Runs Supabase-pr
 
 ## 9. Beslut
 
-Tagna 2026-10-08: namnet *gravitationsstjärnor*, inga checkpoints i steg 1, 90–120
+Tagna 2026-10-08: namnet *gravitationsstjärnor*, inga checkpoints i steg 1, 30–45 (först 90–120)
 sekunder per bana, Rullaren som första boss och prototyp.
 
 Öppna (tas senare):

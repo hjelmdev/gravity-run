@@ -6,8 +6,8 @@ extends Control
 ## themed controls so they stay crisp at any size.
 ##
 ## Keys: left/right choose a stage, Enter/Space plays, Q/E or PageUp/PageDown
-## change world, Esc goes back. Mouse and touch: tap a stone to choose it, tap
-## it again (or Play) to start.
+## change world, Esc goes back. Mouse and touch: tap a stone to walk there,
+## then Play to start.
 
 signal play_requested(level: CampaignLevel)
 signal back_requested
@@ -337,10 +337,8 @@ func _gui_input(event: InputEvent) -> void:
 	var world := _world()
 	for i in range(world.levels.size()):
 		if map_point.distance_to(_node_pos(i)) <= 30.0:
-			if i == _selected:
-				_play_selected()
-			else:
-				_select(i)
+			# Tapping a stone only walks there; the Play button starts it.
+			_select(i)
 			accept_event()
 			return
 

@@ -17,49 +17,49 @@ const HAUNTED_MAP_NODES := [Vector2(36, 120), Vector2(78, 92), Vector2(118, 124)
 const LAVA_MAP_NODES := [Vector2(36, 96), Vector2(76, 128), Vector2(118, 100), Vector2(158, 132), Vector2(200, 104), Vector2(240, 134), Vector2(286, 104)]
 
 ## Ängen. Each stage adds one hazard family; 1-6 is the exam with everything.
-## Lengths grow from 90 s to 120 s at the base 500 px/s.
+## Lengths grow from 30 s to 45 s at the base 500 px/s.
 const MEADOW_STAGES := [
 	{
 		"id": &"1-1", "title": "First Steps", "intro": "New: spikes and blocks",
 		"profiles": ["spike_group", "block"], "new": ["spike_group", "block"],
-		"density": 0.7, "margin": 1.5, "length": 45000.0,
+		"density": 0.85, "margin": 1.5, "length": 15000.0,
 		"seed": 1101,
-		"stars": [Vector2(11816.34, 426.00), Vector2(23943.43, 114.00), Vector2(36422.73, 114.00)],
+		"stars": [Vector2(3848.11, 114.00), Vector2(8357.47, 114.00), Vector2(13507.03, 114.00)],
 	},
 	{
 		"id": &"1-2", "title": "Mind the Gap", "intro": "New: holes in the floor and ceiling",
 		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap"], "new": ["floor_gap", "ceiling_gap"],
-		"density": 0.8, "margin": 1.35, "length": 48000.0,
-		"seed": 1217,
-		"stars": [Vector2(12379.74, 426.00), Vector2(25808.38, 114.00), Vector2(35180.72, 114.00)],
+		"density": 0.95, "margin": 1.35, "length": 16500.0,
+		"seed": 1224,
+		"stars": [Vector2(4982.69, 114.00), Vector2(9085.43, 114.00), Vector2(13707.24, 114.00)],
 	},
 	{
 		"id": &"1-3", "title": "Rolling Barrels", "intro": "New: rolling barrels",
 		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain"], "new": ["barrel_chain"],
-		"density": 0.9, "margin": 1.25, "length": 51000.0,
-		"seed": 1305,
-		"stars": [Vector2(12894.01, 114.00), Vector2(26901.53, 114.00), Vector2(41992.90, 426.00)],
+		"density": 1.05, "margin": 1.25, "length": 18000.0,
+		"seed": 1308,
+		"stars": [Vector2(4788.44, 114.00), Vector2(9715.36, 114.00), Vector2(16025.47, 426.00)],
 	},
 	{
 		"id": &"1-4", "title": "Ups and Downs", "intro": "New: steps and slopes",
 		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope"], "new": ["terrain_step", "terrain_slope"],
-		"density": 1.0, "margin": 1.15, "length": 54000.0,
-		"seed": 1413,
-		"stars": [Vector2(13680.25, 466.00), Vector2(29253.45, 106.00), Vector2(41230.62, 341.00)],
+		"density": 1.15, "margin": 1.15, "length": 19500.0,
+		"seed": 1418,
+		"stars": [Vector2(5182.72, 296.00), Vector2(11206.41, 434.80), Vector2(16213.76, 466.00)],
 	},
 	{
 		"id": &"1-5", "title": "Falling Rocks", "intro": "New: falling rocks and saw blades",
 		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade"], "new": ["falling_rock", "saw_blade"],
-		"density": 1.1, "margin": 1.05, "length": 57000.0,
-		"seed": 1510,
-		"stars": [Vector2(14557.17, 79.67), Vector2(30225.40, 119.00), Vector2(44709.36, 254.00)],
+		"density": 1.4, "margin": 1.05, "length": 21000.0,
+		"seed": 1519,
+		"stars": [Vector2(5570.83, 114.00), Vector2(11289.32, 114.00), Vector2(17755.97, 74.00)],
 	},
 	{
 		"id": &"1-6", "title": "Meadow Exam", "intro": "Everything the meadow has taught you",
 		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade"], "new": [],
-		"density": 1.25, "margin": 1.0, "length": 60000.0,
-		"seed": 1602,
-		"stars": [Vector2(14988.49, 154.00), Vector2(32063.18, 254.00), Vector2(45359.16, 118.00)],
+		"density": 1.4, "margin": 1.0, "length": 22500.0,
+		"seed": 1605,
+		"stars": [Vector2(5765.90, 222.00), Vector2(11956.02, 222.00), Vector2(18287.82, 222.00)],
 	},
 ]
 
@@ -125,7 +125,19 @@ static func _make_world(world_id: StringName, number: int, title: String, biome_
 	world.accent = accent
 	return world
 
-static func make_ruleset(stage_id: StringName, biome_id: StringName, profiles: Array, density: float, margin: float) -> Resource:
+## Hazards a stage introduces show up more often there, so the stage is
+## actually about them (barrel chains attach to blocks/spikes and keep their
+## own rate).
+const NEW_HAZARD_WEIGHT := 2.5
+
+static func stage_weights(spec: Dictionary) -> Dictionary:
+	var weights: Dictionary = {}
+	for hazard in spec.get("new", []):
+		if hazard != "barrel_chain":
+			weights[hazard] = NEW_HAZARD_WEIGHT
+	return weights
+
+static func make_ruleset(stage_id: StringName, biome_id: StringName, profiles: Array, density: float, margin: float, weights: Dictionary = {}) -> Resource:
 	var ruleset := RulesetScript.new() as Resource
 	ruleset.set("ruleset_id", StringName("campaign_%s" % String(stage_id).replace("-", "_")))
 	ruleset.set("revision", 1)
@@ -135,6 +147,7 @@ static func make_ruleset(stage_id: StringName, biome_id: StringName, profiles: A
 	ruleset.set("reaction_margin", margin)
 	ruleset.set("coin_revision", CAMPAIGN_COIN_REVISION)
 	ruleset.set("locked_biome", biome_id)
+	ruleset.set("profile_weight_multipliers", weights.duplicate())
 	return ruleset
 
 static func _make_stage(world_id: StringName, biome_id: StringName, index: int, spec: Dictionary) -> CampaignLevel:
@@ -146,7 +159,7 @@ static func _make_stage(world_id: StringName, biome_id: StringName, index: int, 
 	level.intro = spec.intro
 	level.seed_value = int(spec.seed)
 	level.generator_version = CAMPAIGN_GENERATOR_VERSION
-	level.ruleset = make_ruleset(spec.id, biome_id, spec.profiles, float(spec.density), float(spec.margin))
+	level.ruleset = make_ruleset(spec.id, biome_id, spec.profiles, float(spec.density), float(spec.margin), stage_weights(spec))
 	level.length_px = float(spec.length)
 	level.stars = PackedVector2Array(spec.stars)
 	level.new_hazards = PackedStringArray(spec.new)

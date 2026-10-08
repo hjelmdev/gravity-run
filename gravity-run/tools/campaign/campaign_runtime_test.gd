@@ -54,7 +54,7 @@ func _check_catalog() -> void:
 		if level.is_boss():
 			continue
 		_check(level.stars.size() == 3, "%s has three gravity stars" % level.level_id)
-		_check(level.length_px >= 45000.0 and level.length_px <= 60000.0, "%s is 90-120 s long" % level.level_id)
+		_check(level.length_px >= 15000.0 and level.length_px <= 22500.0, "%s is 30-45 s long" % level.level_id)
 		BiomeRendererScript.set_locked_biome(level.get_locked_biome())
 		var gen := Gen.new()
 		_check(gen.configure_run_definition(level.create_run_definition()), "%s configures the generator" % level.level_id)

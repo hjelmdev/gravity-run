@@ -45,7 +45,7 @@ func _initialize() -> void:
 	quit(0)
 
 static func evaluate(spec: Dictionary, biome: StringName, seed_value: int) -> Dictionary:
-	var ruleset := Catalog.make_ruleset(spec.id, biome, spec.profiles, float(spec.density), float(spec.margin))
+	var ruleset := Catalog.make_ruleset(spec.id, biome, spec.profiles, float(spec.density), float(spec.margin), Catalog.stage_weights(spec))
 	var level := CampaignLevel.new()
 	level.level_id = spec.id
 	level.seed_value = seed_value

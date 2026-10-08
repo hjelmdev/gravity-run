@@ -21,6 +21,12 @@ var _flip_cooldown_multiplier := 1.0
 var _touch_gesture: RefCounted = TouchGestureLifecycleScript.new()
 var _skin_id := -1
 var _character_offset_y := 0.0
+var _pixel_scale := 1.5
+## Drawn vertical facing, eased toward gravity_direction. Flipping the art
+## instantly made the head poke through the surface for a frame while the
+## runner had not yet left it; a short squash-turn hides that.
+var _visual_flip := 1.0
+const VISUAL_FLIP_SECONDS := 0.09
 ## Absolute horizontal course coordinate, independent of camera and viewport.
 var world_x := PLAYER_X
 @onready var effects: Node = $PlayerEffects
@@ -36,6 +42,7 @@ func reset_to_floor(floor_surface_y: float) -> void:
 	position = Vector2(world_x, floor_surface_y - PLAYER_SIZE.y * 0.5)
 	vertical_speed = 0.0
 	gravity_direction = 1
+	_visual_flip = 1.0
 	grounded = true
 	cooldown_left = 0.0
 	input_enabled = true
@@ -94,8 +101,7 @@ func apply_character(definition: Resource) -> void:
 		sprite.sprite_frames = frames
 		if was_playing or input_enabled:
 			sprite.play("run")
-	var pixel_scale := float(definition.get("pixel_scale"))
-	sprite.scale = Vector2(pixel_scale, pixel_scale)
+	_pixel_scale = float(definition.get("pixel_scale"))
 	_character_offset_y = float((definition.get("sprite_offset") as Vector2).y)
 	_update_sprite_orientation()
 
@@ -129,14 +135,18 @@ func advance(delta: float, floor_surface_y: float, ceiling_surface_y: float, flo
 	gravity_direction = int(motion_state.gravity_direction)
 	grounded = bool(motion_state.grounded)
 	cooldown_left = float(motion_state.cooldown)
+	_visual_flip = move_toward(_visual_flip, float(gravity_direction), 2.0 * delta / VISUAL_FLIP_SECONDS)
 	_update_sprite_orientation()
 	status_changed.emit(gravity_direction, cooldown_left)
 
 func _update_sprite_orientation() -> void:
 	if not is_instance_valid(sprite):
 		return
-	sprite.flip_v = gravity_direction < 0
-	sprite.offset.y = _character_offset_y * float(gravity_direction)
+	sprite.flip_v = false
+	# A negative scale mirrors the art and its foot offset together.
+	var facing := _visual_flip if absf(_visual_flip) > 0.08 else (0.08 if _visual_flip >= 0.0 else -0.08)
+	sprite.scale = Vector2(_pixel_scale, _pixel_scale * facing)
+	sprite.offset.y = _character_offset_y
 	sprite.position.y = -float(gravity_direction) * SPRITE_SURFACE_GAP
 
 func _is_pause_button_position(point: Vector2) -> bool:

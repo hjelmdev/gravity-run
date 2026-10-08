@@ -54,6 +54,7 @@ var _return_to_hub_after_screen := false
 var _world_map: Control
 
 func _ready() -> void:
+	MusicController.use_menu_track()
 	MusicController.enter_menu()
 	BiomeRenderer.set_locked_biome(&"")
 	# In the menus no stage is being played; the map sets one when you press Play.

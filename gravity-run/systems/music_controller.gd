@@ -51,6 +51,22 @@ func _process(_delta: float) -> void:
 		_menu_start_pending = false
 		_autoplay_probe_position = position
 
+## Menus always use the default track.
+func use_menu_track() -> void:
+	if _use_track(null) and PlayerProfile.music_enabled:
+		_start_playback_if_needed()
+
+func _use_track(track: AudioStream) -> bool:
+	var target := track if track != null else MUSIC_STREAM
+	if not is_instance_valid(_player) or _player.stream == target:
+		return false
+	if target is AudioStreamOggVorbis:
+		(target as AudioStreamOggVorbis).loop = true
+	_player.stop()
+	_player.stream = target
+	_pause_position_valid = false
+	return true
+
 func enter_menu() -> void:
 	if not PlayerProfile.music_enabled:
 		_stop_for_disabled_setting()
@@ -71,11 +87,14 @@ func prepare_round() -> void:
 		_context_tween.tween_property(_player, "volume_db", -50.0, 0.25)
 		_context_tween.tween_callback(_player.stop)
 
-func start_round(round_id: String) -> void:
+## Rounds may bring their own track (campaign worlds); null means the
+## default music. Changing track restarts playback from the top.
+func start_round(round_id: String, track: AudioStream = null) -> void:
 	if not PlayerProfile.music_enabled or round_id.is_empty() or round_id == _last_round_id:
 		return
 	_last_round_id = round_id
 	_cancel_context_fade()
+	_use_track(track)
 	_player.stream_paused = false
 	if not _player.playing:
 		_player.volume_db = -50.0

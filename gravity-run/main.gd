@@ -49,9 +49,14 @@ const CoursePresentation := preload("res://systems/race_course_presentation.gd")
 const SfxAudibilityRules := preload("res://systems/sfx_audibility_rules.gd")
 const SfxAudioDiagnosticCapture := preload("res://systems/sfx_audio_diagnostic_capture.gd")
 const CampaignRunScript := preload("res://campaign/campaign_run.gd")
+const MEADOW_MUSIC: AudioStream = preload("res://assets/audio/music/meadow_summer.ogg")
 const CampaignResultPanelScript := preload("res://campaign/campaign_result_panel.gd")
 ## Ticks the runner keeps running past the finish line before the result.
 const CAMPAIGN_RUNOUT_TICKS := 75
+## Singleplayer pickup reach. The pixel runners are drawn wider than the shared
+## 34x44 hitbox, so a coin the art visibly runs through must still count.
+## Multiplayer validates coins on its own and is unaffected.
+const SP_COIN_PICKUP_RADIUS := 19.0
 
 @onready var player: Node2D = $Player
 @onready var run_state: Node = $RunState
@@ -196,7 +201,10 @@ func _start_run() -> void:
 	if not demo_mode:
 		AchievementService.begin_run()
 		_singleplayer_audio_round_id = "singleplayer:%d" % Time.get_ticks_usec()
-		MusicController.start_round(_singleplayer_audio_round_id)
+		var campaign_track: AudioStream = null
+		if Campaign.active_level != null and Campaign.active_level.get_presentation_biome() == &"meadow":
+			campaign_track = MEADOW_MUSIC
+		MusicController.start_round(_singleplayer_audio_round_id, campaign_track)
 		SfxController.begin_round(_singleplayer_audio_round_id)
 	player.call("reset_to_floor", WORLD_HEIGHT - 80.0)
 	player.call("set_skin_id", randi_range(0, 3) if demo_mode else PlayerProfile.preferred_skin_id)
@@ -297,11 +305,15 @@ func _setup_campaign_run() -> void:
 	_campaign_run.call("setup", _campaign_level)
 	_campaign_run.connect("callout", Callable(hud, "show_campaign_callout"))
 	_campaign_run.connect("stars_changed", Callable(hud, "set_campaign_stars"))
+	_campaign_run.connect("stars_changed", _on_campaign_star_collected)
 	_campaign_run.connect("boss_changed", Callable(hud, "set_campaign_boss"))
 	if not _campaign_level.intro.is_empty():
 		hud.call("show_campaign_callout", "%s · %s" % [tr(_campaign_level.title), tr(_campaign_level.intro)], Color("edf3ff"))
 	if _campaign_level.is_boss():
 		hud.call("set_campaign_boss", RullarenBoss.MAX_HP, RullarenBoss.MAX_HP)
+
+func _on_campaign_star_collected(collected: int, _total: int) -> void:
+	_play_singleplayer_sfx("gravity_star", "%s|gravity_star|%d" % [_singleplayer_audio_round_id, collected])
 
 func _sync_screen_size() -> void:
 	var viewport_size := get_viewport_rect().size
@@ -726,7 +738,7 @@ func _physics_process(delta: float) -> void:
 			if not is_instance_valid(coin) or bool(coin.call("is_collected")):
 				continue
 			var center := coin.global_position
-			var fraction := HAZARD_RULES_SCRIPT.swept_rect_circle_fraction(previous_player_rect, final_player_rect.position - previous_player_rect.position, center, 13.0)
+			var fraction := HAZARD_RULES_SCRIPT.swept_rect_circle_fraction(previous_player_rect, final_player_rect.position - previous_player_rect.position, center, SP_COIN_PICKUP_RADIUS)
 			if render_diagnostics_enabled:
 				_record_coin_sweep_diagnostic(coin, previous_player_rect, final_player_rect, fraction, lethal_fraction)
 			if is_instance_valid(_sfx_audio_diagnostic_capture) and bool(_sfx_audio_diagnostic_capture.call("is_capture_active")):

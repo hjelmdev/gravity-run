@@ -95,6 +95,9 @@ static func draw_backdrop(canvas: CanvasItem, view_left: float, view_size: Vecto
 		var cycle_start: float = floor(distance / cycle_length) * cycle_length
 		var next_theme_distance: float = cycle_start + (floor(fposmod(distance, cycle_length) / THEME_LENGTH) + 1.0) * THEME_LENGTH
 		var segment_end := minf(right, cursor + maxf(next_theme_distance - distance, 1.0))
+		if _locked_definition != null:
+			# One biome for the whole view: no theme seams to split at.
+			segment_end = right
 		var segment_size := Vector2(segment_end - cursor, view_size.y)
 		var layout_size := Vector2(segment_size.x, minf(view_size.y, LOGICAL_BACKGROUND_HEIGHT))
 		var fragment_offset := cursor - view_left
@@ -423,12 +426,15 @@ static func _draw_meadow_backdrop(canvas: CanvasItem, left: float, size: Vector2
 		var cx := view_left + landmark.x - cloud_parallax
 		var cy := size.y * (0.20 + landmark.y * 0.16)
 		var w := 60.0 + landmark.y * 50.0
-		if cx - w * 0.6 < left or cx + w * 0.6 > right:
+		if cx + w * 0.6 < left or cx - w * 0.6 > right:
 			continue
 		var cloud := Color(1.0, 1.0, 1.0, 0.85)
-		canvas.draw_rect(Rect2(Vector2(cx - w * 0.5, cy - 8.0), Vector2(w, 16.0)), cloud)
-		canvas.draw_rect(Rect2(Vector2(cx - w * 0.3, cy - 18.0), Vector2(w * 0.45, 12.0)), cloud)
-		canvas.draw_rect(Rect2(Vector2(cx - w * 0.05, cy - 24.0), Vector2(w * 0.3, 10.0)), cloud)
+		# Clip to the fragment instead of skipping, so clouds slide in and out
+		# of view rather than popping at the edges.
+		for part in [Rect2(cx - w * 0.5, cy - 8.0, w, 16.0), Rect2(cx - w * 0.3, cy - 18.0, w * 0.45, 12.0), Rect2(cx - w * 0.05, cy - 24.0, w * 0.3, 10.0)]:
+			var clipped: Rect2 = part.intersection(Rect2(left, 0.0, size.x, size.y))
+			if clipped.size.x > 0.0:
+				canvas.draw_rect(clipped, cloud)
 	_draw_meadow_hills(canvas, left, size, view_left, camera_course_distance * 0.10, size.y * 0.52, 34.0, 0.011, Color(0.55, 0.77, 0.6))
 	_draw_meadow_hills(canvas, left, size, view_left, camera_course_distance * 0.22, size.y * 0.64, 28.0, 0.017, Color(0.4, 0.66, 0.42))
 

@@ -16,6 +16,7 @@ const STREAMS: Dictionary = {
 	"rock_impact": preload("res://assets/audio/sfx/rock_impact.wav"),
 	"ghost_warning": preload("res://assets/audio/sfx/ghost_warning.wav"),
 	"death": preload("res://assets/audio/sfx/death.mp3"),
+	"gravity_star": preload("res://assets/audio/sfx/gravity_star.wav"),
 }
 
 var _voices: Array[AudioStreamPlayer] = []

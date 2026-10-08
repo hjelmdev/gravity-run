@@ -1666,3 +1666,24 @@ msgstr "Upplåst: %s %s"
 
 msgid "+%d new gravity stars"
 msgstr "+%d nya gravitationsstjärnor"
+
+msgid "Choose a stronger password (at least 8 characters)."
+msgstr "Välj ett starkare lösenord (minst 8 tecken)."
+
+msgid "Enter a valid email address."
+msgstr "Ange en giltig e-postadress."
+
+msgid "GRAVITY RUN"
+msgstr "GRAVITY RUN"
+
+msgid "Multiplayer"
+msgstr "Multiplayer"
+
+msgid "New random course"
+msgstr "Ny slumpad bana"
+
+msgid "Password"
+msgstr "Lösenord"
+
+msgid "Replay this course"
+msgstr "Kör banan igen"
