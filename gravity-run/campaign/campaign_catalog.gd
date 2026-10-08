@@ -220,6 +220,9 @@ static func _build_worlds() -> Array[CampaignWorld]:
 	var haunted := _make_world(&"haunted", 3, "Haunted Woods", &"haunted", "map_haunted", HAUNTED_MAP_NODES, Color("b69cff"))
 	_add_stages(haunted, HAUNTED_STAGES)
 	haunted.levels.append(_make_boss(&"haunted", &"haunted", haunted.levels.size() + 1, &"3-B", "Ghost King", "Boss: the king who copies you", &"ghost_king"))
+	# Presentation only; encounters use the haunted mix.
+	for level in haunted.levels:
+		level.presentation_biome = &"haunted_campaign"
 	result.append(haunted)
 	# Later worlds are on the map already; their stages arrive in later phases.
 	result.append(_make_world(&"volcano", 4, "The Volcano", &"lava", "map_volcano", LAVA_MAP_NODES, Color("ff814f")))

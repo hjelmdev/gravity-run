@@ -284,6 +284,7 @@ func _tick_ghost_king(course_distance: float, gravity_direction: int) -> void:
 		"missed":
 			if lantern != null:
 				lantern.call("fade_out")
+			SfxController.play_event("ghost_king_laugh", "campaign|king_laugh|%d" % int(king.lantern.distance), true)
 			callout.emit("boss", tr("He slipped past the lantern"), tr("Another lantern comes"), tr("Be on its side, then flip away just before it"))
 			_add_lantern_for_current()
 

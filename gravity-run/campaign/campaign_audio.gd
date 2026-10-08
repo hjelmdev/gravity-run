@@ -16,6 +16,12 @@ const WORLD_AUDIO := {
 		"bpm": 150.0,
 		"star_sfx": "crystal_chime",
 	},
+	&"haunted_campaign": {
+		"track": preload("res://assets/audio/music/haunted_hollow.ogg"),
+		## tools/audio/generate_haunted_audio.py
+		"bpm": 132.0,
+		"star_sfx": "haunted_star",
+	},
 }
 
 ## The stage's own music, or null (the normal round track).

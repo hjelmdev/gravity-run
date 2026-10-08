@@ -25,6 +25,13 @@ const STREAMS: Dictionary = {
 	# Cave boss (giant bat): lock-on screech and the big icicle breaking.
 	"cave_bat_screech": preload("res://assets/audio/sfx/cave_bat_screech.wav"),
 	"cave_icicle_shatter": preload("res://assets/audio/sfx/cave_icicle_shatter.wav"),
+	# Haunted Woods (tools/audio/generate_haunted_audio.py). Scripted features
+	# play these by name; haunted_star replaces gravity_star on haunted stages.
+	"ghost_whistle": preload("res://assets/audio/sfx/ghost_whistle.wav"),
+	"hand_scrape": preload("res://assets/audio/sfx/hand_scrape.wav"),
+	"lantern_chime": preload("res://assets/audio/sfx/lantern_chime.wav"),
+	"haunted_star": preload("res://assets/audio/sfx/haunted_star.wav"),
+	"ghost_king_laugh": preload("res://assets/audio/sfx/ghost_king_laugh.wav"),
 }
 
 var _voices: Array[AudioStreamPlayer] = []

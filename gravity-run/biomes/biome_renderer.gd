@@ -12,6 +12,9 @@ const MEADOW: BiomeDefinition = preload("res://assets/biomes/definitions/meadow.
 ## Campaign-only presentation biome (world 2). Same tiles and generation as
 ## `cave`, plus a livelier backdrop. Never part of the rotation.
 const CAVE_CAMPAIGN: BiomeDefinition = preload("res://assets/biomes/definitions/cave_campaign.tres")
+## Campaign-only presentation biome (world 3). Same tiles and generation as
+## `haunted`, plus a livelier backdrop. Never part of the rotation.
+const HAUNTED_CAMPAIGN: BiomeDefinition = preload("res://assets/biomes/definitions/haunted_campaign.tres")
 const GENERATOR_VERSION_14 := 14
 const GENERATOR_VERSION_16 := 16
 const GENERATOR_VERSION_21 := 21
@@ -34,6 +37,7 @@ static func set_locked_biome(biome_id: StringName) -> void:
 		&"lava": _locked_definition = LAVA
 		&"meadow": _locked_definition = MEADOW
 		&"cave_campaign": _locked_definition = CAVE_CAMPAIGN
+		&"haunted_campaign": _locked_definition = HAUNTED_CAMPAIGN
 		_: _locked_definition = null
 
 static func locked_biome_id() -> StringName:
@@ -43,6 +47,7 @@ static func definition_for_id(biome_id: StringName) -> BiomeDefinition:
 	match biome_id:
 		&"meadow": return MEADOW
 		&"cave_campaign": return CAVE_CAMPAIGN
+		&"haunted_campaign": return HAUNTED_CAMPAIGN
 		&"cave": return CAVE
 		&"haunted": return HAUNTED
 		&"lava": return LAVA
@@ -118,7 +123,9 @@ static func draw_backdrop(canvas: CanvasItem, view_left: float, view_size: Vecto
 				&"lava": _draw_lava_backdrop(canvas, cursor, layout_size, distance, view_left, course_distance, biome)
 				&"meadow": _draw_meadow_backdrop(canvas, cursor, layout_size, view_left, course_distance, presentation_time_seconds)
 				_: _draw_classic_backdrop(canvas, cursor, layout_size, course_distance * 0.12 + fragment_offset, biome)
-		if biome.biome_id == &"haunted":
+		if biome.biome_id == &"haunted_campaign":
+			_draw_haunted_campaign_backdrop(canvas, cursor, layout_size, course_distance, fragment_offset, presentation_time_seconds)
+		elif biome.biome_id == &"haunted":
 			_draw_haunted_backdrop(canvas, cursor, layout_size, distance, view_left, Vector2(view_size.x, layout_size.y), course_distance, biome, cycle_length)
 		_draw_atlas_decorations(canvas, biome, cursor, layout_size, distance)
 		if generator_version >= GENERATOR_VERSION_21:
@@ -129,7 +136,7 @@ static func _draw_weather_layer(canvas: CanvasItem, biome: BiomeDefinition, left
 	## Small deterministic primitives only: no per-frame nodes, textures, or RNG.
 	## Lava ember polygons are tiny CPU-side arrays bounded by visible cells.
 	## Cell identity uses course position; every motif stays inside its biome fragment.
-	if size.x <= 8.0 or size.y <= 32.0 or biome.biome_id == &"cave_campaign":
+	if size.x <= 8.0 or size.y <= 32.0 or biome.biome_id == &"cave_campaign" or biome.biome_id == &"haunted_campaign":
 		return
 	var kind := str(biome.biome_id)
 	var period := 138.0
@@ -565,6 +572,106 @@ static func _draw_cave_campaign_backdrop(canvas: CanvasItem, left: float, size: 
 			var sw: float = shard[2] * 1.6
 			canvas.draw_colored_polygon(PackedVector2Array([Vector2(sx, y - sh), Vector2(sx + sw * 0.5, y), Vector2(sx, y + sh * 0.4), Vector2(sx - sw * 0.5, y)]), body)
 			canvas.draw_line(Vector2(sx, y - sh), Vector2(sx, y + sh * 0.2), shine, 1.0)
+
+const HAUNTED_GHOST_GREEN := Color("8dffc0")
+
+## Campaign haunted lift, drawn over the ruin/fog layers: a big moon, two
+## parallax rows of dead-tree silhouettes, low fog bands that drift and a few
+## floating will-o'-wisps. Everything is a function of course position (and time
+## for drift and bobbing), so theme fragments join without seams. The palette is
+## purple and dark blue, with green ghost lights kept small and dim so the
+## ghosts and spikes in the play corridor read first.
+static func _draw_haunted_campaign_backdrop(canvas: CanvasItem, left: float, size: Vector2, camera_course_distance: float, fragment_offset: float, time_seconds: float) -> void:
+	var right := left + size.x
+	# Big moon: a slow parallax lattice so one is nearly always in view.
+	var moon_left := camera_course_distance * 0.04 + fragment_offset
+	var moon_period := 1500.0
+	for point in _landmarks_in_course(moon_left - 200.0, moon_left + size.x + 200.0, moon_period, 211):
+		var radius := size.y * 0.15
+		var moon_x := left + point.x - moon_left
+		var moon_y := size.y * (0.32 + point.y * 0.06)
+		if moon_x - radius * 2.4 < left or moon_x + radius * 2.4 > right:
+			continue
+		var moon_center := Vector2(moon_x, moon_y)
+		for ring in range(4):
+			canvas.draw_circle(moon_center, radius * (2.2 - ring * 0.35), Color(0.55, 0.5, 0.95, 0.035 + 0.012 * ring))
+		canvas.draw_circle(moon_center, radius, Color(0.6, 0.58, 0.8, 0.88))
+		# Craters and a shaded limb.
+		for crater in [[-0.35, -0.2, 0.2], [0.25, 0.1, 0.27], [-0.1, 0.5, 0.16], [0.45, -0.45, 0.12]]:
+			canvas.draw_circle(moon_center + Vector2(crater[0], crater[1]) * radius, crater[2] * radius, Color(0.5, 0.47, 0.72, 0.7))
+		# Soft shading on the lower right limb, kept inside the disc.
+		canvas.draw_circle(moon_center + Vector2(radius * 0.62, radius * 0.22), radius * 0.34, Color(0.5, 0.46, 0.76, 0.3))
+		canvas.draw_circle(moon_center + Vector2(radius * 0.4, radius * 0.5), radius * 0.4, Color(0.5, 0.46, 0.76, 0.22))
+	# Far then near dead trees, rooted at the ground and fading into the fog.
+	for layer in range(2):
+		var parallax := 0.14 if layer == 0 else 0.3
+		var period := 130.0 if layer == 0 else 190.0
+		var parallax_left := camera_course_distance * parallax + fragment_offset
+		var color := Color(0.075, 0.06, 0.17, 1.0) if layer == 0 else Color(0.045, 0.035, 0.11, 1.0)
+		for point in _landmarks_in_course(parallax_left - 60.0, parallax_left + size.x + 60.0, period, 131 + layer * 17):
+			var x := left + point.x - parallax_left
+			var scale := (0.75 + point.y * 0.5) * (1.0 if layer == 1 else 0.8)
+			var height := size.y * 0.42 * scale
+			if x - height * 0.5 < left or x + height * 0.5 > right:
+				continue
+			var base_y := size.y * (0.80 if layer == 0 else 0.86)
+			_draw_dead_tree(canvas, Vector2(x, base_y), height, point.y, color)
+	# Low fog bands drifting right to left at their own speeds.
+	for band in range(3):
+		var speed := 9.0 + 7.0 * band
+		var fog_left := camera_course_distance * (0.1 + 0.07 * band) + fragment_offset + time_seconds * speed
+		var y := size.y * (0.74 + band * 0.05)
+		for point in _landmarks_in_course(fog_left - 120.0, fog_left + size.x + 120.0, 170.0 + band * 40.0, 331 + band * 7):
+			var x := left + point.x - fog_left
+			var half := 70.0 + point.y * 50.0
+			if x - half < left or x + half > right:
+				continue
+			var fog := Color(0.5, 0.44, 0.82, 0.05 + 0.012 * band)
+			# One flat ellipse per band patch (a single alpha, so no blobby overlaps).
+			var outline := PackedVector2Array()
+			for step in range(16):
+				var angle := TAU * float(step) / 16.0
+				outline.append(Vector2(x + cos(angle) * half, y + sin(angle) * (11.0 + 3.0 * sin(time_seconds * 0.4 + point.x))))
+			canvas.draw_colored_polygon(outline, fog)
+	# Will-o'-wisps: small, dim, greenish, bobbing above the play corridor.
+	var wisp_left := camera_course_distance * 0.2 + fragment_offset
+	for point in _landmarks_in_course(wisp_left - 40.0, wisp_left + size.x + 40.0, 260.0, 457):
+		var bob := time_seconds * 0.9 + point.x * 0.03
+		var x := left + point.x - wisp_left + sin(bob) * 14.0
+		var y := size.y * (0.38 + point.y * 0.2) + cos(bob * 1.3) * 9.0
+		if x - 18.0 < left or x + 18.0 > right:
+			continue
+		var flicker := 0.75 + 0.25 * sin(time_seconds * 5.0 + point.x)
+		var glow := HAUNTED_GHOST_GREEN
+		glow.a = 0.09 * flicker
+		canvas.draw_circle(Vector2(x, y), 15.0, glow)
+		glow.a = 0.18 * flicker
+		canvas.draw_circle(Vector2(x, y), 8.0, glow)
+		var core := HAUNTED_GHOST_GREEN.lerp(Color.WHITE, 0.55)
+		core.a = 0.8 * flicker
+		canvas.draw_circle(Vector2(x, y), 2.4, core)
+		# A short fading tail trailing behind.
+		for tail in range(1, 4):
+			var tail_color := HAUNTED_GHOST_GREEN
+			tail_color.a = 0.14 * flicker / float(tail)
+			canvas.draw_circle(Vector2(x + tail * 5.0, y + tail * 1.5), 2.0 - 0.4 * tail, tail_color)
+
+## A gnarled bare tree: tapered trunk plus a few forked branches.
+static func _draw_dead_tree(canvas: CanvasItem, base: Vector2, height: float, seed_value: float, color: Color) -> void:
+	var trunk := height * 0.06
+	var lean := (seed_value - 0.5) * height * 0.12
+	var top := base + Vector2(lean, -height * 0.62)
+	canvas.draw_colored_polygon(PackedVector2Array([base + Vector2(-trunk * 1.5, 0.0), base + Vector2(trunk * 1.5, 0.0), top + Vector2(trunk * 0.4, 0.0), top + Vector2(-trunk * 0.4, 0.0)]), color)
+	var flip := -1.0 if seed_value > 0.5 else 1.0
+	for branch in [[0.0, -1.0, 0.34, -0.5, 3.0], [0.0, 1.0, 0.30, -0.42, 3.0], [-0.4, flip, 0.26, -0.3, 2.4], [-0.18, -flip, 0.22, -0.34, 2.4]]:
+		var origin := top + (base - top) * (-float(branch[0]))
+		var reach := height * float(branch[2])
+		var tip := origin + Vector2(float(branch[1]) * reach, float(branch[3]) * reach)
+		canvas.draw_line(origin, tip, color, float(branch[4]), true)
+		var mid := origin.lerp(tip, 0.6)
+		canvas.draw_line(mid, mid + Vector2(float(branch[1]) * reach * 0.35, -reach * 0.38), color, 1.6, true)
+		canvas.draw_line(mid, mid + Vector2(float(branch[1]) * reach * 0.4, reach * 0.02), color, 1.4, true)
+	canvas.draw_line(top, top + Vector2(0.0, -height * 0.12), color, 2.0, true)
 
 static func cave_clipped_ridge_vertices(left: float, camera_course_distance: float, fragment_offset: float, fragment_width: float, logical_height: float, layer: int) -> PackedVector2Array:
 	## Return only the upper ridge contour. Fill quads add their own bottom corners
