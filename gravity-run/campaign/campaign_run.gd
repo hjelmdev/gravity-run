@@ -156,7 +156,7 @@ func physics_tick(previous_rect: Rect2, final_rect: Rect2, lethal_fraction: floa
 			star.call("collect")
 			star_mask |= 1 << int(star.get("star_index"))
 			stars_changed.emit(get_star_count(), get_star_total())
-			callout.emit("star", tr("Gravity star"), "%d / %d" % [get_star_count(), get_star_total()], tr("Counts when you reach the finish"))
+			callout.emit("star", tr("Gravity star"), "%d / %d" % [get_star_count(), get_star_total()], "")
 	if boss != null and lethal_fraction > 1.0:
 		_tick_boss(runner_world_x - COURSE_START_X, gravity_direction, grounded)
 	if lethal_fraction > 1.0 and runner_world_x >= get_finish_world_x():

@@ -15,6 +15,7 @@ const Gen := preload("res://systems/course_generator.gd")
 const Builder := preload("res://systems/course_manifest_builder.gd")
 const CoinPlanner := preload("res://systems/shared_coin_planner.gd")
 const BiomeRendererScript := preload("res://biomes/biome_renderer.gd")
+const LevelTool := preload("res://tools/campaign/campaign_level_tool.gd")
 const TICK := 1.0 / 60.0
 
 var failures := 0
@@ -75,6 +76,8 @@ func _check_catalog() -> void:
 			if star.x < 180.0 + 2000.0 or star.x > 180.0 + level.get_hazard_cutoff_distance():
 				inside = false
 		_check(safe, "%s stars are clear of hazards" % level.level_id)
+		var conflicts := LevelTool.gap_conflicts(resolved, 180.0 + level.get_hazard_cutoff_distance())
+		_check(conflicts == 0, "%s never has holes in floor and ceiling at once (%d)" % [level.level_id, conflicts])
 		_check(inside, "%s stars are inside the course" % level.level_id)
 		# Stars are frozen from the stage's own coin plan; they must still be there.
 		var coins: Array[Dictionary] = CoinPlanner.plan(level.seed_value, 180.0, 180.0 + level.get_hazard_cutoff_distance(), resolved, 460.0, 80.0, int(level.ruleset.get("coin_revision")), float(level.ruleset.get("coin_density")))

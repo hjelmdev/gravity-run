@@ -93,7 +93,9 @@ static func evaluate_level(level: CampaignLevel, new_hazards: Array) -> Dictiona
 		score += 8.0 if first <= level.length_px * 0.25 else (-4.0 if first == INF else 0.0)
 		score += minf(float(seen), 6.0)
 	score -= float(fallbacks) * 20.0
-	return {"seed": level.seed_value, "score": score, "events": in_course, "intro": intro, "stars": picked.stars, "risk_star": picked.risk, "fallbacks": fallbacks, "counts": counts}
+	var conflicts := gap_conflicts(resolved, START_X + cutoff)
+	score -= float(conflicts) * 100.0
+	return {"seed": level.seed_value, "score": score, "gap_conflicts": conflicts, "events": in_course, "intro": intro, "stars": picked.stars, "risk_star": picked.risk, "fallbacks": fallbacks, "counts": counts}
 
 static func pick_stars(coins: Array[Dictionary], length_px: float) -> Dictionary:
 	var rows: Dictionary = {}
@@ -138,3 +140,33 @@ static func pick_stars(coins: Array[Dictionary], length_px: float) -> Dictionary
 			if window_index == 2 and str(best_coin.get("formation", "")) == "risk":
 				used_risk = true
 	return {"stars": stars, "risk": used_risk}
+
+## Gen21 can leave a floor hole and a ceiling hole (a plain gap or the roof
+## hole a dropping saw cuts) so close together that there is no surface on
+## either side and the only way through is a ~0.14 s flip window. Campaign
+## seeds must not contain that pattern. Works on resolved runtime events.
+const GAP_CLEARANCE := 450.0
+
+static func gap_conflicts(resolved: Array, cutoff_x: float) -> int:
+	var floor_gaps: Array[Vector2] = []
+	var ceiling_gaps: Array[Vector2] = []
+	for event in resolved:
+		var x := float(event.get("x", INF))
+		if x > cutoff_x:
+			continue
+		var kind := str(event.get("kind", ""))
+		if kind == "gap":
+			var half := float(event.get("width", 0.0)) * 0.5
+			if bool(event.get("from_ceiling", false)):
+				ceiling_gaps.append(Vector2(x - half, x + half))
+			else:
+				floor_gaps.append(Vector2(x - half, x + half))
+		elif kind == "saw" and event.has("roof_gap_x"):
+			var roof_half := float(event.get("roof_gap_width", 0.0)) * 0.5
+			ceiling_gaps.append(Vector2(float(event.roof_gap_x) - roof_half, float(event.roof_gap_x) + roof_half))
+	var conflicts := 0
+	for a in floor_gaps:
+		for b in ceiling_gaps:
+			if a.x - GAP_CLEARANCE < b.y and b.x - GAP_CLEARANCE < a.y:
+				conflicts += 1
+	return conflicts

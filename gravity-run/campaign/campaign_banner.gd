@@ -1,17 +1,15 @@
 extends CanvasLayer
 ## Mid-screen campaign callout (new hazard, gravity star, stage intro, boss).
 ## Same card family as the achievement toast, but centred and coloured per
-## kind. It pops in solid, then thins out so the track stays readable while
-## you keep running, and fades away.
+## kind. It pops in solid, holds briefly and then fades out in one smooth
+## curve so the track behind it shows through more and more.
 
 const BannerIconScript := preload("res://campaign/banner_icon.gd")
 const POP_IN := 0.12
-const SOLID_UNTIL := 0.85
-const THIN_AT := 1.25
-const FADE_FROM := 2.15
-const TOTAL := 2.5
-const THIN_PANEL_ALPHA := 0.22
-const THIN_TEXT_ALPHA := 0.6
+const HOLD := 0.55
+const TOTAL := 2.4
+## A newer banner may replace this one once it has been readable this long.
+const REPLACEABLE_AFTER := 0.9
 const KIND_COLORS := {
 	"hazard": Color("ff9f43"),
 	"star": Color("f5d45e"),
@@ -86,7 +84,7 @@ func show_banner(kind: String, heading: String, title: String, description: Stri
 	var entry := {"kind": kind, "heading": heading, "title": title, "description": description}
 	# A newer banner replaces one that has been readable for a moment; at most
 	# one waits, so bursts never lag behind play.
-	if _time >= 0.0 and _time < THIN_AT:
+	if _time >= 0.0 and _time < REPLACEABLE_AFTER:
 		_queue = [entry]
 		return
 	_queue.clear()
@@ -131,15 +129,17 @@ func _process(delta: float) -> void:
 			return
 		clear()
 		return
-	if _time >= THIN_AT and not _queue.is_empty() and _time < FADE_FROM:
+	if _time >= REPLACEABLE_AFTER and not _queue.is_empty():
 		_present(_queue.pop_front())
 		return
 	var pop := clampf(_time / POP_IN, 0.0, 1.0)
 	var scale_value := lerpf(0.82, 1.0, 1.0 - pow(1.0 - pop, 3.0))
 	_card.scale = Vector2.ONE * scale_value
-	var thin := clampf((_time - SOLID_UNTIL) / (THIN_AT - SOLID_UNTIL), 0.0, 1.0)
-	var fade := clampf((_time - FADE_FROM) / (TOTAL - FADE_FROM), 0.0, 1.0)
-	var panel_alpha := lerpf(1.0, THIN_PANEL_ALPHA, thin) * (1.0 - fade) * pop
-	var text_alpha := lerpf(1.0, THIN_TEXT_ALPHA, thin) * (1.0 - fade) * pop
+	# One continuous ease-out from solid to gone; the card background leaves a
+	# little ahead of the text so the words stay readable longest.
+	var fade := clampf((_time - HOLD) / (TOTAL - HOLD), 0.0, 1.0)
+	var eased := fade * fade * (3.0 - 2.0 * fade)
+	var panel_alpha := pow(1.0 - eased, 1.4) * pop
+	var text_alpha := (1.0 - eased) * pop
 	_card.self_modulate = Color(1, 1, 1, panel_alpha)
 	_content.modulate = Color(1, 1, 1, text_alpha)

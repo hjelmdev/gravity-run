@@ -51,8 +51,8 @@ const MEADOW_STAGES := [
 		"id": &"1-5", "title": "Falling Rocks", "intro": "New: falling rocks and saw blades",
 		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade"], "new": ["falling_rock", "saw_blade"],
 		"density": 1.4, "margin": 1.05, "length": 21000.0,
-		"seed": 1519,
-		"stars": [Vector2(5570.83, 114.00), Vector2(11289.32, 114.00), Vector2(17755.97, 74.00)],
+		"seed": 1527,
+		"stars": [Vector2(5524.46, 114.00), Vector2(11281.27, 114.00), Vector2(17664.89, 114.00)],
 	},
 	{
 		"id": &"1-6", "title": "Meadow Exam", "intro": "Everything the meadow has taught you",
