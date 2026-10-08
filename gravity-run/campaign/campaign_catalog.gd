@@ -212,6 +212,10 @@ static func _build_worlds() -> Array[CampaignWorld]:
 	result.append(meadow)
 	var cave := _make_world(&"cave", 2, "The Cave", &"cave", "map_cave", CAVE_MAP_NODES, Color("8fb4ff"))
 	_add_stages(cave, CAVE_STAGES)
+	cave.levels.append(_make_boss(&"cave", &"cave", cave.levels.size() + 1, &"2-B", "Stalactite Giant", "Boss: the giant bat", &"stalactite"))
+	# The cave campaign look is presentation only; encounters use the cave mix.
+	for level in cave.levels:
+		level.presentation_biome = &"cave_campaign"
 	result.append(cave)
 	var haunted := _make_world(&"haunted", 3, "Haunted Woods", &"haunted", "map_haunted", HAUNTED_MAP_NODES, Color("b69cff"))
 	_add_stages(haunted, HAUNTED_STAGES)

@@ -113,7 +113,11 @@ func show_result(level: CampaignLevel, result: Dictionary) -> void:
 	var failed := bool(result.get("failed", false))
 	var star_total := level.stars.size() if level != null else 0
 	if failed:
-		_title.text = tr("RULLAREN WINS THIS ROUND") if level != null and level.is_boss() else tr("OUCH!")
+		_title.text = tr("OUCH!")
+		if level != null and level.boss_id == &"rullaren":
+			_title.text = tr("RULLAREN WINS THIS ROUND")
+		elif level != null and level.is_boss():
+			_title.text = tr("THE BOSS WINS THIS ROUND")
 		_title.add_theme_color_override("font_color", Color("ff647c"))
 		_subtitle.text = "%s  %s" % [str(level.level_id), tr(level.title)] if level != null else ""
 		_stars_row.visible = false

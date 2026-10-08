@@ -1834,3 +1834,27 @@ msgstr "svävande spöken"
 
 msgid "chasing ghost"
 msgstr "jagande spöke"
+
+msgid "THE BOSS WINS THIS ROUND"
+msgstr "BOSSEN VANN DEN HÄR RUNDAN"
+
+msgid "Stalactite Giant"
+msgstr "Stalaktitjätten"
+
+msgid "Boss: the giant bat"
+msgstr "Boss: jättefladdermusen"
+
+msgid "The giant gets angrier"
+msgstr "Jätten blir argare"
+
+msgid "The Stalactite Giant is beaten!"
+msgstr "Stalaktitjätten är besegrad!"
+
+msgid "It dived at the wrong side"
+msgstr "Den dök mot fel sida"
+
+msgid "The icicle comes back"
+msgstr "Istappen kommer tillbaka"
+
+msgid "Wait on the icicle's side, then flip away"
+msgstr "Vänta på istappens sida och flippa sedan bort"

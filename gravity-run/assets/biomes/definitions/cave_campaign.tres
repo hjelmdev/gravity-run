@@ -1,0 +1,22 @@
+[gd_resource type="Resource" script_class="BiomeDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://biomes/biome_definition.gd" id="1"]
+[ext_resource type="TileSet" path="res://assets/biomes/tilesheet_complete_atlas.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+biome_id = &"cave_campaign"
+display_name = "Grotta"
+tile_set = ExtResource("2")
+palette_row = 6
+floor_surface_tiles = Array[Vector2i]([Vector2i(1, 6), Vector2i(2, 6), Vector2i(3, 6), Vector2i(4, 6), Vector2i(5, 6), Vector2i(6, 6), Vector2i(7, 6), Vector2i(8, 6)])
+ceiling_surface_tiles = Array[Vector2i]([Vector2i(1, 6), Vector2i(2, 6), Vector2i(3, 6), Vector2i(4, 6), Vector2i(5, 6), Vector2i(6, 6), Vector2i(7, 6), Vector2i(8, 6)])
+# The atlas slope wedges do not match the runtime terrain slope angle. Keep
+# the neutral floor tile on sloped sections until a matching slope asset exists.
+ledge_edge_tiles = Array[Vector2i]([Vector2i(0, 6), Vector2i(8, 7), Vector2i(7, 7)])
+background_color = Color(0.03, 0.055, 0.1, 1)
+accent_color = Color(0.31, 0.79, 0.97, 1)
+surface_tint = Color(0.84, 0.94, 1, 1)
+terrain_fill_color = Color(0.15, 0.24, 0.31, 1)
+terrain_edge_color = Color(0.31, 0.79, 0.97, 1)
+layer_colors = Array[Color]([Color(0.12, 0.22, 0.3, 1), Color(0.09, 0.17, 0.26, 1), Color(0.06, 0.13, 0.21, 1)])

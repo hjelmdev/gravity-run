@@ -9,6 +9,9 @@ const LAVA: BiomeDefinition = preload("res://assets/biomes/definitions/lava.tres
 ## Campaign-only presentation biome (world 1). Never part of the rotation;
 ## generation treats it as classic.
 const MEADOW: BiomeDefinition = preload("res://assets/biomes/definitions/meadow.tres")
+## Campaign-only presentation biome (world 2). Same tiles and generation as
+## `cave`, plus a livelier backdrop. Never part of the rotation.
+const CAVE_CAMPAIGN: BiomeDefinition = preload("res://assets/biomes/definitions/cave_campaign.tres")
 const GENERATOR_VERSION_14 := 14
 const GENERATOR_VERSION_16 := 16
 const GENERATOR_VERSION_21 := 21
@@ -30,6 +33,7 @@ static func set_locked_biome(biome_id: StringName) -> void:
 		&"haunted": _locked_definition = HAUNTED
 		&"lava": _locked_definition = LAVA
 		&"meadow": _locked_definition = MEADOW
+		&"cave_campaign": _locked_definition = CAVE_CAMPAIGN
 		_: _locked_definition = null
 
 static func locked_biome_id() -> StringName:
@@ -38,6 +42,7 @@ static func locked_biome_id() -> StringName:
 static func definition_for_id(biome_id: StringName) -> BiomeDefinition:
 	match biome_id:
 		&"meadow": return MEADOW
+		&"cave_campaign": return CAVE_CAMPAIGN
 		&"cave": return CAVE
 		&"haunted": return HAUNTED
 		&"lava": return LAVA
@@ -106,6 +111,9 @@ static func draw_backdrop(canvas: CanvasItem, view_left: float, view_size: Vecto
 		if not has_layers:
 			match biome.biome_id:
 				&"cave": _draw_cave_backdrop(canvas, cursor, layout_size, course_distance, fragment_offset, biome)
+				&"cave_campaign":
+					_draw_cave_backdrop(canvas, cursor, layout_size, course_distance, fragment_offset, biome, false)
+					_draw_cave_campaign_backdrop(canvas, cursor, layout_size, course_distance, fragment_offset, presentation_time_seconds)
 				&"haunted": pass
 				&"lava": _draw_lava_backdrop(canvas, cursor, layout_size, distance, view_left, course_distance, biome)
 				&"meadow": _draw_meadow_backdrop(canvas, cursor, layout_size, view_left, course_distance, presentation_time_seconds)
@@ -121,7 +129,7 @@ static func _draw_weather_layer(canvas: CanvasItem, biome: BiomeDefinition, left
 	## Small deterministic primitives only: no per-frame nodes, textures, or RNG.
 	## Lava ember polygons are tiny CPU-side arrays bounded by visible cells.
 	## Cell identity uses course position; every motif stays inside its biome fragment.
-	if size.x <= 8.0 or size.y <= 32.0:
+	if size.x <= 8.0 or size.y <= 32.0 or biome.biome_id == &"cave_campaign":
 		return
 	var kind := str(biome.biome_id)
 	var period := 138.0
@@ -465,7 +473,7 @@ static func _draw_classic_backdrop(canvas: CanvasItem, left: float, size: Vector
 		color.a = 0.38 + point.y * 0.30
 		canvas.draw_circle(Vector2(screen_x, y), radius, color)
 
-static func _draw_cave_backdrop(canvas: CanvasItem, left: float, size: Vector2, camera_course_distance: float, fragment_offset: float, biome: BiomeDefinition) -> void:
+static func _draw_cave_backdrop(canvas: CanvasItem, left: float, size: Vector2, camera_course_distance: float, fragment_offset: float, biome: BiomeDefinition, with_crystals := true) -> void:
 	for layer in range(3):
 		var clipped := cave_clipped_ridge_vertices(left, camera_course_distance, fragment_offset, size.x, size.y, layer)
 		if clipped.size() < 2:
@@ -479,6 +487,8 @@ static func _draw_cave_backdrop(canvas: CanvasItem, left: float, size: Vector2, 
 				Vector2(clipped[point_index].x, size.y),
 			])
 			canvas.draw_colored_polygon(segment, color)
+	if not with_crystals:
+		return
 	var crystal_parallax_left := camera_course_distance * 0.11 + fragment_offset
 	for point in _landmarks_in_course(crystal_parallax_left, crystal_parallax_left + size.x, 193.0, 51):
 		var x := left + float(point.x) - crystal_parallax_left
@@ -489,6 +499,72 @@ static func _draw_cave_backdrop(canvas: CanvasItem, left: float, size: Vector2, 
 		crystal.a = 0.68
 		canvas.draw_colored_polygon(PackedVector2Array([Vector2(x, y - 6.0), Vector2(x + 5.0, y), Vector2(x, y + 8.0), Vector2(x - 5.0, y)]), crystal)
 		canvas.draw_line(Vector2(x, y + 8.0), Vector2(x, y + 12.0), crystal, 1.2, true)
+
+const CAVE_CRYSTAL_BLUE := Color("8fb4ff")
+const CAVE_CRYSTAL_PURPLE := Color("b57cff")
+
+## Campaign cave lift, drawn over the ridge layers: two parallax ranges of
+## stalactite silhouettes, water drops falling from the near range, and glowing
+## crystals low in the background. Everything is a function of course position
+## (and time for the drops), so theme fragments join without seams. Colours stay
+## dark and low-contrast so hazards in the play corridor read first.
+static func _draw_cave_campaign_backdrop(canvas: CanvasItem, left: float, size: Vector2, camera_course_distance: float, fragment_offset: float, time_seconds: float) -> void:
+	var right := left + size.x
+	# Far then near stalactites.
+	for layer in range(2):
+		var parallax := 0.12 if layer == 0 else 0.26
+		var period := 120.0 if layer == 0 else 150.0
+		var parallax_left := camera_course_distance * parallax + fragment_offset
+		var color := Color(0.05, 0.09, 0.15, 1.0) if layer == 0 else Color(0.035, 0.065, 0.11, 1.0)
+		for point in _landmarks_in_course(parallax_left - 40.0, parallax_left + size.x + 40.0, period, 71 + layer * 13):
+			var x := left + point.x - parallax_left
+			var length := size.y * (0.10 + point.y * (0.12 + 0.08 * float(layer)))
+			var half := 11.0 + point.y * 12.0 + 6.0 * float(layer)
+			if x - half < left or x + half > right:
+				continue
+			var top := 34.0
+			canvas.draw_colored_polygon(PackedVector2Array([Vector2(x - half, top), Vector2(x + half, top), Vector2(x + half * 0.25, top + length * 0.7), Vector2(x, top + length), Vector2(x - half * 0.3, top + length * 0.7)]), color)
+			if layer == 1:
+				canvas.draw_line(Vector2(x - half * 0.55, top), Vector2(x, top + length * 0.92), Color(0.12, 0.2, 0.3, 0.55), 1.2, true)
+			if layer == 1 and point.y > 0.35:
+				# A water drop forms on the tip and falls (1.7-2.6 s cycle).
+				var cycle := 1.7 + point.y * 0.9
+				var phase := fposmod(time_seconds + point.x * 0.013, cycle) / cycle
+				var tip := Vector2(x, top + length)
+				var drop_color := Color(0.55, 0.78, 1.0, 0.75)
+				if phase < 0.55:
+					canvas.draw_circle(tip + Vector2(0.0, 1.0 + phase * 3.0), 0.8 + phase * 2.0, drop_color)
+				else:
+					var fall := (phase - 0.55) / 0.45
+					var drop_y := tip.y + 3.0 + fall * fall * size.y * 0.45
+					if drop_y < size.y - 70.0:
+						canvas.draw_line(Vector2(x, drop_y - 6.0 * fall), Vector2(x, drop_y), Color(0.55, 0.78, 1.0, 0.35), 1.5)
+						canvas.draw_circle(Vector2(x, drop_y), 2.2, drop_color)
+	# Glowing crystals.
+	var crystal_left := camera_course_distance * 0.2 + fragment_offset
+	for point in _landmarks_in_course(crystal_left - 30.0, crystal_left + size.x + 30.0, 210.0, 97):
+		var x := left + point.x - crystal_left
+		if x - 26.0 < left or x + 26.0 > right:
+			continue
+		var purple := int(point.y * 100.0) % 3 == 0
+		var base := CAVE_CRYSTAL_PURPLE if purple else CAVE_CRYSTAL_BLUE
+		var y := size.y * (0.30 + point.y * 0.28)
+		var pulse := 0.8 + 0.2 * sin(time_seconds * 2.0 + point.x * 0.05)
+		var halo := base
+		halo.a = 0.11 * pulse
+		canvas.draw_circle(Vector2(x, y), 22.0, halo)
+		halo.a = 0.16 * pulse
+		canvas.draw_circle(Vector2(x, y), 12.0, halo)
+		var body := base.lerp(Color(0.04, 0.07, 0.14), 0.1)
+		body.a = 0.95
+		var shine := base.lerp(Color.WHITE, 0.5)
+		shine.a = 0.75 * pulse
+		for shard in [[-5.0, 7.0, 4.0], [0.0, 12.0, 5.0], [5.0, 8.0, 4.0]]:
+			var sx: float = x + shard[0] * 1.5
+			var sh: float = shard[1] * 1.5
+			var sw: float = shard[2] * 1.6
+			canvas.draw_colored_polygon(PackedVector2Array([Vector2(sx, y - sh), Vector2(sx + sw * 0.5, y), Vector2(sx, y + sh * 0.4), Vector2(sx - sw * 0.5, y)]), body)
+			canvas.draw_line(Vector2(sx, y - sh), Vector2(sx, y + sh * 0.2), shine, 1.0)
 
 static func cave_clipped_ridge_vertices(left: float, camera_course_distance: float, fragment_offset: float, fragment_width: float, logical_height: float, layer: int) -> PackedVector2Array:
 	## Return only the upper ridge contour. Fill quads add their own bottom corners

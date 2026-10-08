@@ -38,6 +38,9 @@ func _run() -> void:
 	await _check_failed_attempt()
 	await _check_boss(false)
 	await _check_boss(true)
+	await _check_stalactite("hit")
+	await _check_stalactite("early")
+	await _check_stalactite("stay")
 	_check_unlocks()
 	BiomeRendererScript.set_locked_biome(&"")
 	print("CAMPAIGN_RUNTIME_TEST failures=%d" % failures)
@@ -245,6 +248,64 @@ func _check_boss(skip_first_plate: bool) -> void:
 	if skip_first_plate:
 		var scheduled := boss.get_scheduled_events().size() if boss != null else 0
 		_check(scheduled > 12, "a missed plate repeats the phase (%d attacks scheduled)" % scheduled)
+	game.queue_free()
+	await get_tree().process_frame
+	Campaign.clear_active()
+
+## Follows the Stalactite Giant's schedule. mode "hit" plays it right,
+## "early" flips away from the first icicle before the warning (the bat
+## dives at the wrong side and the round repeats), "stay" never leaves the
+## locked side during the first dive (the bat catches the runner).
+func _stalactite_bot(game: Node, state: Dictionary) -> void:
+	var run: Node = game.get("_campaign_run")
+	if not is_instance_valid(run):
+		return
+	var bat: StalactiteBoss = run.get("boss")
+	var player: Node = game.get_node("Player")
+	var course := float(player.get("world_x")) - 180.0
+	var target := 0
+	var probe := course
+	while probe <= course + 340.0:
+		var side := bat.required_side_at(probe)
+		if side != 0:
+			target = side
+			break
+		probe += 20.0
+	var first_dive := bat.hp == StalactiteBoss.MAX_HP and bat.attempts_in_phase == 0 and not bat.dive.is_empty()
+	if first_dive and str(state.mode) != "hit":
+		var icicle_side := -1 if bool(bat.dive.ceiling) else 1
+		var warn_start := float(bat.dive.distance) - StalactiteBoss.ARRIVE_LEAD - float(bat.dive.warning)
+		if course >= warn_start - 320.0 and course <= float(bat.dive.distance):
+			if str(state.mode) == "early":
+				target = -icicle_side if course < warn_start + 40.0 else icicle_side
+			else:
+				target = icicle_side
+	var current := int(player.call("get_gravity_direction"))
+	if target != 0 and target != current and bool(player.get("grounded")) and float(player.call("get_cooldown_left")) <= 0.0:
+		player.call("_try_flip", target)
+
+func _check_stalactite(mode: String) -> void:
+	var boss_level := CampaignCatalog.get_level(&"2-B")
+	_check(boss_level != null and boss_level.boss_id == &"stalactite", "the cave has the Stalactite Giant as its boss")
+	if boss_level == null:
+		return
+	Campaign.start_level(boss_level)
+	var game: Node = await _make_game()
+	var state := {"mode": mode}
+	var bot := func(g: Node) -> void: _stalactite_bot(g, state)
+	var ticks := _step(game, 12000, bot)
+	var run: Node = game.get("_campaign_run")
+	var bat: StalactiteBoss = run.get("boss") if is_instance_valid(run) else null
+	var panel: Node = game.get("_campaign_result_panel")
+	match mode:
+		"hit", "early":
+			var label := "" if mode == "hit" else " after diving at the wrong side once"
+			_check(bat != null and bat.is_defeated(), "the Stalactite Giant is beaten by luring it into its icicles%s (%d ticks, hp %d)" % [label, ticks, bat.hp if bat != null else -1])
+			_check(bool(game.get("game_over")) and is_instance_valid(panel) and bool(panel.get("visible")) and Campaign.is_completed(boss_level), "the cave boss stage ends at its flag and is recorded%s" % label)
+			if mode == "early":
+				_check(bat != null and bat.get_scheduled_events().size() > 23, "a dive at the wrong side repeats the round (%d attacks scheduled)" % (bat.get_scheduled_events().size() if bat != null else 0))
+		"stay":
+			_check(bat != null and bat.hp == StalactiteBoss.MAX_HP and bool(game.get("game_over")) and str(bat.dive.get("state", "")) == "caught", "staying on the locked side gets the runner caught by the dive (%d ticks)" % ticks)
 	game.queue_free()
 	await get_tree().process_frame
 	Campaign.clear_active()

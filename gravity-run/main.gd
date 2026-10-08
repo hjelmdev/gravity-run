@@ -49,10 +49,9 @@ const CoursePresentation := preload("res://systems/race_course_presentation.gd")
 const SfxAudibilityRules := preload("res://systems/sfx_audibility_rules.gd")
 const SfxAudioDiagnosticCapture := preload("res://systems/sfx_audio_diagnostic_capture.gd")
 const CampaignRunScript := preload("res://campaign/campaign_run.gd")
-const MEADOW_MUSIC: AudioStream = preload("res://assets/audio/music/meadow_summer.ogg")
-## tools/audio/generate_meadow_music.py writes the track at this tempo; the
-## run cycle puts a footstep on every eighth note.
-const MEADOW_MUSIC_BPM := 140.0
+## Per-world campaign music, tempo (the run cycle puts a footstep on every
+## eighth note) and star sound, keyed by presentation biome.
+const CampaignAudio := preload("res://campaign/campaign_audio.gd")
 const CampaignResultPanelScript := preload("res://campaign/campaign_result_panel.gd")
 const CampaignBannerScript := preload("res://campaign/campaign_banner.gd")
 ## Ticks the runner keeps running past the finish line before the result.
@@ -208,8 +207,8 @@ func _start_run() -> void:
 		AchievementService.begin_run()
 		_singleplayer_audio_round_id = "singleplayer:%d" % Time.get_ticks_usec()
 		var campaign_track: AudioStream = null
-		if Campaign.active_level != null and Campaign.active_level.get_presentation_biome() == &"meadow":
-			campaign_track = MEADOW_MUSIC
+		if Campaign.active_level != null:
+			campaign_track = CampaignAudio.track_for(Campaign.active_level.get_presentation_biome())
 		MusicController.start_round(_singleplayer_audio_round_id, campaign_track)
 		SfxController.begin_round(_singleplayer_audio_round_id)
 	player.call("reset_to_floor", WORLD_HEIGHT - 80.0)
@@ -302,20 +301,26 @@ const HUD_BAND_BOTTOM := 52.0
 const HUD_FADED_ALPHA := 0.3
 var _hud_alpha := 1.0
 
-## On the meadow the runner's feet follow the music: two footsteps per run
-## cycle, one per eighth note. Other runs keep the authored animation speed.
+## On campaign stages with their own track the runner's feet follow the music:
+## two footsteps per run cycle, one per eighth note. Other runs keep the
+## authored animation speed.
 func _sync_run_cycle_to_music() -> void:
 	var sprite := player.get_node("AnimatedSprite2D") as AnimatedSprite2D
 	if sprite == null:
 		return
-	var synced := _campaign_level != null and _campaign_level.get_presentation_biome() == &"meadow"
+	var track: AudioStream = null
+	var bpm := 0.0
+	if _campaign_level != null:
+		track = CampaignAudio.track_for(_campaign_level.get_presentation_biome())
+		bpm = CampaignAudio.bpm_for(_campaign_level.get_presentation_biome())
+	var synced := track != null and bpm > 0.0
 	if not synced or sprite.animation != &"run" or sprite.sprite_frames == null:
 		sprite.speed_scale = 1.0
 		return
 	var frame_count := sprite.sprite_frames.get_frame_count(&"run")
-	var eighth := 30.0 / MEADOW_MUSIC_BPM
+	var eighth := 30.0 / bpm
 	var frames_per_step := float(frame_count) / 2.0
-	var music_time := float(MusicController.get_audible_position(MEADOW_MUSIC))
+	var music_time := float(MusicController.get_audible_position(track))
 	if music_time < 0.0 or not sprite.is_playing():
 		# No music (muted or not started): same cadence, free running.
 		var base_fps := maxf(sprite.sprite_frames.get_animation_speed(&"run"), 1.0)
@@ -368,10 +373,12 @@ func _setup_campaign_run() -> void:
 	if not _campaign_level.intro.is_empty():
 		_campaign_banner_node().show_banner("boss" if _campaign_level.is_boss() else "stage", str(_campaign_level.level_id), tr(_campaign_level.title), tr(_campaign_level.intro))
 	if _campaign_level.is_boss():
-		hud.call("set_campaign_boss", RullarenBoss.MAX_HP, RullarenBoss.MAX_HP)
+		var boss_hp := int(_campaign_run.call("get_boss_max_hp"))
+		hud.call("set_campaign_boss", boss_hp, boss_hp)
 
 func _on_campaign_star_collected(collected: int, _total: int) -> void:
-	_play_singleplayer_sfx("gravity_star", "%s|gravity_star|%d" % [_singleplayer_audio_round_id, collected])
+	var star_sfx := CampaignAudio.star_sfx_for(_campaign_level.get_presentation_biome()) if _campaign_level != null else "gravity_star"
+	_play_singleplayer_sfx(star_sfx, "%s|gravity_star|%d" % [_singleplayer_audio_round_id, collected])
 
 func _sync_screen_size() -> void:
 	var viewport_size := get_viewport_rect().size
@@ -835,6 +842,8 @@ func _physics_process(delta: float) -> void:
 		var campaign_status := str(_campaign_run.call("physics_tick", previous_player_rect, final_player_rect, campaign_lethal, float(player.get("world_x")), int(player.call("get_gravity_direction")), bool(player.get("grounded"))))
 		if campaign_status == "finished":
 			_begin_campaign_runout()
+		elif campaign_status == "caught":
+			run_end_requested = true
 	if run_end_requested and _campaign_runout_ticks < 0:
 		_end_run()
 	var camera_left := course_distance
@@ -1165,6 +1174,9 @@ func _spawn_course_event(event: Dictionary) -> void:
 				var rock_event_id := _singleplayer_rock_key(event)
 				rock.connect("impact_started", Callable(self, "_on_rock_impact_started"))
 				var rock_event := {"event_id": rock_event_id, "kind": "rock", "x": event_x, "width": width, "height": height, "floor_y": _floor_surface_y(event_x), "ceiling_y": _ceiling_surface_y(event_x), "trigger_lead": float(event.get("trigger_lead", FALLING_ROCK_MODEL.TRIGGER_LEAD)), "warning_ticks": int(event.get("warning_ticks", FALLING_ROCK_MODEL.WARNING_TICKS)), "fall_ticks": int(event.get("fall_ticks", FALLING_ROCK_MODEL.FALL_TICKS)), "burial_depth": float(event.get("burial_depth", FALLING_ROCK_MODEL.BURIAL_DEPTH))}
+				if bool(event.get("boss_attack", false)) and int(event.get("rock_variant", 0)) == 1:
+					# A boss icicle has no planned source event to resolve.
+					rock_event.merge({"rock_variant": 1, "floor_supported": true, "lodged_ticks": int(event.get("lodged_ticks", 240))}, true)
 				if is_icicle:
 					var resolved_icicle := _resolve_singleplayer_rock_event(event)
 					if resolved_icicle.is_empty():

@@ -17,6 +17,14 @@ const STREAMS: Dictionary = {
 	"ghost_warning": preload("res://assets/audio/sfx/ghost_warning.wav"),
 	"death": preload("res://assets/audio/sfx/death.mp3"),
 	"gravity_star": preload("res://assets/audio/sfx/gravity_star.wav"),
+	# Cave (tools/audio/generate_cave_audio.py). Scripted features play the
+	# first two by name; crystal_chime replaces gravity_star on cave stages.
+	"icicle_crack": preload("res://assets/audio/sfx/icicle_crack.wav"),
+	"cave_in_rumble": preload("res://assets/audio/sfx/cave_in_rumble.wav"),
+	"crystal_chime": preload("res://assets/audio/sfx/crystal_chime.wav"),
+	# Cave boss (giant bat): lock-on screech and the big icicle breaking.
+	"cave_bat_screech": preload("res://assets/audio/sfx/cave_bat_screech.wav"),
+	"cave_icicle_shatter": preload("res://assets/audio/sfx/cave_icicle_shatter.wav"),
 }
 
 var _voices: Array[AudioStreamPlayer] = []

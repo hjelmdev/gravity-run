@@ -489,6 +489,10 @@ func _draw_padlock(origin: Vector2) -> void:
 	_px(origin, 0, 1, 1, 1, Color("ffcd3c"))
 
 func _draw_mini_boss(origin: Vector2) -> void:
+	var boss := _world().get_boss()
+	if boss != null and boss.boss_id == &"stalactite":
+		_draw_mini_bat(origin)
+		return
 	# A tiny Rullaren on its stone: body, stack, eyes and a barrel.
 	var body := Color("8c5a46")
 	_px(origin, -6, -8, 13, 9, OUTLINE)
@@ -500,3 +504,19 @@ func _draw_mini_boss(origin: Vector2) -> void:
 	_px(origin, -9, -3, 3, 3, Color("b8783f"))
 	var puff := fmod(_time, 1.0)
 	_canvas.draw_rect(Rect2(origin + Vector2(3.0 - puff * 6.0, -14.0 - puff * 14.0) * MAP_PIXEL, Vector2(2, 2) * MAP_PIXEL), Color(0.85, 0.87, 0.9, 1.0 - puff))
+
+## A tiny Stalactite Giant hanging over its stone, wings flapping.
+func _draw_mini_bat(origin: Vector2) -> void:
+	var fur := Color("4a3566")
+	var wing := Color("5b3f7a")
+	var flap := 1 if fmod(_time, 0.6) < 0.3 else 0
+	_px(origin, -3, -9, 7, 8, OUTLINE)
+	_px(origin, -2, -8, 5, 6, fur)
+	_px(origin, -3, -11, 2, 2, OUTLINE)
+	_px(origin, 2, -11, 2, 2, OUTLINE)
+	_px(origin, -1, -7, 1, 1, Color("ff4f6a"))
+	_px(origin, 1, -7, 1, 1, Color("ff4f6a"))
+	_px(origin, -8, -8 - flap, 5, 3, OUTLINE)
+	_px(origin, -7, -7 - flap, 4, 1, wing)
+	_px(origin, 4, -8 - flap, 5, 3, OUTLINE)
+	_px(origin, 4, -7 - flap, 4, 1, wing)

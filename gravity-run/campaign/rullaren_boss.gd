@@ -59,6 +59,9 @@ func reset() -> void:
 func is_defeated() -> bool:
 	return hp <= 0
 
+func get_max_hp() -> int:
+	return MAX_HP
+
 func get_phase_title() -> String:
 	return str(PHASES[mini(phase, PHASES.size() - 1)].title)
 
