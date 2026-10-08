@@ -57,6 +57,7 @@ const CAMPAIGN_RUNOUT_TICKS := 75
 ## 34x44 hitbox, so a coin the art visibly runs through must still count.
 ## Multiplayer validates coins on its own and is unaffected.
 const SP_COIN_PICKUP_RADIUS := 19.0
+const SURFACE_TILE_KEEP_BEHIND := 128.0
 
 @onready var player: Node2D = $Player
 @onready var run_state: Node = $RunState
@@ -352,6 +353,25 @@ func _on_run_achievement_metrics_changed(coins: int, gravity_flips: int, hazards
 
 func _scale_track_y(y: float, scale: float) -> float:
 	return 56.0 + (y - 56.0) * scale
+
+## Drops pickups the runner has passed and frees them. They used to leave the
+## list without being freed: the node stayed in the scene, was never checked
+## again, and showed up as an uncollectable "double" coin after a retry of the
+## same course (or as a stray coin on the next run).
+func _prune_passed_nodes(nodes: Array[Node2D], limit_x: float, keep_collecting_alive: bool) -> Array[Node2D]:
+	var kept: Array[Node2D] = []
+	for node in nodes:
+		if not is_instance_valid(node):
+			continue
+		var collecting := keep_collecting_alive and bool(node.call("is_collected"))
+		if collecting:
+			# A collected coin finishes its burst and frees itself.
+			continue
+		if node.position.x > limit_x:
+			kept.append(node)
+		elif not node.is_queued_for_deletion():
+			node.queue_free()
+	return kept
 
 func _clear_nodes(nodes: Array[Node2D]) -> void:
 	for node in nodes:
@@ -761,8 +781,8 @@ func _physics_process(delta: float) -> void:
 	var camera_left := course_distance
 	if render_diagnostics_enabled:
 		_record_uncollected_coin_expiry(camera_left)
-	coins = coins.filter(func(coin: Node2D) -> bool: return is_instance_valid(coin) and not bool(coin.call("is_collected")) and coin.position.x > camera_left - 100.0)
-	loot_pickups = loot_pickups.filter(func(pickup: Node2D) -> bool: return is_instance_valid(pickup) and pickup.position.x > camera_left - 100.0)
+	coins = _prune_passed_nodes(coins, camera_left - 100.0, true)
+	loot_pickups = _prune_passed_nodes(loot_pickups, camera_left - 100.0, false)
 	queue_redraw()
 
 func _end_run() -> void:
@@ -1670,16 +1690,18 @@ func _update_moving_slopes(_movement: float) -> void:
 		if not is_instance_valid(slope):
 			continue
 		var end_x: float = slope.call("get_end_x")
-		if end_x <= camera_left:
+		# Keep terrain a little past the left edge: surface tiles are chosen
+		# from whole 64 px cells, and the cell at the edge still looks at it.
+		if end_x <= camera_left - SURFACE_TILE_KEEP_BEHIND:
 			if bool(slope.call("is_ceiling_slope")):
 				ceiling_level_y = float(slope.call("get_end_y"))
 			else:
 				floor_level_y = float(slope.call("get_end_y"))
 			slope.queue_free()
-		elif slope.position.x > camera_left - SLOPE_WIDTH:
-			active_slopes.append(slope)
 		else:
-			slope.queue_free()
+			# Freed only through the branch above, which also carries its end
+			# level forward; dropping it elsewhere would lose that level.
+			active_slopes.append(slope)
 	slopes = active_slopes
 
 func _player_hits_obstacle(obstacle: Node2D) -> bool:

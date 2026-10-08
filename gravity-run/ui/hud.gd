@@ -184,18 +184,21 @@ func _draw() -> void:
 
 func _draw_campaign_bar(viewport_width: float) -> void:
 	var font := ThemeDB.fallback_font
-	var width := clampf(viewport_width - 360.0, 260.0, 440.0)
-	# The bottom band is free in campaign runs (no seed chase strip there).
-	var rect := Rect2(Vector2((viewport_width - width) * 0.5, get_viewport_rect().size.y - 52.0), Vector2(width, 44.0))
+	# Sits in the top HUD band between the coin counter (ends near x 360) and
+	# the toolbar on the right, so it never covers the track.
+	var span_left := 372.0
+	var span_right := viewport_width - 236.0
+	var width := clampf(span_right - span_left, 220.0, 460.0)
+	var rect := Rect2(Vector2(span_left + maxf(span_right - span_left - width, 0.0) * 0.5, 4.0), Vector2(width, 40.0))
 	draw_rect(rect, Color("121b2c", 0.86))
 	draw_rect(rect, Color("42d6c5", 0.7), false, 2.0)
 	var title := "%s  %s" % [str(campaign_level.get("level_id")), tr(str(campaign_level.get("title")))]
-	draw_string(font, rect.position + Vector2(12.0, 18.0), title, HORIZONTAL_ALIGNMENT_LEFT, width - 110.0, 13, Color("edf3ff"))
+	draw_string(font, rect.position + Vector2(12.0, 17.0), title, HORIZONTAL_ALIGNMENT_LEFT, width - 110.0, 12, Color("edf3ff"))
 	# Stars taken this attempt.
 	for index in range(campaign_star_total):
-		var center := Vector2(rect.end.x - 18.0 - float(campaign_star_total - 1 - index) * 22.0, rect.position.y + 14.0)
+		var center := Vector2(rect.end.x - 16.0 - float(campaign_star_total - 1 - index) * 20.0, rect.position.y + 12.0)
 		_draw_star_icon(center, 8.0, index < campaign_stars)
-	var bar := Rect2(rect.position + Vector2(12.0, 28.0), Vector2(width - 24.0, 8.0))
+	var bar := Rect2(rect.position + Vector2(12.0, 25.0), Vector2(width - 24.0, 7.0))
 	if campaign_boss_hp >= 0:
 		var pip_width := (bar.size.x + 4.0) / float(maxi(campaign_boss_max_hp, 1))
 		for index in range(campaign_boss_max_hp):

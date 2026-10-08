@@ -252,7 +252,11 @@ static func draw_surface_tiles(canvas: CanvasItem, biome: BiomeDefinition, ceili
 		var source := selected_biome.tile_set.get_source(selected_biome.atlas_source_id) as TileSetAtlasSource
 		if source == null or source.texture == null:
 			continue
-		var candidates := _tiles_for_surface_cell(selected_biome, ceiling, tile_left, tile_right, surface_y_at)
+		# Classify the whole world cell, not the visible part of it. Clipping at
+		# the view edge or a segment boundary otherwise changed the tile (flat,
+		# slope, ledge) while it scrolled, so slopes popped at the screen edges.
+		var cell_right := x + float(world_tile_size.x)
+		var candidates := _tiles_for_surface_cell(selected_biome, ceiling, x, cell_right, surface_y_at)
 		if candidates.is_empty():
 			continue
 		var texture_tile_size := source.texture_region_size
@@ -262,11 +266,8 @@ static func draw_surface_tiles(canvas: CanvasItem, biome: BiomeDefinition, ceili
 		var tile_tint := tint if tint != Color.WHITE else selected_biome.surface_tint
 		var u0 := clampf((tile_left - x) / float(world_tile_size.x), 0.0, 1.0)
 		var u1 := clampf((tile_right - x) / float(world_tile_size.x), 0.0, 1.0)
-		var y_left := float(surface_y_at.call(tile_left, ceiling))
-		var y_right := float(surface_y_at.call(tile_right, ceiling))
-		var y_mid := float(surface_y_at.call((tile_left + tile_right) * 0.5, ceiling))
 		var source_rect := Rect2(Vector2(atlas * texture_tile_size), Vector2(texture_tile_size))
-		var step_threshold := _find_step_threshold(surface_y_at, ceiling, tile_left, tile_right, y_left, y_mid, y_right)
+		var step_threshold := _find_step_threshold(surface_y_at, ceiling, x, cell_right, float(surface_y_at.call(x, ceiling)), float(surface_y_at.call((x + cell_right) * 0.5, ceiling)), float(surface_y_at.call(cell_right, ceiling)))
 		if step_threshold > tile_left and step_threshold < tile_right:
 			var step_fraction := (step_threshold - x) / float(world_tile_size.x)
 			var left_surface := Callable(func(position_x: float, _ceiling: bool) -> float: return float(surface_y_at.call(minf(position_x, step_threshold - 0.01), ceiling)))

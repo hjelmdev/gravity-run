@@ -164,6 +164,11 @@ func _check_failed_attempt() -> void:
 	_check(bool(game.get("game_over")) and is_instance_valid(panel) and bool(panel.get("visible")), "1-1 without input ends in a failed attempt (%d ticks)" % ticks)
 	_check(int(Campaign.get_record(level).get("deaths", 0)) == 1 and not Campaign.is_completed(level), "the failed attempt is recorded as a death, not a completion")
 	_check(Campaign.get_attempt_deaths() == 1, "attempt deaths count toward first-try")
+	# Coins the runner passed must leave the scene, or a retry of the same
+	# course shows them again as uncollectable "double" coins.
+	game.call("retry_run")
+	await get_tree().process_frame
+	_check(_untracked_coins(game) == 0, "no passed coins survive a retry (%d left)" % _untracked_coins(game))
 	game.queue_free()
 	await get_tree().process_frame
 	Campaign.clear_active()
@@ -243,3 +248,14 @@ func _check_unlocks() -> void:
 	_check(Campaign.is_world_unlocked(cave), "the cave is open after the boss")
 	Campaign.clear_active()
 	Campaign.reset_progress()
+
+func _untracked_coins(game: Node) -> int:
+	var tracked := {}
+	for coin in game.get("coins"):
+		if is_instance_valid(coin):
+			tracked[coin.get_instance_id()] = true
+	var count := 0
+	for child in game.get_children():
+		if child.get_script() != null and str(child.get_script().resource_path).ends_with("coin.gd") and not child.is_queued_for_deletion() and not bool(child.call("is_collected")) and not tracked.has(child.get_instance_id()):
+			count += 1
+	return count
