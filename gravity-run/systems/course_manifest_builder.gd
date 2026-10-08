@@ -327,6 +327,11 @@ func _make_multiplayer_ruleset(generator_version: int) -> Resource:
 
 func _resolve_events(source_events: Array[Dictionary], course_length_px: int, generator_version: int, biome_start_offset: float = 0.0) -> Array[Dictionary]:
 	var resolved: Array[Dictionary] = []
+	# Surface lookups only read step/slope records of one lane. Keeping those in
+	# small per-lane lists (in the same order) gives identical results without
+	# rescanning every resolved hazard for every event, which made long runs
+	# quadratic and caused growing frame stalls when the runtime re-resolved.
+	var surface_lanes := {"synced": 0, "floor": [] as Array[Dictionary], "ceiling": [] as Array[Dictionary]}
 	var floor_y := FLOOR_START_Y
 	var ceiling_y := CEILING_START_Y
 	var event_index := 0
@@ -337,9 +342,10 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 		var event_x := PLAYER_START_X + course_distance
 		var kind := str(source.get("kind", ""))
 		var from_ceiling := bool(source.get("from_ceiling", false))
-		var floor_surface_y := _surface_y_at(resolved, event_x, false)
-		var ceiling_surface_y := _surface_y_at(resolved, event_x, true)
-		var surface_y := _surface_y_at(resolved, event_x, from_ceiling)
+		_sync_surface_lanes(surface_lanes, resolved)
+		var floor_surface_y := _surface_y_at(surface_lanes["floor"], event_x, false)
+		var ceiling_surface_y := _surface_y_at(surface_lanes["ceiling"], event_x, true)
+		var surface_y := _surface_y_at(surface_lanes["ceiling"] if from_ceiling else surface_lanes["floor"], event_x, from_ceiling)
 		var event_prefix := "event_%05d" % event_index
 		match kind:
 			"spikes":
@@ -508,8 +514,9 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 			"saw":
 				var from_ceiling_saw := bool(source.get("from_ceiling", false))
 				var saw_variant := str(source.get("saw_variant", "legacy_floor_then_drop"))
-				var saw_floor_y := _surface_y_at(resolved, event_x, false)
-				var saw_ceiling_y := _surface_y_at(resolved, event_x, true)
+				_sync_surface_lanes(surface_lanes, resolved)
+				var saw_floor_y := _surface_y_at(surface_lanes["floor"], event_x, false)
+				var saw_ceiling_y := _surface_y_at(surface_lanes["ceiling"], event_x, true)
 				if saw_floor_y - saw_ceiling_y < 260.0:
 					event_index += 1
 					continue
@@ -646,6 +653,16 @@ func _resolve_events(source_events: Array[Dictionary], course_length_px: int, ge
 		return str(a.event_id) < str(b.event_id)
 	)
 	return resolved
+
+func _sync_surface_lanes(lanes: Dictionary, resolved: Array[Dictionary]) -> void:
+	var index := int(lanes["synced"])
+	while index < resolved.size():
+		var event: Dictionary = resolved[index]
+		var kind := str(event.get("kind", ""))
+		if kind == "step" or kind == "slope":
+			(lanes["ceiling"] if bool(event.get("from_ceiling", false)) else lanes["floor"]).append(event)
+		index += 1
+	lanes["synced"] = index
 
 func _surface_y_at(events: Array[Dictionary], x: float, ceiling: bool) -> float:
 	var surface_y := CEILING_START_Y if ceiling else FLOOR_START_Y

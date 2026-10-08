@@ -85,6 +85,7 @@ var _spawn_lead_distance := 0.0
 var _configuration_failed := false
 var _spiked_barrel_corridors: Array[Dictionary] = []
 var _gen16_barrel_meeting_windows: Array[Dictionary] = []
+var _committed_sweep: Dictionary = {}
 var _generation_stats := {"candidate_attempts": 0, "route_rejections": 0, "biome_rejections": 0, "pursuit_profile_fallbacks": 0, "accepted_events": 0, "fallback_events": 0}
 
 ## Spawn course events fully beyond the viewport so their geometry enters smoothly.
@@ -207,6 +208,7 @@ func reset(seed: int = 0) -> void:
 	else:
 		_rng.seed = seed
 	_events.clear()
+	_invalidate_committed_sweep()
 	_spiked_barrel_corridors.clear()
 	_gen16_barrel_meeting_windows.clear()
 	_next_event_distance = 1400.0 if _generator_version >= PUBLISHED_SHARED_GENERATOR_VERSION else 1050.0
@@ -262,44 +264,64 @@ func is_plan_solvable(events: Array[Dictionary], switch_clearance: float = -1.0)
 	var clearance := switch_clearance if switch_clearance >= 0.0 else get_switch_clearance_distance(MAX_RUN_SPEED)
 	var edges: Array[Dictionary] = []
 	for event in events:
-		for threat in event.get("threats", []):
-			var start := float(threat.get("start", 0.0))
-			var end := float(threat.get("end", start))
-			if end <= start:
-				continue
-			var mask := int(threat.get("blocked_lanes", 0)) & BOTH_LANES
-			if mask == 0:
-				continue
-			var edge_clearance := float(threat.get("switch_clearance", 0.0))
-			edges.append({"x": start, "floor_delta": 1 if mask & FLOOR_LANE else 0, "ceiling_delta": 1 if mask & CEILING_LANE else 0, "switch_clearance": edge_clearance})
-			edges.append({"x": end, "floor_delta": -1 if mask & FLOOR_LANE else 0, "ceiling_delta": -1 if mask & CEILING_LANE else 0, "switch_clearance": 0.0})
-		if str(event.get("kind", "")) == "ghost" and int(event.get("ghost_variant", 0)) in [2, 3]:
-			# Candidate events are checked before manifest resolution, when their
-			# canonical position is course_distance rather than world-space x.
-			var event_x := float(event.get("course_distance", event.get("x", 0.0)))
-			var trigger_x := event_x - float(event.get("trigger_lead", 1500.0))
-			var warning_ticks := int(event.get("warning_ticks", 72))
-			var danger_ticks := int(event.get("danger_ticks", 96))
-			var speed_delta := float(event.get("pursuit_speed_delta", event.get("flyby_speed_delta", 500.0)))
-			var danger_start := trigger_x + GHOST_FLYBY_MAX_RUN_SPEED * float(warning_ticks) / 60.0
-			var danger_end := danger_start + (GHOST_FLYBY_MAX_RUN_SPEED + speed_delta) * float(danger_ticks) / 60.0
-			var event_id := str(event.get("event_id", "%s@%.3f" % [str(event.get("id", "ghost")), float(event.get("course_distance", event.get("x", 0.0)))]))
-			edges.append({"x": trigger_x, "special": "ghost_snapshot", "event_id": event_id})
-			edges.append({"x": danger_start, "special": "ghost_lock", "event_id": event_id, "switch_clearance": clearance})
-			edges.append({"x": danger_end, "special": "ghost_release", "event_id": event_id})
+		_append_plan_edges(edges, event, clearance)
 	if edges.is_empty():
 		return true
-	edges.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a["x"]) < float(b["x"]))
+	edges.sort_custom(_edge_x_less)
+	var state := _new_sweep_state()
+	state["clearance"] = clearance
+	return bool(_sweep_plan_edges(edges, 0, state).get("solvable", true))
 
-	var current_lane := FLOOR_LANE
-	var last_threat_end := 0.0
-	var floor_count := 0
-	var ceiling_count := 0
-	var edge_index := 0
-	var ghost_target_lanes: Dictionary = {}
+## Route edges for one event. The sweep only depends on the sorted edge x values
+## and the multiset of edges in each equal-x group, so edges can be cached per
+## committed plan and merged with a candidate's edges without changing results.
+func _append_plan_edges(edges: Array[Dictionary], event: Dictionary, clearance: float) -> void:
+	for threat in event.get("threats", []):
+		var start := float(threat.get("start", 0.0))
+		var end := float(threat.get("end", start))
+		if end <= start:
+			continue
+		var mask := int(threat.get("blocked_lanes", 0)) & BOTH_LANES
+		if mask == 0:
+			continue
+		var edge_clearance := float(threat.get("switch_clearance", 0.0))
+		edges.append({"x": start, "floor_delta": 1 if mask & FLOOR_LANE else 0, "ceiling_delta": 1 if mask & CEILING_LANE else 0, "switch_clearance": edge_clearance})
+		edges.append({"x": end, "floor_delta": -1 if mask & FLOOR_LANE else 0, "ceiling_delta": -1 if mask & CEILING_LANE else 0, "switch_clearance": 0.0})
+	if str(event.get("kind", "")) == "ghost" and int(event.get("ghost_variant", 0)) in [2, 3]:
+		# Candidate events are checked before manifest resolution, when their
+		# canonical position is course_distance rather than world-space x.
+		var event_x := float(event.get("course_distance", event.get("x", 0.0)))
+		var trigger_x := event_x - float(event.get("trigger_lead", 1500.0))
+		var warning_ticks := int(event.get("warning_ticks", 72))
+		var danger_ticks := int(event.get("danger_ticks", 96))
+		var speed_delta := float(event.get("pursuit_speed_delta", event.get("flyby_speed_delta", 500.0)))
+		var danger_start := trigger_x + GHOST_FLYBY_MAX_RUN_SPEED * float(warning_ticks) / 60.0
+		var danger_end := danger_start + (GHOST_FLYBY_MAX_RUN_SPEED + speed_delta) * float(danger_ticks) / 60.0
+		var event_id := str(event.get("event_id", "%s@%.3f" % [str(event.get("id", "ghost")), float(event.get("course_distance", event.get("x", 0.0)))]))
+		edges.append({"x": trigger_x, "special": "ghost_snapshot", "event_id": event_id})
+		edges.append({"x": danger_start, "special": "ghost_lock", "event_id": event_id, "switch_clearance": clearance})
+		edges.append({"x": danger_end, "special": "ghost_release", "event_id": event_id})
+
+static func _edge_x_less(a: Dictionary, b: Dictionary) -> bool:
+	return float(a["x"]) < float(b["x"])
+
+static func _new_sweep_state() -> Dictionary:
+	return {"current_lane": FLOOR_LANE, "last_threat_end": 0.0, "floor_count": 0, "ceiling_count": 0, "ghost_target_lanes": {}}
+
+## Runs the lane sweep from edge_index with the given state. When checkpoints is
+## an Array, the state before each equal-x group is recorded as
+## [group_start_index, group_start_x, state_copy] so a later trial can resume.
+func _sweep_plan_edges(edges: Array[Dictionary], edge_index: int, state: Dictionary, checkpoints: Variant = null) -> Dictionary:
+	var current_lane := int(state["current_lane"])
+	var last_threat_end := float(state["last_threat_end"])
+	var floor_count := int(state["floor_count"])
+	var ceiling_count := int(state["ceiling_count"])
+	var ghost_target_lanes: Dictionary = (state["ghost_target_lanes"] as Dictionary).duplicate()
 	while edge_index < edges.size() - 1:
 		var start := float(edges[edge_index]["x"])
-		var transition_clearance := clearance
+		if checkpoints is Array:
+			(checkpoints as Array).append([edge_index, start, {"current_lane": current_lane, "last_threat_end": last_threat_end, "floor_count": floor_count, "ceiling_count": ceiling_count, "ghost_target_lanes": ghost_target_lanes.duplicate()}])
+		var transition_clearance := float(state["clearance"])
 		while edge_index < edges.size() and is_equal_approx(float(edges[edge_index]["x"]), start):
 			var edge: Dictionary = edges[edge_index]
 			var special := str(edge.get("special", ""))
@@ -327,17 +349,89 @@ func is_plan_solvable(events: Array[Dictionary], switch_clearance: float = -1.0)
 		var end := float(edges[edge_index]["x"])
 		var blocked_mask := (FLOOR_LANE if floor_count > 0 else 0) | (CEILING_LANE if ceiling_count > 0 else 0)
 		if blocked_mask == BOTH_LANES:
-			return false
+			return {"solvable": false, "fail_x": start}
 		if blocked_mask == 0:
 			continue
 
 		var required_lane := CEILING_LANE if blocked_mask & FLOOR_LANE else FLOOR_LANE
 		if required_lane != current_lane:
 			if start - last_threat_end < transition_clearance:
-				return false
+				return {"solvable": false, "fail_x": start}
 			current_lane = required_lane
 		last_threat_end = end
-	return true
+	return {"solvable": true}
+
+## Equivalent to is_plan_solvable(_events + [candidate], clearance), but reuses
+## a sorted edge list and per-group sweep checkpoints for the committed plan.
+## Without this the generator re-sorted every edge since the run started for
+## every candidate shift, which grew into multi-frame stalls on long web runs.
+func _is_trial_solvable(candidate: Dictionary, clearance: float) -> bool:
+	var candidate_edges: Array[Dictionary] = []
+	_append_plan_edges(candidate_edges, candidate, clearance)
+	if candidate_edges.is_empty():
+		if _events.is_empty():
+			return true
+	_ensure_committed_sweep(clearance)
+	if candidate_edges.is_empty():
+		return bool(_committed_sweep.get("solvable", true))
+	candidate_edges.sort_custom(_edge_x_less)
+	var committed: Array[Dictionary] = _committed_sweep["edges"]
+	var checkpoints: Array = _committed_sweep["checkpoints"]
+	var first_candidate_x := float(candidate_edges[0]["x"])
+	# Resume before the last committed group that starts safely before every
+	# candidate edge (well outside is_equal_approx tolerance), so all earlier
+	# groups and their interval ends are untouched by the candidate.
+	var margin := maxf(64.0, absf(first_candidate_x) * 0.001)
+	var low := 0
+	var high := checkpoints.size() - 1
+	var resume := -1
+	while low <= high:
+		var mid := (low + high) >> 1
+		if float(checkpoints[mid][1]) < first_candidate_x - margin:
+			resume = mid
+			low = mid + 1
+		else:
+			high = mid - 1
+	var resume_index := 0
+	var resume_state := _new_sweep_state()
+	if resume >= 0:
+		resume_index = int(checkpoints[resume][0])
+		resume_state = (checkpoints[resume][2] as Dictionary)
+		if not bool(_committed_sweep.get("solvable", true)) and float(_committed_sweep.get("fail_x", INF)) < float(checkpoints[resume][1]):
+			return false
+	var state := resume_state.duplicate()
+	state["clearance"] = clearance
+	# Merge the committed tail with the candidate edges. Order inside an equal-x
+	# group does not affect the sweep, so any stable merge is equivalent.
+	var tail: Array[Dictionary] = []
+	var committed_index := resume_index
+	var candidate_index := 0
+	while committed_index < committed.size() or candidate_index < candidate_edges.size():
+		if candidate_index >= candidate_edges.size() or (committed_index < committed.size() and float(committed[committed_index]["x"]) <= float(candidate_edges[candidate_index]["x"])):
+			tail.append(committed[committed_index])
+			committed_index += 1
+		else:
+			tail.append(candidate_edges[candidate_index])
+			candidate_index += 1
+	if resume_index == 0 and tail.is_empty():
+		return true
+	return bool(_sweep_plan_edges(tail, 0, state).get("solvable", true))
+
+func _invalidate_committed_sweep() -> void:
+	_committed_sweep = {}
+
+func _ensure_committed_sweep(clearance: float) -> void:
+	if not _committed_sweep.is_empty() and float(_committed_sweep.get("clearance", NAN)) == clearance and int(_committed_sweep.get("event_count", -1)) == _events.size():
+		return
+	var edges: Array[Dictionary] = []
+	for event in _events:
+		_append_plan_edges(edges, event, clearance)
+	edges.sort_custom(_edge_x_less)
+	var checkpoints: Array = []
+	var state := _new_sweep_state()
+	state["clearance"] = clearance
+	var result := _sweep_plan_edges(edges, 0, state, checkpoints)
+	_committed_sweep = {"clearance": clearance, "event_count": _events.size(), "edges": edges, "checkpoints": checkpoints, "solvable": bool(result.get("solvable", true)), "fail_x": float(result.get("fail_x", INF))}
 
 func _append_feasible_event(speed: float, track_height: float) -> void:
 	var spacing := BASE_EVENT_SPACING
@@ -390,9 +484,7 @@ func _append_feasible_event(speed: float, track_height: float) -> void:
 				continue
 			candidate["threats"] = profile.build_threat_intervals(candidate)
 			_apply_rock_switch_clearance(candidate, candidate_clearance if candidate_is_rock else 0.0)
-			var trial := _events.duplicate()
-			trial.append(candidate)
-			if is_plan_solvable(trial, clearance):
+			if _is_trial_solvable(candidate, clearance):
 				var phase := _rhythm_event_index % GEN14_RHYTHM_SPACING_DELTAS.size()
 				if _generator_version >= GENERATOR_VERSION_14:
 					candidate["rhythm_phase"] = phase
@@ -564,10 +656,7 @@ func _try_append_independent_barrel(base_event: Dictionary, clearance: float) ->
 			spiked_corridor = _try_make_supported_spiked_corridor(barrel_event, base_event)
 			if not spiked_corridor.is_empty():
 				barrel_event["spiked"] = true
-	var trial: Array[Dictionary] = []
-	trial.append_array(_events)
-	trial.append(barrel_event)
-	if is_plan_solvable(trial, clearance):
+	if _is_trial_solvable(barrel_event, clearance):
 		_insert_generated_event(barrel_event)
 		if _generator_version >= GENERATOR_VERSION_16:
 			_gen16_barrel_meeting_windows.append_array(_barrel_meeting_windows(barrel_event))
@@ -793,7 +882,7 @@ func _append_safe_fallback(speed: float, track_height: float) -> void:
 			if _candidate_crosses_spiked_barrel_corridor(candidate):
 				safe_distance += PLAN_RETRY_SPACING
 				continue
-			if is_plan_solvable(_events + [candidate], clearance):
+			if _is_trial_solvable(candidate, clearance):
 				if _generator_version >= GENERATOR_VERSION_14:
 					candidate["rhythm_phase"] = _rhythm_event_index % GEN14_RHYTHM_SPACING_DELTAS.size()
 				_insert_generated_event(candidate)

@@ -8,9 +8,26 @@ var _ceiling_y := 0.0
 var _floor_profile: Dictionary = {}
 var _ceiling_profile: Dictionary = {}
 var _events: Array = []
+# Step/slope/gap records per lane, in the original order. linear_surface_at only
+# reads those records for the requested lane, so scanning these short lists is
+# equivalent to scanning every event and keeps configure() close to linear.
+var _floor_surface_events: Array = []
+var _ceiling_surface_events: Array = []
 
 func configure(events: Array, initial_floor_y: float, initial_ceiling_y: float) -> void:
 	_events = events
+	_floor_surface_events = []
+	_ceiling_surface_events = []
+	for event_value in events:
+		if not event_value is Dictionary:
+			continue
+		var kind := str((event_value as Dictionary).get("kind", ""))
+		if kind != "step" and kind != "slope" and kind != "gap":
+			continue
+		if bool((event_value as Dictionary).get("from_ceiling", false)):
+			_ceiling_surface_events.append(event_value)
+		else:
+			_floor_surface_events.append(event_value)
 	_floor_y = initial_floor_y
 	_ceiling_y = initial_ceiling_y
 	_floor_profile = _build_profile(false)
@@ -27,7 +44,7 @@ func surface_at(x: float, ceiling: bool) -> Dictionary:
 		var middle := (low + high) >> 1
 		var boundary := float(boundaries[middle])
 		if absf(x - boundary) <= BOUNDARY_EPSILON:
-			return linear_surface_at(_events, _floor_y, _ceiling_y, x, ceiling)
+			return linear_surface_at(_lane_events(ceiling), _floor_y, _ceiling_y, x, ceiling)
 		if boundary < x:
 			low = middle + 1
 		else:
@@ -55,7 +72,7 @@ func support_boundaries(ceiling: bool) -> Array[float]:
 func interval_is_supported(start_x: float, end_x: float, ceiling: bool) -> bool:
 	var left := minf(start_x, end_x)
 	var right := maxf(start_x, end_x)
-	for event_value in _events:
+	for event_value in _lane_events(ceiling):
 		if not event_value is Dictionary:
 			continue
 		var event: Dictionary = event_value
@@ -79,9 +96,13 @@ func lowest_surface_y_over_interval(start_x: float, end_x: float, ceiling: bool)
 				lowest_y = maxf(lowest_y, float(surface_at(sample_x, ceiling).get("y", lowest_y)))
 	return lowest_y
 
+func _lane_events(ceiling: bool) -> Array:
+	return _ceiling_surface_events if ceiling else _floor_surface_events
+
 func _build_profile(ceiling: bool) -> Dictionary:
+	var lane_events := _lane_events(ceiling)
 	var boundaries: Array[float] = []
-	for event_value in _events:
+	for event_value in lane_events:
 		if not event_value is Dictionary:
 			continue
 		var event: Dictionary = event_value
@@ -110,15 +131,15 @@ func _build_profile(ceiling: bool) -> Dictionary:
 		var start_x := unique_boundaries[index]
 		var end_x := unique_boundaries[index + 1]
 		var inset := minf((end_x - start_x) * 0.25, 0.001)
-		var left := linear_surface_at(_events, _floor_y, _ceiling_y, start_x + inset, ceiling)
-		var right := linear_surface_at(_events, _floor_y, _ceiling_y, end_x - inset, ceiling)
-		var middle := linear_surface_at(_events, _floor_y, _ceiling_y, (start_x + end_x) * 0.5, ceiling)
+		var left := linear_surface_at(lane_events, _floor_y, _ceiling_y, start_x + inset, ceiling)
+		var right := linear_surface_at(lane_events, _floor_y, _ceiling_y, end_x - inset, ceiling)
+		var middle := linear_surface_at(lane_events, _floor_y, _ceiling_y, (start_x + end_x) * 0.5, ceiling)
 		interval_starts.append(float(left.y))
 		interval_ends.append(float(right.y))
 		interval_supports.append(bool(middle.supported))
 	var final_surface := {"y": initial_y, "supported": true}
 	if not unique_boundaries.is_empty():
-		final_surface = linear_surface_at(_events, _floor_y, _ceiling_y, float(unique_boundaries.back()) + 0.001, ceiling)
+		final_surface = linear_surface_at(lane_events, _floor_y, _ceiling_y, float(unique_boundaries.back()) + 0.001, ceiling)
 	return {"boundaries": unique_boundaries, "interval_starts": interval_starts, "interval_ends": interval_ends, "interval_supports": interval_supports, "initial_y": initial_y, "final_surface": final_surface}
 
 static func linear_surface_at(events: Array, initial_floor_y: float, initial_ceiling_y: float, x: float, ceiling: bool) -> Dictionary:
