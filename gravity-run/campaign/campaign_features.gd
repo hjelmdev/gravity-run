@@ -14,13 +14,21 @@ class_name CampaignFeatures
 ##              with a dust crack in the ceiling as warning.
 ##   bat_swarm  a flapping swarm that sweeps down one lane ("side": floor|ceiling).
 ##   darkness   presentation only: a dark section lit around the runner.
-##   Haunted-wood kinds register here later.
+##   ghost_hand a purple glow warns a lane, then a ghost hand reaches out of it
+##              ("side": floor|ceiling).
+##   wisp       harmless: a wisp floats ahead and copies the runner's lane with a
+##              delay; touching it gives bonus coins. Decided by CampaignRun.
+##   fog        presentation only: a fog bank over the right part of the screen.
+##              Only placed where the generated events are sparse (fog_min_gap).
 
 ## True for kinds that can kill: they need a quiet stretch of course.
 const KINDS := {
 	"cave_in": {"hazardous": true, "before": 420.0, "after": 140.0, "default_count": 3},
 	"bat_swarm": {"hazardous": true, "before": 560.0, "after": 90.0},
 	"darkness": {"hazardous": false, "default_length": 3200.0},
+	"ghost_hand": {"hazardous": true, "before": 360.0, "after": 70.0, "margin": 30.0},
+	"wisp": {"hazardous": false, "default_length": 1500.0},
+	"fog": {"hazardous": false, "default_length": 2000.0, "sparse": true},
 }
 
 ## Falling rocks of a cave-in: spacing, size and timing. The rocks use the
@@ -41,6 +49,24 @@ const BAT_TRIGGER_DISTANCE := 520.0
 ## Distance the runner covers while the swarm rustles before it takes off.
 const BAT_WARNING_DISTANCE := 180.0
 
+## Ghost hand size (timing lives in hazards/ghost_hand.gd).
+const HAND_WIDTH := 60.0
+const HAND_HEIGHT := 120.0
+const HAND_EARLY_LEAD := 800.0
+## Wisp: it starts WISP_START_OFFSET px ahead of the runner and drifts back
+## through the runner's position; it copies the runner's lane WISP_DELAY_TICKS
+## (0.8 s) late. Touching it gives WISP_BONUS_COINS.
+const WISP_START_OFFSET := 460.0
+const WISP_END_OFFSET := -60.0
+const WISP_DELAY_TICKS := 48
+const WISP_BONUS_COINS := 3
+## Fog is the haunted stand-in for a +0.1 reaction margin (generation cannot
+## change): inside fog every gap between generated events must be at least this
+## factor times the stage's own 40th-percentile gap, so fog avoids the tight
+## clusters of a stage and sits over its roomier stretches.
+const FOG_GAP_FACTOR := 1.1
+const FOG_GAP_PERCENTILE := 0.4
+
 ## Clearance rules shared by the level tool and the tests.
 const EVENT_MARGIN := 80.0
 const STAR_MARGIN := 120.0
@@ -52,7 +78,7 @@ const FINISH_MARGIN := 240.0
 ## along the other surface. main.gd applies ROCK_MIN_LANE to feature rocks
 ## (generated rocks keep their own 260 rule).
 const ROCK_MIN_LANE := 200.0
-const MIN_LANE_CLEARANCE := {"cave_in": ROCK_MIN_LANE, "bat_swarm": 200.0}
+const MIN_LANE_CLEARANCE := {"cave_in": ROCK_MIN_LANE, "bat_swarm": 200.0, "ghost_hand": 200.0}
 
 static func is_hazardous(kind: String) -> bool:
 	return bool((KINDS.get(kind, {}) as Dictionary).get("hazardous", false))
@@ -78,7 +104,9 @@ static func span_of(feature: Dictionary) -> Vector2:
 			return Vector2(at - float(def.before), last + ROCK_WIDTH * 0.5 + float(def.after))
 		"bat_swarm":
 			return Vector2(at - float(def.before), at + BAT_WIDTH * 0.5 + float(def.after))
-		"darkness":
+		"ghost_hand":
+			return Vector2(at - float(def.before), at + HAND_WIDTH * 0.5 + float(def.after))
+		"darkness", "wisp", "fog":
 			return Vector2(at, at + length_of(feature))
 	return Vector2(at, at)
 
@@ -90,6 +118,8 @@ static func critical_range_of(feature: Dictionary) -> Vector2:
 			return Vector2(at - 60.0, at + float(rock_count(feature) - 1) * ROCK_SPACING + 60.0)
 		"bat_swarm":
 			return Vector2(at - 300.0, at + BAT_WIDTH * 0.5)
+		"ghost_hand":
+			return Vector2(at - 60.0, at + 60.0)
 	return span_of(feature)
 
 ## Course events main.gd spawns for a feature, in order. "early_lead" is how
@@ -117,6 +147,13 @@ static func events_of(feature: Dictionary) -> Array[Dictionary]:
 				"trigger_distance": BAT_TRIGGER_DISTANCE,
 				"early_lead": BAT_TRIGGER_DISTANCE + 300.0, "feature_event": true,
 			})
+		"ghost_hand":
+			result.append({
+				"kind": "ghost_hand", "id": "ghost_hand", "feature": "ghost_hand",
+				"course_distance": at, "width": HAND_WIDTH, "height": HAND_HEIGHT,
+				"from_ceiling": str(feature.get("side", "floor")) == "ceiling",
+				"early_lead": HAND_EARLY_LEAD, "feature_event": true,
+			})
 	return result
 
 ## Which surface the runner has to be on near a course distance to survive this
@@ -132,7 +169,19 @@ static func required_side_at(feature: Dictionary, course_distance: float) -> int
 		"bat_swarm":
 			if course_distance >= at - BAT_TRIGGER_DISTANCE and course_distance <= at + 260.0:
 				return 1 if str(feature.get("side", "ceiling")) == "ceiling" else -1
+		"ghost_hand":
+			if course_distance >= at - 330.0 and course_distance <= at + 80.0:
+				return 1 if str(feature.get("side", "floor")) == "ceiling" else -1
 	return 0
+
+## Wisp offset ahead of the runner at a course distance (negative once it has
+## drifted past), or INF when the wisp is not out.
+static func wisp_offset(feature: Dictionary, course_distance: float) -> float:
+	var at := float(feature.get("at", 0.0))
+	var length := length_of(feature)
+	if course_distance < at or course_distance > at + length:
+		return INF
+	return lerpf(WISP_START_OFFSET, WISP_END_OFFSET, (course_distance - at) / length)
 
 ## Extent of course distance a generated encounter threatens, padded for things
 ## that travel (barrels roll toward the runner, saws move along a surface).
@@ -169,6 +218,8 @@ static func conflicts(feature: Dictionary, planned: Array, stars: PackedVector2A
 		problems.append("starts too early (%.0f)" % span.x)
 	if span.y > cutoff - FINISH_MARGIN:
 		problems.append("runs into the finish run-in (%.0f)" % span.y)
+	if bool((KINDS[kind] as Dictionary).get("sparse", false)):
+		problems.append_array(_fog_problems(span, planned, cutoff))
 	if not is_hazardous(kind):
 		return problems
 	for event in planned:
@@ -176,7 +227,8 @@ static func conflicts(feature: Dictionary, planned: Array, stars: PackedVector2A
 		if distance > cutoff:
 			continue
 		var extent := event_extent(event)
-		if extent.y + EVENT_MARGIN > span.x and extent.x - EVENT_MARGIN < span.y:
+		var margin := float((KINDS[kind] as Dictionary).get("margin", EVENT_MARGIN))
+		if extent.y + margin > span.x and extent.x - margin < span.y:
 			problems.append("%s at %.0f" % [str(event.get("id", event.get("kind", ""))), distance])
 	for star in stars:
 		var star_distance := star.x - 180.0
@@ -192,6 +244,44 @@ static func conflicts(feature: Dictionary, planned: Array, stars: PackedVector2A
 				problems.append("narrow lane (%.0f) at %.0f" % [clearance, x])
 				break
 			x += 40.0
+	return problems
+
+## Gaps between consecutive generated events (extent to extent, 0 when they
+## overlap), over the whole stage.
+static func event_gaps(planned: Array, cutoff: float) -> Array[float]:
+	var extents: Array[Vector2] = []
+	for event in planned:
+		if float(event.get("course_distance", INF)) <= cutoff:
+			extents.append(event_extent(event))
+	extents.sort_custom(func(a: Vector2, b: Vector2) -> bool: return a.x < b.x)
+	var gaps: Array[float] = []
+	for index in range(1, extents.size()):
+		gaps.append(maxf(extents[index].x - extents[index - 1].y, 0.0))
+	return gaps
+
+## The smallest gap allowed between generated events inside fog.
+static func fog_min_gap(planned: Array, cutoff: float) -> float:
+	var gaps := event_gaps(planned, cutoff)
+	if gaps.is_empty():
+		return 0.0
+	gaps.sort()
+	return gaps[int(float(gaps.size()) * FOG_GAP_PERCENTILE)] * FOG_GAP_FACTOR
+
+static func _fog_problems(span: Vector2, planned: Array, cutoff: float) -> Array[String]:
+	var problems: Array[String] = []
+	var minimum := fog_min_gap(planned, cutoff)
+	var extents: Array[Vector2] = []
+	for event in planned:
+		if float(event.get("course_distance", INF)) > cutoff:
+			continue
+		var extent := event_extent(event)
+		if extent.y >= span.x and extent.x <= span.y:
+			extents.append(extent)
+	extents.sort_custom(func(a: Vector2, b: Vector2) -> bool: return a.x < b.x)
+	for index in range(1, extents.size()):
+		var gap := extents[index].x - extents[index - 1].y
+		if gap < minimum:
+			problems.append("fog over a tight gap (%.0f < %.0f) at %.0f" % [gap, minimum, extents[index].x])
 	return problems
 
 ## Features of one stage must not crowd each other either.

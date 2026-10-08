@@ -149,6 +149,8 @@ const HAUNTED_STAGES := [
 		"density": 1.3, "margin": 1.1, "length": 19500.0,
 		"seed": 3355,
 		"stars": [Vector2(5131.34, 426.00), Vector2(10121.03, 114.00), Vector2(17541.81, 114.00)],
+		"features": [{"kind": "ghost_hand", "at": 6390.0, "side": "floor"}, {"kind": "ghost_hand", "at": 8430.0, "side": "ceiling"}, {"kind": "ghost_hand", "at": 13220.0, "side": "floor"}, {"kind": "ghost_hand", "at": 14960.0, "side": "ceiling"}],
+		"new_features": ["ghost_hand"],
 	},
 	{
 		"id": &"3-4", "title": "The Fog", "intro": "Fog hides the way ahead",
@@ -156,6 +158,7 @@ const HAUNTED_STAGES := [
 		"density": 1.4, "margin": 1.05, "length": 21000.0,
 		"seed": 3458,
 		"stars": [Vector2(5581.50, 114.00), Vector2(11978.54, 222.00), Vector2(16104.22, 222.00)],
+		"features": [{"kind": "fog", "at": 6300.0, "length": 2000.0}, {"kind": "fog", "at": 8760.0, "length": 2400.0}],
 	},
 	{
 		"id": &"3-5", "title": "Will-o'-the-Wisp", "intro": "A wisp copies your side",
@@ -163,6 +166,7 @@ const HAUNTED_STAGES := [
 		"density": 1.5, "margin": 1.0, "length": 22500.0,
 		"seed": 3575,
 		"stars": [Vector2(7339.76, 114.00), Vector2(12027.32, 114.00), Vector2(17186.89, 222.00)],
+		"features": [{"kind": "wisp", "at": 4950.0, "length": 1500.0}, {"kind": "wisp", "at": 11250.0, "length": 1500.0}, {"kind": "wisp", "at": 17550.0, "length": 1500.0}],
 	},
 	{
 		"id": &"3-6", "title": "Forest Exam", "intro": "Everything the forest has taught you",
@@ -170,6 +174,7 @@ const HAUNTED_STAGES := [
 		"density": 1.6, "margin": 0.95, "length": 25000.0,
 		"seed": 3640,
 		"stars": [Vector2(6454.64, 426.00), Vector2(13416.85, 254.00), Vector2(20476.66, 426.00)],
+		"features": [{"kind": "ghost_hand", "at": 8230.0, "side": "ceiling"}, {"kind": "fog", "at": 11390.0, "length": 2000.0}, {"kind": "ghost_hand", "at": 18110.0, "side": "floor"}],
 	},
 ]
 

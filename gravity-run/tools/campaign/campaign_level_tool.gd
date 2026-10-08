@@ -40,6 +40,10 @@ const FEATURE_PLAN := {
 	"2-3": [["bat_swarm", 0.40, {"side": "floor"}], ["bat_swarm", 0.72, {"side": "ceiling"}]],
 	"2-4": [["cave_in", 0.30, {"count": 3}], ["cave_in", 0.58, {"count": 4}], ["cave_in", 0.80, {"count": 3}]],
 	"2-5": [["darkness", 0.24, {"length": 3600.0}], ["darkness", 0.62, {"length": 4200.0}]],
+	"3-3": [["ghost_hand", 0.22, {"side": "floor"}], ["ghost_hand", 0.42, {"side": "ceiling"}], ["ghost_hand", 0.62, {"side": "floor"}], ["ghost_hand", 0.82, {"side": "ceiling"}]],
+	"3-4": [["fog", 0.30, {"length": 2000.0}], ["fog", 0.62, {"length": 2400.0}]],
+	"3-5": [["wisp", 0.22, {"length": 1500.0}], ["wisp", 0.50, {"length": 1500.0}], ["wisp", 0.78, {"length": 1500.0}]],
+	"3-6": [["ghost_hand", 0.30, {"side": "ceiling"}], ["fog", 0.50, {"length": 2000.0}], ["ghost_hand", 0.72, {"side": "floor"}]],
 	"2-6": [["cave_in", 0.93, {"count": 3}], ["darkness", 0.58, {"length": 3200.0}], ["bat_swarm", 0.30, {"side": "floor"}], ["bat_swarm", 0.84, {"side": "ceiling"}]],
 }
 

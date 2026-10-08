@@ -1927,3 +1927,15 @@ msgstr "Damm i taket: stenarna rasar ner, så spring i taket"
 
 msgid "They sweep along one side: be on the other"
 msgstr "De sveper längs ena sidan: var på den andra"
+
+msgid "ghost hands"
+msgstr "spökhänder"
+
+msgid "A purple glow in one lane: a hand reaches out, so take the other"
+msgstr "En lila glöd i ena filen: en hand sträcker sig ut, så ta den andra"
+
+msgid "Wisp caught"
+msgstr "Irrbloss fångat"
+
+msgid "+%d coins"
+msgstr "+%d mynt"

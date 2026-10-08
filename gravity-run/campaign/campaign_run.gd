@@ -10,6 +10,8 @@ signal stars_changed(collected: int, total: int)
 signal boss_changed(hp: int, max_hp: int)
 ## A scripted feature wants a sound (main.gd plays it when the sound exists).
 signal feature_cue(sound: String, key: String)
+## The runner touched a wisp: main adds the coins.
+signal bonus_coins(amount: int)
 
 const GravityStarScript := preload("res://campaign/gravity_star.gd")
 const FinishLineScript := preload("res://campaign/finish_line.gd")
@@ -24,6 +26,8 @@ const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const CaveDarknessScript := preload("res://campaign/cave_darkness.gd")
 const CaveCrystalsScript := preload("res://campaign/cave_crystals.gd")
 const CaveInDustScript := preload("res://campaign/cave_in_dust.gd")
+const ForestFogScript := preload("res://campaign/forest_fog.gd")
+const WispScript := preload("res://campaign/wisp.gd")
 const COURSE_START_X := 180.0
 ## Rullaren's thrown barrels: the throw covers this much course distance
 ## (about 0.3 s of running), then the barrel is an ordinary obstacle. Views
@@ -60,7 +64,13 @@ var _cued_features: Dictionary = {}
 var _dust_lines: Array[Node2D] = []
 var _darkness: CaveDarkness
 var _crystals: CaveCrystals
+var _fog: ForestFog
 var _runner_x := 0.0
+## Wisps: {feature, node, collected, y} per wisp feature. The lane history is
+## one entry per physics tick (the runner's gravity direction).
+var _wisps: Array[Dictionary] = []
+var _lane_history: Array[int] = []
+var _surface_y_at := Callable()
 
 func setup(stage: CampaignLevel) -> void:
 	level = stage
@@ -102,6 +112,7 @@ func _setup_features() -> void:
 	_feature_events.clear()
 	_cued_features.clear()
 	var dark_sections: Array[Vector2] = []
+	var fog_sections: Array[Vector2] = []
 	for feature in level.features:
 		var kind := str(feature.get("kind", ""))
 		if not CampaignFeatures.is_known(kind):
@@ -110,6 +121,14 @@ func _setup_features() -> void:
 			_feature_events.append(event)
 		if kind == "darkness":
 			dark_sections.append(Vector2(float(feature.at), float(feature.at) + CampaignFeatures.length_of(feature)))
+		elif kind == "fog":
+			fog_sections.append(Vector2(float(feature.at), float(feature.at) + CampaignFeatures.length_of(feature)))
+		elif kind == "wisp":
+			var wisp := WispScript.new() as Node2D
+			wisp.name = "Wisp%d" % _wisps.size()
+			wisp.visible = false
+			add_child(wisp)
+			_wisps.append({"feature": feature, "node": wisp, "collected": false, "y": 0.0, "x": 0.0, "previous": Vector2(INF, INF), "position": Vector2(INF, INF)})
 		elif kind == "cave_in":
 			var dust := CaveInDustScript.new() as Node2D
 			dust.name = "CaveInDust%d" % _dust_lines.size()
@@ -119,6 +138,11 @@ func _setup_features() -> void:
 			add_child(dust)
 			_dust_lines.append(dust)
 	_feature_events.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.course_distance) < float(b.course_distance))
+	if not fog_sections.is_empty():
+		_fog = ForestFogScript.new() as ForestFog
+		_fog.name = "ForestFog"
+		_fog.call("setup", fog_sections)
+		add_child(_fog)
 	if not dark_sections.is_empty():
 		_crystals = CaveCrystalsScript.new() as CaveCrystals
 		_crystals.name = "CaveCrystals"
@@ -288,6 +312,7 @@ static func hazard_tip(hazard_id: String) -> String:
 		"saw_blade": return "It moves along the surface: time your flip"
 		"cave_icicle": return "It cracks loose and falls: leave the floor below it"
 		"cave_in": return "Dust in the ceiling: the rocks come down, so run on the ceiling"
+		"ghost_hand": return "A purple glow in one lane: a hand reaches out, so take the other"
 		"bat_swarm": return "They sweep along one side: be on the other"
 		"haunted_ghost": return "Ghosts float through one side: take the other"
 		"haunted_chaser": return "It hunts you from behind: keep switching sides"
@@ -306,6 +331,7 @@ static func hazard_display_name(hazard_id: String) -> String:
 		"saw_blade": return "saw blade"
 		"cave_icicle": return "icicles"
 		"cave_in": return "cave-in"
+		"ghost_hand": return "ghost hands"
 		"bat_swarm": return "bat swarm"
 		"haunted_ghost": return "floating ghosts"
 		"haunted_chaser": return "chasing ghost"
@@ -329,6 +355,8 @@ func physics_tick(previous_rect: Rect2, final_rect: Rect2, lethal_fraction: floa
 			stars_changed.emit(get_star_count(), get_star_total())
 			callout.emit("star", tr("Gravity star"), "%d / %d" % [get_star_count(), get_star_total()], "")
 	_last_course_distance = runner_world_x - COURSE_START_X
+	if not _wisps.is_empty():
+		_tick_wisps(previous_rect, final_rect, lethal_fraction, runner_world_x - COURSE_START_X, gravity_direction)
 	if boss != null and lethal_fraction > 1.0:
 		if boss is GhostKingBoss:
 			_tick_ghost_king(runner_world_x - COURSE_START_X, gravity_direction)
@@ -341,6 +369,38 @@ func physics_tick(previous_rect: Rect2, final_rect: Rect2, lethal_fraction: floa
 		finished = true
 		return "finished"
 	return ""
+
+## Wisps float ahead of the runner, drift back through the runner's place and
+## copy the runner's lane 0.8 s late. Position and pickup use only the course
+## distance and the lane history, so a run is the same every time.
+func _tick_wisps(previous_rect: Rect2, final_rect: Rect2, lethal_fraction: float, course_distance: float, gravity_direction: int) -> void:
+	_lane_history.append(gravity_direction)
+	var tick := _lane_history.size() - 1
+	var lane := _lane_history[maxi(tick - CampaignFeatures.WISP_DELAY_TICKS, 0)]
+	for wisp in _wisps:
+		var offset := CampaignFeatures.wisp_offset(wisp.feature, course_distance)
+		if offset == INF:
+			wisp.position = Vector2(INF, INF)
+			wisp.previous = Vector2(INF, INF)
+			continue
+		var floor_y := float(_surface_y_at.call(COURSE_START_X + course_distance + offset, false)) if _surface_y_at.is_valid() else 460.0
+		var ceiling_y := float(_surface_y_at.call(COURSE_START_X + course_distance + offset, true)) if _surface_y_at.is_valid() else 80.0
+		var target_y := floor_y - 30.0 if lane > 0 else ceiling_y + 30.0
+		var y := float(wisp.y)
+		y = target_y if float(wisp.position.x) == INF else lerpf(y, target_y, 0.14)
+		wisp.y = y
+		wisp.previous = wisp.position
+		wisp.position = Vector2(_runner_x + offset, y)
+		if bool(wisp.collected) or lethal_fraction <= 1.0:
+			continue
+		var start: Vector2 = wisp.previous if float(wisp.previous.x) != INF else wisp.position
+		var relative: Vector2 = (final_rect.position - previous_rect.position) - (wisp.position - start)
+		var fraction := HazardRules.swept_rect_circle_fraction(previous_rect, relative, start, Wisp.RADIUS)
+		if fraction >= 0.0:
+			wisp.collected = true
+			(wisp.node as Wisp).collect()
+			bonus_coins.emit(CampaignFeatures.WISP_BONUS_COINS)
+			callout.emit("star", tr("Wisp caught"), tr("+%d coins") % CampaignFeatures.WISP_BONUS_COINS, "")
 
 ## The rumble of a cave-in starts when its first rock wakes up.
 func _cue_features(course_distance: float) -> void:
@@ -487,6 +547,13 @@ func update_presentation(view_left: float, view_width: float, surface_y_at: Call
 		if is_instance_valid(plate):
 			plate.set("surface_y", float(surface_y_at.call(plate.position.x, bool(plate.get("on_ceiling")))))
 	var runner_x := _runner_x
+	_surface_y_at = surface_y_at
+	for wisp in _wisps:
+		var node := wisp.node as Wisp
+		var render_offset := CampaignFeatures.wisp_offset(wisp.feature, view_left)
+		node.visible = render_offset != INF and float(wisp.position.x) != INF
+		if node.visible:
+			node.position = Vector2(view_left + COURSE_START_X + render_offset, float(wisp.y))
 	for dust in _dust_lines:
 		if is_instance_valid(dust):
 			dust.call("update_view", runner_x, float(surface_y_at.call(float(dust.get("x_from")), true)))
@@ -510,17 +577,19 @@ func update_presentation(view_left: float, view_width: float, surface_y_at: Call
 		_boss_view.call("place", right, float(surface_y_at.call(right - 70.0, false)))
 
 func has_darkness() -> bool:
-	return is_instance_valid(_darkness)
+	return is_instance_valid(_darkness) or is_instance_valid(_fog)
 
 ## Darkness: the hazards that are coming up, the stars and the passed crystals
 ## become lights, so nothing that can hurt is ever hidden. `hazards` is every
 ## node that can hurt or block (obstacles, holes, steps and slopes).
 func update_darkness(view_left: float, view_width: float, runner_position: Vector2, hazards: Array, surface_y_at: Callable) -> void:
-	if not is_instance_valid(_darkness) or level == null:
+	if level == null or not has_darkness():
 		return
+	var overlay: Node2D = _darkness if is_instance_valid(_darkness) else _fog
 	var course_distance := runner_position.x - COURSE_START_X
-	if CaveDarkness.strength_for(course_distance, _darkness.sections) <= 0.001:
-		_darkness.call("update_view", view_left, view_width, runner_position, course_distance, PackedVector4Array())
+	var strength := CaveDarkness.strength_for(course_distance, overlay.sections) if overlay == _darkness else ForestFog.strength_for(course_distance, overlay.sections)
+	if strength <= 0.001:
+		overlay.call("update_view", view_left, view_width, runner_position, course_distance, PackedVector4Array())
 		return
 	var lights := PackedVector4Array()
 	var ahead := runner_position.x + HAZARD_LIGHT_AHEAD
@@ -536,7 +605,7 @@ func update_darkness(view_left: float, view_width: float, runner_position: Vecto
 			lights.append(Vector4(star.global_position.x, star.global_position.y, 110.0, 1.0))
 	if is_instance_valid(_crystals):
 		_crystals.call("collect_lights", view_left, view_width, lights)
-	_darkness.call("update_view", view_left, view_width, runner_position, course_distance, lights)
+	overlay.call("update_view", view_left, view_width, runner_position, course_distance, lights)
 
 const HAZARD_LIGHT_AHEAD := 950.0
 

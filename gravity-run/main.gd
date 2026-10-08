@@ -55,6 +55,7 @@ const CampaignRunScript := preload("res://campaign/campaign_run.gd")
 const CampaignAudio := preload("res://campaign/campaign_audio.gd")
 const CAMPAIGN_FEATURES_SCRIPT := preload("res://campaign/campaign_features.gd")
 const BAT_SWARM_SCRIPT := preload("res://hazards/bat_swarm.gd")
+const GHOST_HAND_SCRIPT := preload("res://hazards/ghost_hand.gd")
 const CampaignResultPanelScript := preload("res://campaign/campaign_result_panel.gd")
 const CampaignBannerScript := preload("res://campaign/campaign_banner.gd")
 ## Ticks the runner keeps running past the finish line before the result.
@@ -384,6 +385,7 @@ func _setup_campaign_run() -> void:
 	_campaign_run.connect("stars_changed", _on_campaign_star_collected)
 	_campaign_run.connect("boss_changed", Callable(hud, "set_campaign_boss"))
 	_campaign_run.connect("feature_cue", Callable(self, "_on_campaign_feature_cue"))
+	_campaign_run.connect("bonus_coins", Callable(self, "_on_campaign_bonus_coins"))
 	if not _campaign_level.intro.is_empty():
 		_campaign_banner_node().show_banner("boss" if _campaign_level.is_boss() else "stage", str(_campaign_level.level_id), tr(_campaign_level.title), tr(_campaign_level.intro))
 	if _campaign_level.is_boss():
@@ -1253,6 +1255,8 @@ func _spawn_course_event(event: Dictionary) -> void:
 				obstacles.append(rock)
 		&"bat_swarm":
 			_spawn_bat_swarm(event, event_x)
+		&"ghost_hand":
+			_spawn_ghost_hand(event, event_x)
 		&"saw":
 			var saw_event := _resolve_singleplayer_saw_event(event)
 			if saw_event.is_empty():
@@ -1317,6 +1321,26 @@ func _spawn_bat_swarm(event: Dictionary, event_x: float) -> void:
 	swarm.connect("warning_started", Callable(self, "_on_bat_swarm_warning"))
 	add_child(swarm)
 	obstacles.append(swarm)
+
+## Campaign haunted feature: a hand that reaches out of one lane (hazards/ghost_hand.gd).
+func _spawn_ghost_hand(event: Dictionary, event_x: float) -> void:
+	var from_ceiling := bool(event.get("from_ceiling", false))
+	var lane_clearance := _floor_surface_y(event_x) - _ceiling_surface_y(event_x)
+	if lane_clearance < float(event.get("height", 120.0)) + 44.0 + 12.0:
+		return
+	var hand := GHOST_HAND_SCRIPT.new() as Node2D
+	hand.name = "GhostHand_%.0f" % float(event.get("course_distance", 0.0))
+	hand.call("configure_hand", event, event_x, _ceiling_surface_y(event_x) if from_ceiling else _floor_surface_y(event_x))
+	hand.connect("emerged", Callable(self, "_on_ghost_hand_emerged"))
+	add_child(hand)
+	obstacles.append(hand)
+
+func _on_ghost_hand_emerged(hand: Node2D) -> void:
+	_play_cave_sfx("hand_scrape", "%s|ghost_hand|%s" % [_singleplayer_audio_round_id, str(hand.name)], _is_singleplayer_event_audible(hand.global_position.x))
+
+func _on_campaign_bonus_coins(amount: int) -> void:
+	run_state.call("add_coins", amount)
+	_play_singleplayer_sfx("coin", "%s|wisp_coins|%d" % [_singleplayer_audio_round_id, _singleplayer_simulation_tick])
 
 func _on_bat_swarm_warning(swarm: Node2D) -> void:
 	_play_cave_sfx("cave_bat_screech", "%s|bat_swarm|%s" % [_singleplayer_audio_round_id, str(swarm.name)], _is_singleplayer_event_audible(swarm.global_position.x))
@@ -1660,6 +1684,9 @@ func _spawn_obstacle_scene(scene: PackedScene, width: float, height: float, from
 	# Campaign cave stages draw rolling barrels as mine carts (skin only).
 	if obstacle.is_in_group("barrels") and _campaign_level != null and _campaign_level.world_id == &"cave":
 		obstacle.set("skin", "mine_cart")
+	# Haunted campaign stages draw blocks and spikes as gravestones and crosses.
+	if _campaign_level != null and _campaign_level.world_id == &"haunted" and (obstacle.is_in_group("breakable") or obstacle.is_in_group("spikes")):
+		obstacle.set("skin", "grave")
 	if obstacle.has_method("set_motion_speed_multiplier"):
 		obstacle.call("set_motion_speed_multiplier", motion_speed_multiplier)
 	if obstacle.has_method("set_spiked"):
@@ -1807,7 +1834,9 @@ func _on_singleplayer_ghost_phase_changed(event_id: String, phase: String, event
 	var event_x := float(event.get("x", 0.0))
 	var camera_left := float(player.get("world_x")) - PLAYER_X if is_instance_valid(player) else course_distance
 	var audible := event_x >= camera_left - 64.0 and event_x <= camera_left + screen_width + 64.0
-	_play_singleplayer_sfx("ghost_warning", "%s|ghost_warning|%s" % [_singleplayer_audio_round_id, event_id], audible)
+	# Haunted campaign stages whistle when a ghost appears; endless keeps its sound.
+	var warning_sound := "ghost_whistle" if _campaign_level != null and _campaign_level.world_id == &"haunted" and SfxController.STREAMS.has("ghost_whistle") else "ghost_warning"
+	_play_singleplayer_sfx(warning_sound, "%s|ghost_warning|%s" % [_singleplayer_audio_round_id, event_id], audible)
 
 func _spawn_loot_pickup(event: Dictionary) -> void:
 	if not RUN_LOOT_ENABLED or demo_mode or not AuthService.is_authenticated:
@@ -1900,7 +1929,7 @@ func _earliest_lethal_contact_fraction(start_rect: Rect2, finish_rect: Rect2) ->
 				var candidate := HAZARD_RULES_SCRIPT.swept_rect_polygon_fraction(start_rect, displacement, triangle)
 				if candidate >= 0.0 and (fraction < 0.0 or candidate < fraction):
 					fraction = candidate
-		elif obstacle.is_in_group("bat_swarms"):
+		elif obstacle.is_in_group("bat_swarms") or obstacle.is_in_group("ghost_hands"):
 			fraction = float(obstacle.call("swept_contact_fraction", start_rect, finish_rect))
 		elif obstacle.is_in_group("barrels"):
 			var barrel_size: Vector2 = obstacle.get("size")

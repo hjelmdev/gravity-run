@@ -46,6 +46,15 @@ func _run() -> void:
 	await _check_feature_stage("bat_swarm", "floor", true)
 	await _check_feature_stage("bat_swarm", "ceiling", false)
 	await _check_feature_stage("bat_swarm", "ceiling", true)
+	await _check_feature_stage("ghost_hand", "floor", false)
+	await _check_feature_stage("ghost_hand", "floor", true)
+	await _check_feature_stage("ghost_hand", "ceiling", false)
+	await _check_feature_stage("ghost_hand", "ceiling", true)
+	_check_hand_sweep()
+	await _check_fog_lights()
+	await _check_wisp(true)
+	await _check_wisp(false)
+	await _check_grave_skins()
 	await _check_synthetic_stage()
 	await _check_failed_attempt()
 	await _check_boss(false)
@@ -140,10 +149,16 @@ const FROZEN_FEATURES := {
 	"2-4": [["cave_in", 9630.0], ["cave_in", 13880.0], ["cave_in", 17350.0]],
 	"2-5": [["darkness", 5400.0], ["darkness", 13950.0]],
 	"2-6": [["darkness", 13920.0], ["cave_in", 22010.0]],
+	"3-1": [],
+	"3-2": [],
+	"3-3": [["ghost_hand", 6390.0], ["ghost_hand", 8430.0], ["ghost_hand", 13220.0], ["ghost_hand", 14960.0]],
+	"3-4": [["fog", 6300.0], ["fog", 8760.0]],
+	"3-5": [["wisp", 4950.0], ["wisp", 11250.0], ["wisp", 17550.0]],
+	"3-6": [["ghost_hand", 8230.0], ["fog", 11390.0], ["ghost_hand", 18110.0]],
 }
 
 func _check_features_frozen() -> void:
-	for spec in CampaignCatalog.CAVE_STAGES:
+	for spec in CampaignCatalog.CAVE_STAGES + CampaignCatalog.HAUNTED_STAGES:
 		var level := CampaignCatalog.get_level(spec.id)
 		var frozen: Array = FROZEN_FEATURES.get(str(spec.id), [])
 		var actual: Array = []
@@ -171,10 +186,11 @@ func _check_features_frozen() -> void:
 		_check(popped.size() == expected, "%s pops all %d feature events (%d)" % [spec.id, expected, popped.size()])
 		run.free()
 	BiomeRendererScript.set_locked_biome(&"")
-	_check(CampaignCatalog.get_level(&"2-2").new_features.has("bat_swarm") and CampaignCatalog.get_level(&"2-4").new_features.has("cave_in"), "2-2 introduces the bat swarm and 2-4 the cave-in")
+	_check(CampaignCatalog.get_level(&"2-2").new_features.has("bat_swarm") and CampaignCatalog.get_level(&"2-4").new_features.has("cave_in") and CampaignCatalog.get_level(&"3-3").new_features.has("ghost_hand"), "2-2 introduces the bat swarm, 2-4 the cave-in and 3-3 the ghost hands")
+	_check(CampaignRunScript.hazard_display_name("ghost_hand") == "ghost hands" and not CampaignRunScript.hazard_tip("ghost_hand").is_empty(), "the ghost hand has a name and a tip")
 	_check(CampaignRunScript.hazard_display_name("bat_swarm") == "bat swarm" and not CampaignRunScript.hazard_tip("cave_in").is_empty() and not CampaignRunScript.hazard_tip("bat_swarm").is_empty(), "the new hazards have a name and a tip")
 	TranslationServer.set_locale("sv")
-	_check(tr(CampaignRunScript.hazard_tip("bat_swarm")) != CampaignRunScript.hazard_tip("bat_swarm") and tr("cave-in") == "ras" and tr("bat swarm") == "fladdermussvärm", "the new hazard callouts are translated to Swedish")
+	_check(tr(CampaignRunScript.hazard_tip("bat_swarm")) != CampaignRunScript.hazard_tip("bat_swarm") and tr("cave-in") == "ras" and tr("bat swarm") == "fladdermussvärm" and tr("ghost hands") == "spökhänder" and tr("Wisp caught") == "Irrbloss fångat", "the new hazard callouts are translated to Swedish")
 	TranslationServer.set_locale("en")
 
 ## The channel pops events by spawn line or early lead and announces new kinds.
@@ -254,6 +270,123 @@ func _check_darkness_lights() -> void:
 		node.free()
 	run.free()
 
+func _check_hand_sweep() -> void:
+	var hand := GhostHand.new()
+	add_child(hand)
+	hand.configure_hand(CampaignFeatures.events_of({"kind": "ghost_hand", "at": 1000.0, "side": "floor"})[0], 1180.0, 460.0)
+	_check(hand.get_hitbox_rect().size == Vector2.ZERO and hand.get_phase() == "dormant", "a ghost hand starts out of sight with no hitbox")
+	hand.advance_motion(1.0 / 60.0, 8.0, Vector2(1180.0 + GhostHand.GLOW_START + 40.0, 438.0), Callable(), Callable())
+	_check(hand.get_phase() == "glow" and hand.get_hitbox_rect().size == Vector2.ZERO, "the lane glows before the hand reaches out")
+	var emerged := [0]
+	hand.emerged.connect(func(_h: GhostHand) -> void: emerged[0] += 1)
+	hand.advance_motion(1.0 / 60.0, 8.0, Vector2(1180.0 + GhostHand.EMERGE - 4.0, 438.0), Callable(), Callable())
+	hand.advance_motion(1.0 / 60.0, 8.0, Vector2(1180.0 + GhostHand.EMERGE + 16.0, 438.0), Callable(), Callable())
+	hand.advance_motion(1.0 / 60.0, 8.0, Vector2(1180.0 + GhostHand.EMERGE + 24.0, 438.0), Callable(), Callable())
+	_check(emerged[0] == 1 and hand.get_hitbox_rect().size.y > 0.0, "the hand emerges once and gets a hitbox")
+	# A hand rising into a standing runner is caught by the sweep.
+	var runner := Rect2(Vector2(1180.0 - 3.0, 416.0), Vector2(34.0, 44.0))
+	_check(hand.swept_contact_fraction(runner, runner) >= 0.0, "a rising hand is caught by the 60 Hz sweep")
+	_check(hand.swept_contact_fraction(Rect2(Vector2(1177.0, 80.0), Vector2(34.0, 44.0)), Rect2(Vector2(1177.0, 80.0), Vector2(34.0, 44.0))) < 0.0, "a runner on the other surface is not hit by the hand")
+	hand.advance_motion(1.0 / 60.0, 8.0, Vector2(1180.0 + GhostHand.GONE + 10.0, 438.0), Callable(), Callable())
+	_check(hand.get_hitbox_rect().size == Vector2.ZERO, "the hand is gone after the runner has passed")
+	hand.free()
+
+func _check_fog_lights() -> void:
+	var level := CampaignCatalog.get_level(&"3-4")
+	_check(ForestFog.FORWARD_CLEAR >= 300.0, "fog never covers the 300 px ahead of the runner")
+	var run := CampaignRunScript.new()
+	add_child(run)
+	run.setup(level)
+	_check(run.has_darkness() and is_instance_valid(run._fog), "3-4 has fog banks")
+	var section: Vector2 = run._fog.sections[0]
+	_check(ForestFog.strength_for(section.x - 800.0, run._fog.sections) == 0.0 and ForestFog.strength_for((section.x + section.y) * 0.5, run._fog.sections) == 1.0, "the fog fades in and out")
+	var runner_x := 180.0 + section.x + 1000.0
+	var hazards: Array[Node2D] = []
+	for offset in [140.0, 260.0, 430.0, 700.0]:
+		var node := Node2D.new()
+		node.position = Vector2(runner_x + offset, 400.0)
+		add_child(node)
+		hazards.append(node)
+	var surface := func(_x: float, ceiling: bool) -> float: return 80.0 if ceiling else 460.0
+	run.update_darkness(runner_x - 180.0, 960.0, Vector2(runner_x, 438.0), hazards, surface)
+	var material: ShaderMaterial = run._fog.material
+	var lights: PackedVector4Array = material.get_shader_parameter("lights")
+	var count := int(material.get_shader_parameter("light_count"))
+	var all_clear := true
+	for node in hazards:
+		var covered := false
+		for index in range(count):
+			var light := lights[index]
+			if Vector2(light.x, light.y).distance_to(node.position) <= light.z * 0.5:
+				covered = true
+		all_clear = all_clear and (covered or node.position.x - runner_x <= ForestFog.FORWARD_CLEAR)
+	_check(all_clear and count >= 3, "every hazard ahead of the runner is held clear of the fog (%d lights)" % count)
+	for node in hazards:
+		node.free()
+	run.free()
+
+## A wisp copies the runner's lane 0.8 s late. A runner that keeps its lane
+## catches it (3 coins), one that flips late misses it.
+func _check_wisp(keep_lane: bool) -> void:
+	var feature := {"kind": "wisp", "at": 3000.0, "length": 1500.0}
+	var level := CampaignLevel.new()
+	level.level_id = &"T-W"
+	level.world_id = &"test"
+	level.title = "Wisp test"
+	level.seed_value = 4244
+	level.generator_version = CampaignCatalog.CAMPAIGN_GENERATOR_VERSION
+	level.ruleset = CampaignCatalog.make_ruleset(&"T-W", &"haunted", ["ceiling_gap"], 0.6, 1.0)
+	level.length_px = 7000.0
+	level.features.append(feature)
+	Campaign.reset_progress()
+	Campaign.start_level(level)
+	var game: Node = await _make_game()
+	var run: Node = game.get("_campaign_run")
+	run.set("generated_events_enabled", false)
+	var bonus := [0]
+	run.connect("bonus_coins", func(amount: int) -> void: bonus[0] += amount)
+	var bot := func(g: Node) -> void:
+		var player: Node = g.get_node("Player")
+		var course := float(player.get("world_x")) - 180.0
+		# Late flip: well after the wisp started copying the floor lane, just
+		# before it drifts through the runner's place.
+		if not keep_lane and course >= 3000.0 + 1180.0 and int(player.call("get_gravity_direction")) > 0 and bool(player.get("grounded")) and float(player.call("get_cooldown_left")) <= 0.0:
+			player.call("_try_flip", -1)
+	var ticks := _step(game, 3000, bot)
+	if keep_lane:
+		_check(bonus[0] == CampaignFeatures.WISP_BONUS_COINS, "a runner that keeps its lane catches the wisp for 3 coins (%d)" % bonus[0])
+	else:
+		_check(bonus[0] == 0, "a runner that flips late misses the wisp, which copied its old lane (%d)" % bonus[0])
+	_check(Campaign.is_completed(level), "the wisp is harmless: the stage is completed (%d ticks)" % ticks)
+	game.queue_free()
+	await get_tree().process_frame
+	Campaign.clear_active()
+
+func _check_grave_skins() -> void:
+	Campaign.start_level(CampaignCatalog.get_level(&"3-3"))
+	var haunted: Node = await _make_game()
+	haunted.call("_spawn_obstacle_scene", preload("res://hazards/block.tscn"), 56.0, 90.0, false, 900.0)
+	haunted.call("_spawn_obstacle_scene", preload("res://hazards/spikes.tscn"), 28.0, 32.0, false, 1000.0)
+	haunted.call("_spawn_obstacle_scene", preload("res://hazards/barrel.tscn"), 54.0, 54.0, false, 1100.0)
+	var found: Array[String] = []
+	for obstacle in haunted.get("obstacles"):
+		found.append(str(obstacle.get("skin")))
+	_check(found == ["grave", "grave", ""], "blocks and spikes are gravestones on haunted stages, barrels stay barrels (%s)" % str(found))
+	haunted.queue_free()
+	await get_tree().process_frame
+	Campaign.clear_active()
+	Campaign.start_level(CampaignCatalog.get_level(&"2-3"))
+	var cave: Node = await _make_game()
+	cave.call("_spawn_obstacle_scene", preload("res://hazards/block.tscn"), 56.0, 90.0, false, 900.0)
+	cave.call("_spawn_obstacle_scene", preload("res://hazards/spikes.tscn"), 28.0, 32.0, false, 1000.0)
+	var plain: Array[String] = []
+	for obstacle in cave.get("obstacles"):
+		plain.append(str(obstacle.get("skin")))
+	_check(plain == ["", ""], "blocks and spikes keep their look on cave stages (%s)" % str(plain))
+	cave.queue_free()
+	await get_tree().process_frame
+	Campaign.clear_active()
+
 func _check_mine_carts() -> void:
 	var cave_game: Node = null
 	Campaign.start_level(CampaignCatalog.get_level(&"2-3"))
@@ -285,7 +418,8 @@ func _check_mine_carts() -> void:
 ## side reaches the flag. `follow` picks which runner this is.
 func _check_feature_stage(kind: String, side: String, follow: bool) -> void:
 	var feature := {"kind": kind, "at": 3600.0}
-	if kind == "bat_swarm":
+	var has_side := kind == "bat_swarm" or kind == "ghost_hand"
+	if has_side:
 		feature["side"] = side
 	var level := CampaignLevel.new()
 	level.level_id = &"T-F"
@@ -304,7 +438,7 @@ func _check_feature_stage(kind: String, side: String, follow: bool) -> void:
 	# "follow" takes the feature's safe side; otherwise the runner stays on the
 	# surface the feature hits (cave-in and floor swarm: the floor; ceiling
 	# swarm: the ceiling).
-	var wrong_side := -1 if (kind == "bat_swarm" and side == "ceiling") else 1
+	var wrong_side := -1 if (has_side and side == "ceiling") else 1
 	var bot := func(g: Node) -> void:
 		var player: Node = g.get_node("Player")
 		var course := float(player.get("world_x")) - 180.0
@@ -317,7 +451,7 @@ func _check_feature_stage(kind: String, side: String, follow: bool) -> void:
 	var ticks := _step(game, 3600, bot)
 	var died := bool(game.get("game_over")) and not Campaign.is_completed(level)
 	var death_distance := float(game.get("course_distance"))
-	var label := "%s (%s) %s runner" % [kind, side if kind == "bat_swarm" else "rocks", "safe-side" if follow else "wrong-lane"]
+	var label := "%s (%s) %s runner" % [kind, side if has_side else "rocks", "safe-side" if follow else "wrong-lane"]
 	if follow:
 		_check(Campaign.is_completed(level), "%s reaches the flag (%d ticks)" % [label, ticks])
 	else:
