@@ -229,7 +229,7 @@ static func gen15_ceiling_route_is_supported(event: Dictionary, surface_index: O
 		return false
 	var start_tick := eruption_start_tick(event, course_start_x)
 	var arcs := _arc_profiles(event)
-	var boundaries: Array = surface_index.call("support_boundaries", true)
+	var boundaries: Array = surface_index.call("support_boundaries_between", envelope.position.x - runner_half_width, envelope.end.x + runner_half_width, true, true) if surface_index.has_method("support_boundaries_between") else surface_index.call("support_boundaries", true)
 	for projectile in projectiles_at(event, course_start_x, float(start_tick)):
 		var arc_index := int(projectile.get("arc_index", -1))
 		if arc_index < 0 or arc_index >= arcs.size():

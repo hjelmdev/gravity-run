@@ -86,6 +86,25 @@ var _configuration_failed := false
 var _spiked_barrel_corridors: Array[Dictionary] = []
 var _gen16_barrel_meeting_windows: Array[Dictionary] = []
 var _committed_sweep: Dictionary = {}
+var _pending_sweep_events: Array[Dictionary] = []
+# Indexes over committed events for checks that run for every candidate shift.
+var _max_pursuit_trigger := -INF
+var _lava_crack_events: Array[Dictionary] = []
+# Spiked-barrel corridors and Gen16 meeting windows ordered by their end x, so
+# overlap tests only visit entries that can still reach the candidate.
+var _corridors_by_end: Array[Dictionary] = []
+var _corridor_ends := PackedFloat64Array()
+var _meeting_windows_by_end: Array[Dictionary] = []
+var _meeting_window_ends := PackedFloat64Array()
+# Cumulative lane state for _is_narrow_supported_corridor over an event prefix.
+var _narrow_prefix := {}
+# Ceiling-lane threat intervals of committed events, ordered by interval end.
+var _ceiling_threat_ends := PackedFloat64Array()
+var _ceiling_threat_starts := PackedFloat64Array()
+var _indexed_events: Array = []
+var _indexed_event_count := 0
+var _indexed_windows: Array = []
+var _indexed_corridors: Array = []
 var _generation_stats := {"candidate_attempts": 0, "route_rejections": 0, "biome_rejections": 0, "pursuit_profile_fallbacks": 0, "accepted_events": 0, "fallback_events": 0}
 
 ## Spawn course events fully beyond the viewport so their geometry enters smoothly.
@@ -419,10 +438,28 @@ func _is_trial_solvable(candidate: Dictionary, clearance: float) -> bool:
 
 func _invalidate_committed_sweep() -> void:
 	_committed_sweep = {}
+	_pending_sweep_events.clear()
+	_max_pursuit_trigger = -INF
+	_lava_crack_events.clear()
+	_corridors_by_end.clear()
+	_corridor_ends = PackedFloat64Array()
+	_meeting_windows_by_end.clear()
+	_meeting_window_ends = PackedFloat64Array()
+	_narrow_prefix = {}
+	_ceiling_threat_ends = PackedFloat64Array()
+	_ceiling_threat_starts = PackedFloat64Array()
+	_indexed_events = _events
+	_indexed_event_count = _events.size()
 
 func _ensure_committed_sweep(clearance: float) -> void:
-	if not _committed_sweep.is_empty() and float(_committed_sweep.get("clearance", NAN)) == clearance and int(_committed_sweep.get("event_count", -1)) == _events.size():
+	var cache_matches := not _committed_sweep.is_empty() and float(_committed_sweep.get("clearance", NAN)) == clearance and is_same(_committed_sweep.get("events"), _events)
+	if cache_matches and int(_committed_sweep.get("event_count", -1)) == _events.size():
+		_pending_sweep_events.clear()
 		return
+	if cache_matches and int(_committed_sweep.get("event_count", -1)) + _pending_sweep_events.size() == _events.size():
+		_extend_committed_sweep(clearance)
+		return
+	_pending_sweep_events.clear()
 	var edges: Array[Dictionary] = []
 	for event in _events:
 		_append_plan_edges(edges, event, clearance)
@@ -431,7 +468,62 @@ func _ensure_committed_sweep(clearance: float) -> void:
 	var state := _new_sweep_state()
 	state["clearance"] = clearance
 	var result := _sweep_plan_edges(edges, 0, state, checkpoints)
-	_committed_sweep = {"clearance": clearance, "event_count": _events.size(), "edges": edges, "checkpoints": checkpoints, "solvable": bool(result.get("solvable", true)), "fail_x": float(result.get("fail_x", INF))}
+	_committed_sweep = {"clearance": clearance, "event_count": _events.size(), "events": _events, "edges": edges, "checkpoints": checkpoints, "solvable": bool(result.get("solvable", true)), "fail_x": float(result.get("fail_x", INF))}
+
+## Adds the edges of events accepted since the last sweep. New events sit near
+## the generation frontier, so the committed sweep is resumed from the last
+## checkpoint safely before their first edge instead of being rebuilt.
+func _extend_committed_sweep(clearance: float) -> void:
+	var new_edges: Array[Dictionary] = []
+	for event in _pending_sweep_events:
+		_append_plan_edges(new_edges, event, clearance)
+	_pending_sweep_events.clear()
+	var committed: Array[Dictionary] = _committed_sweep["edges"]
+	var checkpoints: Array = _committed_sweep["checkpoints"]
+	if new_edges.is_empty():
+		_committed_sweep["event_count"] = _events.size()
+		return
+	new_edges.sort_custom(_edge_x_less)
+	var first_new_x := float(new_edges[0]["x"])
+	var margin := maxf(64.0, absf(first_new_x) * 0.001)
+	var low := 0
+	var high := checkpoints.size() - 1
+	var resume := -1
+	while low <= high:
+		var mid := (low + high) >> 1
+		if float(checkpoints[mid][1]) < first_new_x - margin:
+			resume = mid
+			low = mid + 1
+		else:
+			high = mid - 1
+	var resume_index := 0
+	var state := _new_sweep_state()
+	if resume >= 0:
+		resume_index = int(checkpoints[resume][0])
+		state = (checkpoints[resume][2] as Dictionary).duplicate()
+	state["clearance"] = clearance
+	var merged: Array[Dictionary] = committed.slice(0, resume_index)
+	var committed_index := resume_index
+	var new_index := 0
+	while committed_index < committed.size() or new_index < new_edges.size():
+		if new_index >= new_edges.size() or (committed_index < committed.size() and float(committed[committed_index]["x"]) <= float(new_edges[new_index]["x"])):
+			merged.append(committed[committed_index])
+			committed_index += 1
+		else:
+			merged.append(new_edges[new_index])
+			new_index += 1
+	var kept_checkpoints: Array = checkpoints.slice(0, maxi(resume, 0))
+	var previously_failed := not bool(_committed_sweep.get("solvable", true))
+	var previous_fail_x := float(_committed_sweep.get("fail_x", INF))
+	var tail_checkpoints: Array = []
+	var result := _sweep_plan_edges(merged, resume_index, state, tail_checkpoints)
+	kept_checkpoints.append_array(tail_checkpoints)
+	var solvable := bool(result.get("solvable", true))
+	var fail_x := float(result.get("fail_x", INF))
+	if previously_failed and resume >= 0 and previous_fail_x < float(checkpoints[resume][1]):
+		solvable = false
+		fail_x = previous_fail_x
+	_committed_sweep = {"clearance": clearance, "event_count": _events.size(), "events": _events, "edges": merged, "checkpoints": kept_checkpoints, "solvable": solvable, "fail_x": fail_x}
 
 func _append_feasible_event(speed: float, track_height: float) -> void:
 	var spacing := BASE_EVENT_SPACING
@@ -659,9 +751,21 @@ func _try_append_independent_barrel(base_event: Dictionary, clearance: float) ->
 	if _is_trial_solvable(barrel_event, clearance):
 		_insert_generated_event(barrel_event)
 		if _generator_version >= GENERATOR_VERSION_16:
-			_gen16_barrel_meeting_windows.append_array(_barrel_meeting_windows(barrel_event))
+			var new_windows := _barrel_meeting_windows(barrel_event)
+			_sync_window_indexes()
+			_gen16_barrel_meeting_windows.append_array(new_windows)
+			for window in new_windows:
+				var window_end := float(window.end)
+				var at := _meeting_window_ends.bsearch(window_end, false)
+				_meeting_window_ends.insert(at, window_end)
+				_meeting_windows_by_end.insert(at, window)
 		if not spiked_corridor.is_empty():
+			_sync_window_indexes()
 			_spiked_barrel_corridors.append(spiked_corridor)
+			var corridor_end := float(spiked_corridor.get("end_x", -INF))
+			var corridor_at := _corridor_ends.bsearch(corridor_end, false)
+			_corridor_ends.insert(corridor_at, corridor_end)
+			_corridors_by_end.insert(corridor_at, spiked_corridor)
 
 func _barrel_meeting_windows(barrel_event: Dictionary) -> Array[Dictionary]:
 	var windows: Array[Dictionary] = []
@@ -701,18 +805,13 @@ func _gen20_spiked_barrel_roll(base_event: Dictionary) -> float:
 	return float(posmod(mixed, 100000)) / 100000.0
 
 func _gen16_barrel_meeting_conflicts_with_ceiling(barrel_event: Dictionary) -> bool:
+	# Same test as scanning every committed event's ceiling threats, using the
+	# end-ordered index: only threats ending at/after the window start can match.
+	_sync_event_indexes()
 	for window in _barrel_meeting_windows(barrel_event):
-		for existing in _events:
-			var profile: Variant = existing.get("profile")
-			var threats: Array = existing.get("threats", [])
-			if threats.is_empty() and profile != null and profile.has_method("build_threat_intervals"):
-				threats = profile.build_threat_intervals(existing)
-			for threat_value in threats:
-				if not threat_value is Dictionary:
-					continue
-				var threat: Dictionary = threat_value
-				if (int(threat.get("blocked_lanes", 0)) & CEILING_LANE) != 0 and float(threat.get("start", INF)) <= float(window.end) and float(threat.get("end", -INF)) >= float(window.start):
-					return true
+		for threat_index in range(_ceiling_threat_ends.bsearch(float(window.start), true), _ceiling_threat_ends.size()):
+			if _ceiling_threat_starts[threat_index] <= float(window.end):
+				return true
 	return false
 
 func _try_make_supported_spiked_corridor(barrel_event: Dictionary, base_event: Dictionary) -> Dictionary:
@@ -740,7 +839,20 @@ func _candidate_crosses_spiked_barrel_corridor(candidate: Dictionary) -> bool:
 		if profile != null and profile.has_method("build_threat_intervals"):
 			safety_candidate = candidate.duplicate(true)
 			safety_candidate["threats"] = profile.build_threat_intervals(safety_candidate)
-	for corridor in _spiked_barrel_corridors:
+	# Both corridor tests need corridor end >= some candidate start; entries
+	# ending earlier cannot match, so start at the first possible one.
+	var reach := INF
+	if str(safety_candidate.get("kind", "")) == "gap" and not bool(safety_candidate.get("from_ceiling", false)):
+		var gap_left := float(safety_candidate.get("course_distance", 0.0)) - float(safety_candidate.get("width", 0.0)) * 0.5
+		reach = minf(reach, minf(gap_left, gap_left + float(safety_candidate.get("width", 0.0))) - 1.0)
+	if _generator_version >= GENERATOR_VERSION_16:
+		for threat_value in _candidate_threats_for_overlap(safety_candidate):
+			if threat_value is Dictionary:
+				reach = minf(reach, float((threat_value as Dictionary).get("start", INF)) - RunnerMotionScript.SIZE.x - 1.0)
+	_sync_window_indexes()
+	var first_corridor := 0 if is_nan(reach) else _corridor_ends.bsearch(reach, true)
+	for corridor_index in range(first_corridor, _corridors_by_end.size()):
+		var corridor: Dictionary = _corridors_by_end[corridor_index]
 		if _floor_unsupported_corridor_overlap(safety_candidate, corridor):
 			return true
 		if _generator_version >= GENERATOR_VERSION_16 and _opposing_hazard_overlaps_spiked_barrel_corridor(safety_candidate, corridor):
@@ -768,9 +880,8 @@ func _candidate_creates_too_short_lava_lane_return(candidate: Dictionary) -> boo
 		var candidate_mask := int(candidate_threat.get("blocked_lanes", 0)) & BOTH_LANES
 		if candidate_mask != FLOOR_LANE and candidate_mask != CEILING_LANE:
 			continue
-		for existing in _events:
-			if str(existing.get("kind", "")) != "lava_crack":
-				continue
+		_sync_event_indexes()
+		for existing in _lava_crack_events:
 			var existing_mask := int(existing.get("blocked_lanes", 0)) & BOTH_LANES
 			if existing_mask != FLOOR_LANE and existing_mask != CEILING_LANE or existing_mask == candidate_mask:
 				continue
@@ -811,12 +922,28 @@ func _opposing_hazard_overlaps_spiked_barrel_corridor(candidate: Dictionary, cor
 			return true
 	return false
 
+func _candidate_threats_for_overlap(candidate: Dictionary) -> Array:
+	var threats: Array = candidate.get("threats", [])
+	var profile: Variant = candidate.get("profile")
+	if threats.is_empty() and profile != null and profile.has_method("build_threat_intervals"):
+		threats = profile.build_threat_intervals(candidate)
+	return threats
+
 func _candidate_overlaps_gen16_barrel_meeting_window(candidate: Dictionary) -> bool:
 	var threats: Array = candidate.get("threats", [])
 	var profile: Variant = candidate.get("profile")
 	if threats.is_empty() and profile != null and profile.has_method("build_threat_intervals"):
 		threats = profile.build_threat_intervals(candidate)
-	for window in _gen16_barrel_meeting_windows:
+	# A window can only overlap a threat that starts at or before its end.
+	var reach := INF
+	for threat_value in threats:
+		if threat_value is Dictionary:
+			reach = minf(reach, float((threat_value as Dictionary).get("start", INF)))
+	if is_nan(reach) or reach == INF:
+		return false
+	_sync_window_indexes()
+	for window_index in range(_meeting_window_ends.bsearch(reach - 1.0, true), _meeting_windows_by_end.size()):
+		var window: Dictionary = _meeting_windows_by_end[window_index]
 		for threat_value in threats:
 			if not threat_value is Dictionary:
 				continue
@@ -829,13 +956,10 @@ func _gen19_pursuit_trigger_is_too_close(candidate: Dictionary) -> bool:
 	if str(candidate.get("kind", "")) != "ghost" or int(candidate.get("ghost_variant", 0)) != 3:
 		return false
 	var trigger_x := float(candidate.get("course_distance", 0.0)) - float(candidate.get("trigger_lead", 0.0))
-	for existing in _events:
-		if str(existing.get("kind", "")) != "ghost" or int(existing.get("ghost_variant", 0)) != 3:
-			continue
-		var existing_trigger := float(existing.get("course_distance", 0.0)) - float(existing.get("trigger_lead", 0.0))
-		if trigger_x - existing_trigger < GEN19_PURSUIT_MIN_TRIGGER_GAP:
-			return true
-	return false
+	# Any committed pursuit closer than the gap (or ahead of it) rejects the
+	# candidate, which is the same as testing the furthest committed trigger.
+	_sync_event_indexes()
+	return trigger_x - _max_pursuit_trigger < GEN19_PURSUIT_MIN_TRIGGER_GAP
 
 func _pick_gen19_non_pursuit_profile(course_distance: float) -> CourseHazardProfile:
 	var biome := _biome_id_at(course_distance)
@@ -941,10 +1065,32 @@ func _is_narrow_supported_corridor(course_distance: float) -> bool:
 	var ceiling_y := COURSE_CEILING_START_Y
 	var floor_supported := true
 	var ceiling_supported := true
-	for event in _events:
+	# Events whose effect on every later query is already final (gaps fully
+	# behind, steps passed, slopes completed) are folded into a cached lane
+	# state, so each query only walks events near its own distance.
+	var start_index := 0
+	var prefix := _narrow_prefix
+	if not prefix.is_empty():
+		var prefix_count := int(prefix["count"])
+		if prefix_count > 0 and prefix_count <= _events.size() and is_same(_events[prefix_count - 1], prefix["last"]) and course_distance >= float(prefix["built_at"]):
+			start_index = prefix_count
+			floor_y = float(prefix["floor_y"])
+			ceiling_y = float(prefix["ceiling_y"])
+	var folding := true
+	for event_index in range(start_index, _events.size()):
+		var event: Dictionary = _events[event_index]
 		var kind := str(event.get("kind", ""))
 		var x := float(event.get("course_distance", 0.0))
 		var from_ceiling := bool(event.get("from_ceiling", false))
+		if folding:
+			var settled_point := -INF
+			if kind == "gap":
+				settled_point = x + absf(float(event.get("width", 0.0)) * 0.5) + 0.001
+			elif kind == "step":
+				settled_point = x
+			elif kind == "slope":
+				settled_point = x + GEN20_SLOPE_WIDTH * 0.5
+			folding = settled_point <= course_distance
 		if kind == "gap":
 			var half_width := float(event.get("width", 0.0)) * 0.5
 			if absf(course_distance - x) <= half_width:
@@ -993,17 +1139,77 @@ func _is_narrow_supported_corridor(course_distance: float) -> bool:
 				ceiling_y = end_y
 			else:
 				floor_y = end_y
+		if folding:
+			_narrow_prefix = {"count": event_index + 1, "last": event, "floor_y": floor_y, "ceiling_y": ceiling_y, "built_at": course_distance}
 	return floor_supported and ceiling_supported and floor_y - ceiling_y <= GEN20_NARROW_SPAN_MAX
 
+func _index_committed_event(event: Dictionary) -> void:
+	var profile: Variant = event.get("profile")
+	var threats: Array = event.get("threats", [])
+	if threats.is_empty() and profile != null and profile.has_method("build_threat_intervals"):
+		threats = profile.build_threat_intervals(event)
+	for threat_value in threats:
+		if not threat_value is Dictionary or (int((threat_value as Dictionary).get("blocked_lanes", 0)) & CEILING_LANE) == 0:
+			continue
+		var threat_end := float((threat_value as Dictionary).get("end", -INF))
+		var at := _ceiling_threat_ends.bsearch(threat_end, false)
+		_ceiling_threat_ends.insert(at, threat_end)
+		_ceiling_threat_starts.insert(at, float((threat_value as Dictionary).get("start", INF)))
+	if str(event.get("kind", "")) == "ghost" and int(event.get("ghost_variant", 0)) == 3:
+		_max_pursuit_trigger = maxf(_max_pursuit_trigger, float(event.get("course_distance", 0.0)) - float(event.get("trigger_lead", 0.0)))
+	if str(event.get("kind", "")) == "lava_crack":
+		_lava_crack_events.append(event)
+
+## The event indexes describe exactly this _events array and length. If the
+## array is replaced or edited from outside (white-box tests do), rebuild them.
+func _sync_event_indexes() -> void:
+	if is_same(_indexed_events, _events) and _indexed_event_count == _events.size():
+		return
+	_max_pursuit_trigger = -INF
+	_lava_crack_events.clear()
+	_ceiling_threat_ends = PackedFloat64Array()
+	_ceiling_threat_starts = PackedFloat64Array()
+	for event in _events:
+		_index_committed_event(event)
+	_indexed_events = _events
+	_indexed_event_count = _events.size()
+
+func _sync_window_indexes() -> void:
+	if not (is_same(_indexed_windows, _gen16_barrel_meeting_windows) and _meeting_windows_by_end.size() == _gen16_barrel_meeting_windows.size()):
+		_meeting_windows_by_end.clear()
+		_meeting_window_ends = PackedFloat64Array()
+		for window in _gen16_barrel_meeting_windows:
+			var window_end := float(window.end)
+			var at := _meeting_window_ends.bsearch(window_end, false)
+			_meeting_window_ends.insert(at, window_end)
+			_meeting_windows_by_end.insert(at, window)
+		_indexed_windows = _gen16_barrel_meeting_windows
+	if not (is_same(_indexed_corridors, _spiked_barrel_corridors) and _corridors_by_end.size() == _spiked_barrel_corridors.size()):
+		_corridors_by_end.clear()
+		_corridor_ends = PackedFloat64Array()
+		for corridor in _spiked_barrel_corridors:
+			var corridor_end := float(corridor.get("end_x", -INF))
+			var at := _corridor_ends.bsearch(corridor_end, false)
+			_corridor_ends.insert(at, corridor_end)
+			_corridors_by_end.insert(at, corridor)
+		_indexed_corridors = _spiked_barrel_corridors
+
 func _insert_generated_event(event: Dictionary) -> void:
+	_pending_sweep_events.append(event)
+	_sync_event_indexes()
+	_index_committed_event(event)
 	if _generator_version not in [GENERATOR_VERSION_20, GENERATOR_VERSION_21]:
 		_events.append(event)
+		_indexed_event_count = _events.size()
 		return
 	var distance := float(event.get("course_distance", 0.0))
-	var index := 0
-	while index < _events.size() and float(_events[index].get("course_distance", 0.0)) <= distance:
-		index += 1
+	# Gen20+ keeps _events sorted by course distance, so the first entry beyond
+	# this distance is found from the end (new events land near the frontier).
+	var index := _events.size()
+	while index > 0 and float(_events[index - 1].get("course_distance", 0.0)) > distance:
+		index -= 1
 	_events.insert(index, event)
+	_indexed_event_count = _events.size()
 	if index < _next_spawn_index:
 		_next_spawn_index += 1
 

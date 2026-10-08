@@ -14,7 +14,20 @@ var _events: Array = []
 var _floor_surface_events: Array = []
 var _ceiling_surface_events: Array = []
 
-func configure(events: Array, initial_floor_y: float, initial_ceiling_y: float) -> void:
+# Recently built lane profiles. Singleplayer rebuilds an index several times per
+# second from lists that only change at the far end of the course, so intervals
+# that end before the first changed surface record are reused as-is (their
+# samples cannot be reached by the changed records, see _min_coordinate()).
+const PROFILE_CACHE_SIZE := 8
+static var _profile_cache: Array = []
+## Tests can turn reuse off to compare against fresh profiles.
+static var profile_cache_enabled := true
+var _use_profile_cache := true
+
+## use_profile_cache=false skips the shared profile cache for short-lived
+## windows so they do not evict the long-lived lineages that benefit from it.
+func configure(events: Array, initial_floor_y: float, initial_ceiling_y: float, use_profile_cache: bool = true) -> void:
+	_use_profile_cache = use_profile_cache and profile_cache_enabled
 	_events = events
 	_floor_surface_events = []
 	_ceiling_surface_events = []
@@ -65,8 +78,21 @@ func surface_at(x: float, ceiling: bool) -> Dictionary:
 func support_boundaries(ceiling: bool) -> Array[float]:
 	var profile: Dictionary = _ceiling_profile if ceiling else _floor_profile
 	var result: Array[float] = []
-	for value in profile.get("boundaries", []):
-		result.append(float(value))
+	result.assign(profile.get("boundaries", []))
+	return result
+
+## Sorted support boundaries inside [start_x, end_x] (or the open interval when
+## inclusive is false), found by binary search instead of scanning every one.
+func support_boundaries_between(start_x: float, end_x: float, ceiling: bool, inclusive: bool = true) -> Array[float]:
+	var profile: Dictionary = _ceiling_profile if ceiling else _floor_profile
+	var boundaries: Array = profile.get("boundaries", [])
+	var result: Array[float] = []
+	if boundaries.is_empty() or end_x < start_x:
+		return result
+	var first := boundaries.bsearch(start_x, inclusive)
+	var last := boundaries.bsearch(end_x, not inclusive)
+	if last > first:
+		result.assign(boundaries.slice(first, last))
 	return result
 
 func interval_is_supported(start_x: float, end_x: float, ceiling: bool) -> bool:
@@ -88,9 +114,7 @@ func lowest_surface_y_over_interval(start_x: float, end_x: float, ceiling: bool)
 	var left := minf(start_x, end_x)
 	var right := maxf(start_x, end_x)
 	var lowest_y := maxf(float(surface_at(left, ceiling).get("y", 0.0)), float(surface_at(right, ceiling).get("y", 0.0)))
-	for boundary in support_boundaries(ceiling):
-		if boundary < left or boundary > right:
-			continue
+	for boundary in support_boundaries_between(left, right, ceiling, true):
 		for sample_x in [boundary - BOUNDARY_EPSILON * 2.0, boundary, boundary + BOUNDARY_EPSILON * 2.0]:
 			if sample_x >= left and sample_x <= right:
 				lowest_y = maxf(lowest_y, float(surface_at(sample_x, ceiling).get("y", lowest_y)))
@@ -127,9 +151,18 @@ func _build_profile(ceiling: bool) -> Dictionary:
 	var interval_starts: Array[float] = []
 	var interval_ends: Array[float] = []
 	var interval_supports: Array[bool] = []
+	var cached := _find_cached_profile(lane_events, ceiling) if _use_profile_cache else {}
+	var cached_profile: Dictionary = cached.get("profile", {})
+	var cached_boundaries: Array = cached_profile.get("boundaries", [])
+	var changed_from := float(cached.get("changed_from", -INF))
 	for index in range(maxi(unique_boundaries.size() - 1, 0)):
 		var start_x := unique_boundaries[index]
 		var end_x := unique_boundaries[index + 1]
+		if end_x < changed_from and index + 1 < cached_boundaries.size() and float(cached_boundaries[index]) == start_x and float(cached_boundaries[index + 1]) == end_x:
+			interval_starts.append(float(cached_profile["interval_starts"][index]))
+			interval_ends.append(float(cached_profile["interval_ends"][index]))
+			interval_supports.append(bool(cached_profile["interval_supports"][index]))
+			continue
 		var inset := minf((end_x - start_x) * 0.25, 0.001)
 		var left := linear_surface_at(lane_events, _floor_y, _ceiling_y, start_x + inset, ceiling)
 		var right := linear_surface_at(lane_events, _floor_y, _ceiling_y, end_x - inset, ceiling)
@@ -140,7 +173,58 @@ func _build_profile(ceiling: bool) -> Dictionary:
 	var final_surface := {"y": initial_y, "supported": true}
 	if not unique_boundaries.is_empty():
 		final_surface = linear_surface_at(lane_events, _floor_y, _ceiling_y, float(unique_boundaries.back()) + 0.001, ceiling)
-	return {"boundaries": unique_boundaries, "interval_starts": interval_starts, "interval_ends": interval_ends, "interval_supports": interval_supports, "initial_y": initial_y, "final_surface": final_surface}
+	var profile := {"boundaries": unique_boundaries, "interval_starts": interval_starts, "interval_ends": interval_ends, "interval_supports": interval_supports, "initial_y": initial_y, "final_surface": final_surface}
+	if not _use_profile_cache:
+		return profile
+	_profile_cache.push_front({"ceiling": ceiling, "floor_y": _floor_y, "ceiling_y": _ceiling_y, "events": lane_events.duplicate(), "profile": profile})
+	if _profile_cache.size() > PROFILE_CACHE_SIZE:
+		_profile_cache.resize(PROFILE_CACHE_SIZE)
+	return profile
+
+## Returns the cached profile sharing the longest identical record prefix with
+## lane_events, plus the lowest x any differing record can influence.
+func _find_cached_profile(lane_events: Array, ceiling: bool) -> Dictionary:
+	var best: Dictionary = {}
+	var best_prefix := -1
+	for entry_value in _profile_cache:
+		var entry: Dictionary = entry_value
+		if bool(entry["ceiling"]) != ceiling or float(entry["floor_y"]) != _floor_y or float(entry["ceiling_y"]) != _ceiling_y:
+			continue
+		var cached_events: Array = entry["events"]
+		var limit := mini(cached_events.size(), lane_events.size())
+		var prefix := 0
+		while prefix < limit and is_same(cached_events[prefix], lane_events[prefix]):
+			prefix += 1
+		if prefix > best_prefix:
+			best_prefix = prefix
+			best = entry
+	if best.is_empty():
+		return {}
+	var changed_from := INF
+	for index in range(best_prefix, lane_events.size()):
+		changed_from = minf(changed_from, _min_coordinate(lane_events[index]))
+	var cached_events: Array = best["events"]
+	for index in range(best_prefix, cached_events.size()):
+		changed_from = minf(changed_from, _min_coordinate(cached_events[index]))
+	return {"profile": best["profile"], "changed_from": changed_from}
+
+## Lowest x at which a surface record can change linear_surface_at() or add a
+## profile boundary: steps apply from x, slopes from min(start, end), gaps from
+## their nearer edge.
+static func _min_coordinate(event_value: Variant) -> float:
+	if not event_value is Dictionary:
+		return INF
+	var event: Dictionary = event_value
+	match str(event.get("kind", "")):
+		"step":
+			return float(event.get("x", 0.0))
+		"slope":
+			var start_x := float(event.get("start_x", 0.0))
+			return minf(start_x, float(event.get("end_x", start_x)))
+		"gap":
+			var gap_start := float(event.get("x", 0.0)) - float(event.get("width", 0.0)) * 0.5
+			return minf(gap_start, gap_start + float(event.get("width", 0.0)))
+	return INF
 
 static func linear_surface_at(events: Array, initial_floor_y: float, initial_ceiling_y: float, x: float, ceiling: bool) -> Dictionary:
 	var y := initial_ceiling_y if ceiling else initial_floor_y
