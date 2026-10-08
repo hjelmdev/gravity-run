@@ -5,6 +5,7 @@ signal music_enabled_changed(enabled: bool)
 signal sfx_volume_changed(value: float)
 signal sfx_enabled_changed(enabled: bool)
 signal preferred_skin_changed(skin_id: int)
+signal selected_character_changed(character_id: StringName)
 
 const DEFAULT_CHARACTER_STATS := preload("res://characters/runner_stats.tres")
 const SAVE_PATH := "user://gravity_run_profile.cfg"
@@ -23,6 +24,9 @@ var sfx_enabled := true
 ## Runner colour used in singleplayer and suggested when joining a multiplayer
 ## lobby. Bounded by SkinPalette.SKIN_COUNT (the lobby RPC accepts 0..3).
 var preferred_skin_id := 0
+## Singleplayer character (CharacterCatalog id). Multiplayer still uses the
+## default runner until the lobby can share a character choice.
+var selected_character_id: StringName = &"runner"
 var character_stats: Resource
 var _saved_challenges: Array[Dictionary] = []
 var _music_save_timer: Timer
@@ -31,6 +35,7 @@ func _ready() -> void:
 	character_stats = DEFAULT_CHARACTER_STATS.duplicate(true)
 	flip_control = "swipe" if DisplayServer.is_touchscreen_available() else "keyboard"
 	_load_profile()
+	_apply_selected_character_stats()
 	_music_save_timer = Timer.new()
 	_music_save_timer.one_shot = true
 	_music_save_timer.wait_time = 0.45
@@ -63,6 +68,8 @@ func _load_profile() -> void:
 	best_distance_m = float(config.get_value("profile", "best_distance_m", 0.0))
 	leaderboard_name = str(config.get_value("profile", "leaderboard_name", ""))
 	preferred_skin_id = posmod(int(config.get_value("profile", "preferred_skin_id", 0)), SkinPalette.SKIN_COUNT)
+	var saved_character := StringName(str(config.get_value("profile", "selected_character_id", "runner")))
+	selected_character_id = saved_character if CharacterCatalog.has_character(saved_character) else CharacterCatalog.default_definition().id
 	var saved_challenges: Variant = config.get_value("profile", "saved_challenges", [])
 	_saved_challenges.clear()
 	if saved_challenges is Array:
@@ -156,6 +163,7 @@ func _save_profile() -> void:
 	config.set_value("profile", "best_distance_m", best_distance_m)
 	config.set_value("profile", "leaderboard_name", leaderboard_name)
 	config.set_value("profile", "preferred_skin_id", preferred_skin_id)
+	config.set_value("profile", "selected_character_id", String(selected_character_id))
 	config.set_value("profile", "saved_challenges", _saved_challenges)
 	config.set_value("settings", "flip_control", flip_control)
 	config.set_value("settings", "language", language)
@@ -166,6 +174,28 @@ func _save_profile() -> void:
 	var error := config.save(SAVE_PATH)
 	if error != OK:
 		push_warning("Could not save Gravity Run profile (error %s)." % error)
+
+func get_selected_character() -> CharacterDefinition:
+	return CharacterCatalog.get_definition(selected_character_id)
+
+func set_selected_character_id(character_id: StringName) -> bool:
+	var definition := CharacterCatalog.get_definition(character_id)
+	if definition.id != character_id or not CharacterCatalog.is_unlocked(definition):
+		return false
+	if character_id == selected_character_id:
+		return true
+	selected_character_id = character_id
+	_apply_selected_character_stats()
+	_save_profile()
+	selected_character_changed.emit(selected_character_id)
+	return true
+
+## Each character carries its own base stats (currently identical, so runs
+## and leaderboards are unaffected until traits are designed).
+func _apply_selected_character_stats() -> void:
+	var definition := get_selected_character()
+	if definition != null and definition.stats != null:
+		set_character_stats(definition.stats)
 
 func set_preferred_skin_id(skin_id: int) -> void:
 	var resolved := posmod(skin_id, SkinPalette.SKIN_COUNT)

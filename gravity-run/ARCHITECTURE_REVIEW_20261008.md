@@ -49,26 +49,44 @@ segframes, vilket är exakt det "saktar ner till några få frames" som syns i s
   - `tools/generator_equivalence_dump.gd` gav identiska hashar (planer, generator-statistik,
     runtime-resolves och MP-manifest) för generatorversion 5–21 × 8 seeds vid 40 000 px och vid 110 000 px.
   - Händelseström tick för tick (8,33 px/tick, 90 000 px) var identisk för version 16/18/20/21 × 3 seeds.
-  - Befintliga tester (freeze, cohort, coin stream parity, pursuit och liknande) gav samma
-    resultat före och efter. `course_manifest_test` misslyckas redan på basen.
+  - 30 befintliga tester (freeze, cohort, coin stream parity, pursuit och liknande) gav
+    byte-identisk utdata före och efter. På Linux misslyckas `course_manifest_test` och
+    freeze-testerna för v12–v18 redan på basen: manifest- och mynthasharna stämmer, men
+    hashen av de råa händelserna skiljer sig, troligen på grund av plattform eller
+    float-formatering. Kör dem på din Windows-maskin för att bekräfta.
 
 Observera att generatorns händelser innehåller `"profile": <Resource#id>`. JSON-hashar av råa
 generatorhändelser varierar därför mellan processer. Manifesthasharna påverkas inte.
 
-### Kvar att göra (förslag)
+### Steg 2 (samma dag): omräkningen gjord inkrementell
 
-Resolve-kostnaden växer fortfarande linjärt, eftersom hela historiken resolvas om var 0,5 s
-(cirka 70 ms efter 5 minuter på desktop). Den riktiga lösningen är en **strömmande
-runtime-manifest**: cacha det resolvade prefixet bakom ett säkerhetsfönster, till exempel
-6 000 px bakom horisonten, och resolva bara svansen. Filtren tittar framåt (pursuit-rutter
-upp till ungefär 3 000 px), så det kräver ett paritetstest mot nuvarande
-`gen20_coin_stream_parity_test` innan det tas i bruk. Det är nästa steg jag föreslår.
+Omräkningen tar inte längre hela historiken. Resultatet är fortfarande identiskt.
+- `CourseManifestBuilder.resolve_runtime_events` sparar resolverns tillstånd per
+  källhändelse. Händelser mer än 3 000 px bakom generatorns front är "färdiga" (alla
+  look-aheads är under cirka 500 px), så bara svansen räknas om.
+- Säkerhetsfiltren (Gen17/18/19/15) beslutar per händelse utifrån högst cirka 3 000 px
+  omgivning. Beslut långt bakom fronten memoiseras, och varje anrop sorterar och filtrerar
+  bara ett fönster. Ytnivån före fönstret förs in som startvärde. Fönstret stänger av sig
+  självt (full omräkning) om något antagande inte håller.
+- `CourseSurfaceIndex` återanvänder ytprofilens intervall som slutar före första ändrade
+  ytpost.
+- Generatorn håller index för pursuit-triggers, lavasprickor, takhot, spikade
+  korridorer och mötesfönster, så kontrollerna per kandidat inte skannar alla händelser.
+  Indexen byggs om automatiskt om `_events` byts ut utifrån, vilket white-box-testerna gör.
+- `main.gd` hoppar över planerade händelser långt bakom löparen som redan är spawnade
+  eller aktiverade.
+- `course_manifest_builder.runtime_caches_enabled = false` ger den gamla fulla vägen
+  (nödbroms och jämförelse).
 
-Billiga skydd under tiden:
-- `physics/common/max_physics_steps_per_frame = 3` för singleplayer. Ett hack blir då en kort
-  inbromsning i stället för en spiral. MP-klockan måste kontrolleras först.
-- `main.gd` gör `get_planned_events()` (en kopia av alla händelser) varje fysiktick, plus en
-  full resolve per spawnat hinder. Båda kan hållas inom ett fönster.
+Verifierat: alla generatorversioner × 8 seeds, en builder delad mellan seeds, blandade
+horisonter (mynt och spawn), riktiga `main.tscn`-tester (mynt mot MP-manifest,
+spawn-tester och replay). `gen20_coin_main_integration_test` hittade en bugg i en
+mellanversion (cachen ogiltigförklarades inte vid byte av seed). Den är rättad och
+täcks nu av ekvivalenstestet.
+
+Kvar (se `BACKLOG_20261008.md`):
+- `physics/common/max_physics_steps_per_frame = 3` för singleplayer.
+- Några svaga linjära skanningar i resolverns svans, som märks först efter cirka 15 minuter.
 
 ## 2. Arkitektur i dag
 

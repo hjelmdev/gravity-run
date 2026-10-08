@@ -89,6 +89,12 @@ var _singleplayer_saw_activation_ticks: Dictionary = {}
 var _singleplayer_ghost_activation_ticks: Dictionary = {}
 var _singleplayer_saw_surface_indexes: Dictionary = {}
 var _step_start_barrel_centers: Dictionary = {}
+# Planned events far behind the runner whose early spawn / saw activation is
+# already done are skipped by these cursors, so per-tick scans stay short on
+# long runs instead of walking every event since the start.
+const PLANNED_SCAN_SETTLED_BEHIND := 6000.0
+var _early_spawn_scan_index := 0
+var _saw_activation_scan_index := 0
 var _manifest_builder: RefCounted
 var floor_level_y := screen_height - 80.0
 var ceiling_level_y := 80.0
@@ -185,6 +191,8 @@ func _start_run() -> void:
 		SfxController.begin_round(_singleplayer_audio_round_id)
 	player.call("reset_to_floor", WORLD_HEIGHT - 80.0)
 	player.call("set_skin_id", randi_range(0, 3) if demo_mode else PlayerProfile.preferred_skin_id)
+	# The menu's autoplay background shows a random character for variety.
+	player.call("apply_character", CharacterCatalog.DEFINITIONS.pick_random() if demo_mode else PlayerProfile.get_selected_character())
 	var loadout_snapshot: Resource = InventoryService.create_run_loadout_snapshot(PlayerProfile.get_character_stats())
 	run_state.call("set_loadout_snapshot", loadout_snapshot)
 	player.call("set_loadout_snapshot", loadout_snapshot)
@@ -211,6 +219,8 @@ func _start_run() -> void:
 	_spawned_early_rock_ids.clear()
 	_spawned_early_saw_ids.clear()
 	_spawned_early_ghost_ids.clear()
+	_early_spawn_scan_index = 0
+	_saw_activation_scan_index = 0
 	_singleplayer_resolved_ghost_events.clear()
 	_singleplayer_spawned_gen19_fallback_ids.clear()
 	_singleplayer_ghost_activation_snapshots.clear()
@@ -534,7 +544,9 @@ func _physics_process(delta: float) -> void:
 		if _active_seed_version >= COURSE_GENERATOR_SCRIPT.PUBLISHED_SHARED_GENERATOR_VERSION:
 			var rock_spawn_line := course_distance + FALLING_ROCK_MODEL.TRIGGER_LEAD + 300.0
 			var saw_spawn_line := course_distance + SAW_BLADE_MODEL.SPAWN_LEAD
-			for planned_event in course_generator.get_planned_events():
+			var planned_events := course_generator.get_planned_events()
+			for planned_index in range(_early_spawn_scan_index, planned_events.size()):
+				var planned_event: Dictionary = planned_events[planned_index]
 				var planned_kind := str(planned_event.get("kind", ""))
 				var event_distance := float(planned_event.get("course_distance", INF))
 				if planned_kind == "rock" and event_distance <= rock_spawn_line:
@@ -557,6 +569,8 @@ func _physics_process(delta: float) -> void:
 						_spawned_early_ghost_ids[ghost_id] = true
 						_spawn_course_event(planned_event)
 						_singleplayer_resolved_ghost_events.erase(ghost_id)
+			while _early_spawn_scan_index < planned_events.size() and _early_spawn_is_settled(planned_events[_early_spawn_scan_index]):
+				_early_spawn_scan_index += 1
 		for event in course_generator.pop_events_until(spawn_line):
 			var event_kind := str(event.get("kind", ""))
 			if event_kind == "rock":
@@ -1116,18 +1130,44 @@ func _resolve_singleplayer_rock_event(source_event: Dictionary) -> Dictionary:
 			return resolved_event.duplicate(true)
 	return {}
 
+## True when the early-spawn loop can never act on this event again.
+func _early_spawn_is_settled(planned_event: Dictionary) -> bool:
+	if float(planned_event.get("course_distance", INF)) + PLANNED_SCAN_SETTLED_BEHIND >= course_distance:
+		return false
+	match str(planned_event.get("kind", "")):
+		"rock":
+			return _spawned_early_rock_ids.has(_singleplayer_rock_key(planned_event))
+		"saw":
+			return _spawned_early_saw_ids.has(_singleplayer_saw_key(planned_event))
+		"ghost":
+			var ghost_id := _singleplayer_ghost_key(planned_event)
+			if _spawned_early_ghost_ids.has(ghost_id):
+				return true
+			var cached: Variant = _singleplayer_resolved_ghost_events.get(ghost_id)
+			return cached is Dictionary and bool((cached as Dictionary).get("gen19_supported_fallback", false))
+	return true
+
 func _saw_surface_at(x: float, ceiling: bool) -> Dictionary:
 	return {"y": _ceiling_surface_y(x) if ceiling else _floor_surface_y(x), "supported": _surface_is_solid_at_x(x, ceiling)}
 
 func _update_saw_blades(previous_world_x: float = -1.0, current_world_x: float = -1.0) -> void:
 	if current_world_x >= 0.0 and is_finite(current_world_x):
-		for planned_event in course_generator.get_planned_events():
+		var planned_events := course_generator.get_planned_events()
+		for planned_index in range(_saw_activation_scan_index, planned_events.size()):
+			var planned_event: Dictionary = planned_events[planned_index]
 			if str(planned_event.get("kind", "")) != "saw":
 				continue
 			var saw_key := _singleplayer_saw_key(planned_event)
 			var trigger_x := PLAYER_X + float(planned_event.get("course_distance", 0.0)) + SAW_BLADE_MODEL.START_OFFSET - SAW_BLADE_MODEL.SPAWN_LEAD
 			if not _singleplayer_saw_activation_ticks.has(saw_key) and current_world_x >= trigger_x:
 				_singleplayer_saw_activation_ticks[saw_key] = _singleplayer_simulation_tick + SAW_BLADE_MODEL.ACTIVATION_DELAY_TICKS
+		while _saw_activation_scan_index < planned_events.size():
+			var settled_event: Dictionary = planned_events[_saw_activation_scan_index]
+			if float(settled_event.get("course_distance", INF)) + PLANNED_SCAN_SETTLED_BEHIND >= course_distance:
+				break
+			if str(settled_event.get("kind", "")) == "saw" and not _singleplayer_saw_activation_ticks.has(_singleplayer_saw_key(settled_event)):
+				break
+			_saw_activation_scan_index += 1
 	for obstacle in obstacles:
 		if is_instance_valid(obstacle) and obstacle.is_in_group("saw_blades"):
 			var event: Dictionary = obstacle.get("event")

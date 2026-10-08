@@ -150,7 +150,7 @@ func _make_skin_picker() -> Control:
 	_skin_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_skin_preview.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_skin_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_skin_preview.texture = RunnerFrames.get_frame_texture("run", 0)
+	_skin_preview.texture = _preview_frames().get_frame_texture("run", 0)
 	row.add_child(_skin_preview)
 	var next := Button.new()
 	next.text = ">"
@@ -181,13 +181,18 @@ func _process(delta: float) -> void:
 	# Let the preview runner jog in place so the picker reads as a character.
 	if not is_instance_valid(_skin_preview) or not is_visible_in_tree():
 		return
-	var frame_count := RunnerFrames.get_frame_count("run")
+	var frames := _preview_frames()
+	var frame_count := frames.get_frame_count("run")
 	if frame_count <= 0:
 		return
 	var previous_frame := int(_skin_preview_frame)
-	_skin_preview_frame = fmod(_skin_preview_frame + delta * RunnerFrames.get_animation_speed("run"), float(frame_count))
-	if int(_skin_preview_frame) != previous_frame:
-		_skin_preview.texture = RunnerFrames.get_frame_texture("run", int(_skin_preview_frame))
+	_skin_preview_frame = fmod(_skin_preview_frame + delta * frames.get_animation_speed("run"), float(frame_count))
+	if int(_skin_preview_frame) != previous_frame or _skin_preview.texture == null:
+		_skin_preview.texture = frames.get_frame_texture("run", int(_skin_preview_frame) % frame_count)
+
+func _preview_frames() -> SpriteFrames:
+	var definition := PlayerProfile.get_selected_character()
+	return definition.sprite_frames if definition != null and definition.sprite_frames != null else RunnerFrames
 
 func _make_icon_action(icon_name: String, accessible_name: String, caption: String, callback: Callable) -> Control:
 	var column := VBoxContainer.new()

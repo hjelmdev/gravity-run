@@ -1429,3 +1429,24 @@ msgstr "Mina mynt"
 
 msgid "Skin"
 msgstr "Utseende"
+
+msgid "Previous character"
+msgstr "Föregående karaktär"
+
+msgid "Next character"
+msgstr "Nästa karaktär"
+
+msgid "Nova"
+msgstr "Nova"
+
+msgid "Nova Mini"
+msgstr "Nova Mini"
+
+msgid "The original gravity runner."
+msgstr "Den ursprungliga gravitationslöparen."
+
+msgid "Astronaut runner, 32x32 pixel art."
+msgstr "Astronautlöpare, 32x32 pixlar."
+
+msgid "The same astronaut as 16x16 pixel art."
+msgstr "Samma astronaut i 16x16 pixlar."

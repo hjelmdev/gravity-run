@@ -7,6 +7,7 @@ const ItemDefinitionScript := preload("res://systems/item_definition.gd")
 const SpriteFramesResource := preload("res://assets/character/run_frames.tres")
 const ItemPresentationScript := preload("res://ui/item_presentation.gd")
 const GameIconScript := preload("res://ui/game_icon.gd")
+const SkinPalette := preload("res://player/skin_palette.gd")
 
 var view_mode := "character"
 var equipment_locked := false
@@ -155,7 +156,7 @@ func _build_character() -> void:
 	character_stage.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	character_column.add_child(character_stage)
 	var sprite := TextureRect.new()
-	sprite.texture = SpriteFramesResource.get_frame_texture(&"run", 0)
+	_apply_character_preview(sprite)
 	sprite.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 	sprite.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	sprite.position = Vector2(52.0, 27.0)
@@ -163,7 +164,7 @@ func _build_character() -> void:
 	sprite.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	character_stage.add_child(sprite)
 	var character_label := Label.new()
-	character_label.text = tr("Runner")
+	character_label.text = tr(PlayerProfile.get_selected_character().display_name)
 	character_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	character_label.position = Vector2(0.0, 124.0)
 	character_label.size = Vector2(155.0, 22.0)
@@ -174,6 +175,7 @@ func _build_character() -> void:
 		var owned := _find_owned_item(instance_id)
 		var slot_control := _make_character_slot(str(slot), instance_id, owned)
 		character_stage.add_child(slot_control)
+	character_column.add_child(_make_character_picker())
 	var stats_card := _card()
 	left.add_child(stats_card)
 	var stats_layout := VBoxContainer.new()
@@ -346,16 +348,13 @@ func _build_guest_character() -> void:
 	layout.add_theme_constant_override("separation", 8)
 	_body.add_child(layout)
 	var preview := TextureRect.new()
-	preview.texture = SpriteFramesResource.get_frame_texture(&"run", 0)
+	_apply_character_preview(preview)
 	preview.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 	preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	preview.custom_minimum_size = Vector2(60.0, 76.0)
 	preview.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	layout.add_child(preview)
-	var runner := Label.new()
-	runner.text = tr("Runner")
-	runner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	layout.add_child(runner)
+	layout.add_child(_make_character_picker())
 	var stats := Label.new()
 	var profile_stats: Resource = PlayerProfile.get_character_stats()
 	var base_stats: Dictionary = profile_stats.call("get_base_stats") if profile_stats != null else {}
@@ -368,6 +367,67 @@ func _build_guest_character() -> void:
 	prompt.text = tr("Guest inventory is not saved.")
 	prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	layout.add_child(prompt)
+
+## Character switcher ("< Nova >") shared by the signed-in and guest views.
+## Characters only change art for now; base stats are identical.
+func _make_character_picker() -> Control:
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 2)
+	column.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 6)
+	column.add_child(row)
+	var previous := Button.new()
+	previous.text = "<"
+	previous.custom_minimum_size = Vector2(34.0, 30.0)
+	previous.tooltip_text = tr("Previous character")
+	previous.accessibility_name = previous.tooltip_text
+	previous.disabled = equipment_locked
+	previous.pressed.connect(_cycle_character.bind(-1))
+	row.add_child(previous)
+	var definition := PlayerProfile.get_selected_character()
+	var name_label := Label.new()
+	name_label.text = tr(definition.display_name)
+	name_label.custom_minimum_size.x = 96.0
+	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	row.add_child(name_label)
+	var next := Button.new()
+	next.text = ">"
+	next.custom_minimum_size = Vector2(34.0, 30.0)
+	next.tooltip_text = tr("Next character")
+	next.accessibility_name = next.tooltip_text
+	next.disabled = equipment_locked
+	next.pressed.connect(_cycle_character.bind(1))
+	row.add_child(next)
+	var detail := Label.new()
+	detail.text = tr(definition.trait_text) if not definition.trait_text.is_empty() else tr(definition.description)
+	detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	detail.custom_minimum_size.x = 170.0
+	detail.add_theme_font_size_override("font_size", 11)
+	detail.add_theme_color_override("font_color", Color("b8c7dc"))
+	column.add_child(detail)
+	return column
+
+func _cycle_character(direction: int) -> void:
+	var count := CharacterCatalog.DEFINITIONS.size()
+	var index := CharacterCatalog.index_of(PlayerProfile.selected_character_id)
+	for _step in count:
+		index = posmod(index + direction, count)
+		var candidate: CharacterDefinition = CharacterCatalog.DEFINITIONS[index]
+		if CharacterCatalog.is_unlocked(candidate):
+			PlayerProfile.set_selected_character_id(candidate.id)
+			break
+	_render()
+
+func _apply_character_preview(preview: TextureRect) -> void:
+	var definition := PlayerProfile.get_selected_character()
+	var frames: SpriteFrames = definition.sprite_frames if definition.sprite_frames != null else SpriteFramesResource
+	preview.texture = frames.get_frame_texture(&"run", 0)
+	preview.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	var skin_id := int(PlayerProfile.preferred_skin_id)
+	preview.material = null if skin_id == 0 else SkinPalette.make_material(skin_id)
 
 func _build_shop() -> void:
 	var scroll := ScrollContainer.new()

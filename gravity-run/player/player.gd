@@ -20,6 +20,7 @@ var input_enabled := true
 var _flip_cooldown_multiplier := 1.0
 var _touch_gesture: RefCounted = TouchGestureLifecycleScript.new()
 var _skin_id := -1
+var _character_offset_y := 0.0
 ## Absolute horizontal course coordinate, independent of camera and viewport.
 var world_x := PLAYER_X
 @onready var effects: Node = $PlayerEffects
@@ -81,6 +82,23 @@ func set_skin_id(skin_id: int) -> void:
 		# Hue shift 0 is the authored palette, so skip the shader entirely.
 		sprite.material = null if _skin_id == 0 else SkinPalette.make_material(_skin_id)
 
+## Swaps the runner's art. The hitbox (PLAYER_SIZE) is the same for everyone.
+func apply_character(definition: Resource) -> void:
+	if definition == null or not is_instance_valid(sprite):
+		return
+	var frames: SpriteFrames = definition.get("sprite_frames")
+	if frames == null:
+		return
+	if sprite.sprite_frames != frames:
+		var was_playing := sprite.is_playing()
+		sprite.sprite_frames = frames
+		if was_playing or input_enabled:
+			sprite.play("run")
+	var pixel_scale := float(definition.get("pixel_scale"))
+	sprite.scale = Vector2(pixel_scale, pixel_scale)
+	_character_offset_y = float((definition.get("sprite_offset") as Vector2).y)
+	_update_sprite_orientation()
+
 func get_player_rect() -> Rect2:
 	return Rect2(global_position - PLAYER_SIZE * 0.5, PLAYER_SIZE)
 
@@ -118,6 +136,7 @@ func _update_sprite_orientation() -> void:
 	if not is_instance_valid(sprite):
 		return
 	sprite.flip_v = gravity_direction < 0
+	sprite.offset.y = _character_offset_y * float(gravity_direction)
 	sprite.position.y = -float(gravity_direction) * SPRITE_SURFACE_GAP
 
 func _is_pause_button_position(point: Vector2) -> bool:
