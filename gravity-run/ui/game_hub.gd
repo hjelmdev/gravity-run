@@ -5,6 +5,7 @@ const SkinPalette := preload("res://player/skin_palette.gd")
 const RunnerFrames := preload("res://assets/character/run_frames.tres")
 
 signal start_run_requested
+signal campaign_requested
 signal challenges_requested
 signal leaderboard_requested
 signal achievements_requested
@@ -89,9 +90,20 @@ func _build() -> void:
 	_balance_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_balance_label.add_theme_color_override("font_color", Color("f5d45e"))
 	layout.add_child(_balance_label)
+	# Campaign and endless share the top row so the hub keeps its height.
+	var play_row := HBoxContainer.new()
+	play_row.add_theme_constant_override("separation", 8)
+	layout.add_child(play_row)
+	var campaign_button := _make_button(tr("Campaign"), 44.0)
+	campaign_button.name = "CampaignButton"
+	campaign_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	campaign_button.tooltip_text = tr("Fixed stages, gravity stars and bosses")
+	campaign_button.pressed.connect(campaign_requested.emit)
+	play_row.add_child(campaign_button)
 	_start_button = _make_button(tr("Start challenge") if ChallengeService.active else tr("Start run"), 44.0)
+	_start_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_start_button.pressed.connect(_start_run)
-	layout.add_child(_start_button)
+	play_row.add_child(_start_button)
 	var challenge_button := _make_button(tr("Challenges"), 38.0)
 	challenge_button.pressed.connect(challenges_requested.emit)
 	layout.add_child(challenge_button)

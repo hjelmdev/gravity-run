@@ -21,6 +21,15 @@ var speed_debug_base := 0.0
 var speed_debug_equipment_percent := 100.0
 const SharedRunHudScene := preload("res://ui/shared_run_hud.tscn")
 var _shared_run_hud: Control
+## Campaign stage HUD: progress to the flag (or the boss's health), the
+## gravity stars taken this attempt and short centred callouts.
+var campaign_level: Resource
+var campaign_stars := 0
+var campaign_star_total := 0
+var campaign_boss_hp := -1
+var campaign_boss_max_hp := 3
+var _callouts: Array[Dictionary] = []
+const CALLOUT_SECONDS := 2.6
 
 func _ready() -> void:
 	_shared_run_hud = SharedRunHudScene.instantiate() as Control
@@ -51,7 +60,43 @@ func _process(delta: float) -> void:
 	pass_flash_left = maxf(pass_flash_left - delta, 0.0)
 	if pass_flash_left <= 0.0:
 		pass_flash_name = ""
+	if not _callouts.is_empty():
+		_callouts[0]["left"] = float(_callouts[0]["left"]) - delta
+		if float(_callouts[0]["left"]) <= 0.0:
+			_callouts.pop_front()
+	if pass_flash_left <= 0.0 and _callouts.is_empty():
 		set_process(false)
+	queue_redraw()
+
+func set_campaign(level: Resource) -> void:
+	campaign_level = level
+	campaign_stars = 0
+	campaign_star_total = (level.get("stars") as PackedVector2Array).size() if level != null else 0
+	campaign_boss_hp = -1
+	_callouts.clear()
+	if is_instance_valid(_shared_run_hud):
+		_shared_run_hud.call("set_show_distance", level == null)
+	queue_redraw()
+
+func set_campaign_stars(collected: int, total: int) -> void:
+	campaign_stars = collected
+	campaign_star_total = total
+	queue_redraw()
+
+func set_campaign_boss(hp: int, max_hp: int) -> void:
+	campaign_boss_hp = hp
+	campaign_boss_max_hp = max_hp
+	queue_redraw()
+
+func show_campaign_callout(text: String, color: Color = Color("f5d45e")) -> void:
+	# A newer callout replaces one that has been readable for a moment, and at
+	# most two wait, so a burst of events never lags behind play.
+	if not _callouts.is_empty() and float(_callouts[0]["left"]) < CALLOUT_SECONDS - 0.6:
+		_callouts.pop_front()
+	while _callouts.size() >= 2:
+		_callouts.pop_back()
+	_callouts.append({"text": text, "color": color, "left": CALLOUT_SECONDS})
+	set_process(true)
 	queue_redraw()
 
 func update_stats(new_distance_m: float, new_coins: int) -> void:
@@ -118,7 +163,11 @@ func _draw() -> void:
 		draw_string(ThemeDB.fallback_font, Vector2(21.0, 46.0), debug_text, HORIZONTAL_ALIGNMENT_LEFT, 348.0, 12, Color("8ee0a1"))
 	if loot_pending_count > 0:
 		draw_string(ThemeDB.fallback_font, Vector2(viewport_width - 250.0, 42.0), tr("LOOT PENDING · %d") % loot_pending_count, HORIZONTAL_ALIGNMENT_RIGHT, 180.0, 10, Color("42d6c5"))
-	_draw_seed_chase_strip(viewport_width, viewport_height)
+	if campaign_level != null:
+		_draw_campaign_bar(viewport_width)
+		_draw_campaign_callout(viewport_width, viewport_height)
+	else:
+		_draw_seed_chase_strip(viewport_width, viewport_height)
 	if pass_flash_left > 0.0:
 		var flash_phase := sin(Time.get_ticks_msec() / 75.0) * 0.5 + 0.5
 		var flash_color := Color("f5d45e", 0.75 + flash_phase * 0.25)
@@ -132,6 +181,67 @@ func _draw() -> void:
 		draw_string(ThemeDB.fallback_font, Vector2(0.0, viewport_height * 0.42), tr("RUN OVER"), HORIZONTAL_ALIGNMENT_CENTER, viewport_width, 42, Color("ff647c"))
 		draw_string(ThemeDB.fallback_font, Vector2(0.0, viewport_height * 0.51), tr("Distance: %d m") % int(distance_m / 10.0), HORIZONTAL_ALIGNMENT_CENTER, viewport_width, 22, Color("f4f7ff"))
 		draw_string(ThemeDB.fallback_font, Vector2(0.0, viewport_height * 0.60), tr("Tap the screen, press ENTER or SPACE to try again"), HORIZONTAL_ALIGNMENT_CENTER, viewport_width, 17, Color("b8c7dc"))
+
+func _draw_campaign_bar(viewport_width: float) -> void:
+	var font := ThemeDB.fallback_font
+	var width := clampf(viewport_width - 360.0, 260.0, 440.0)
+	# The bottom band is free in campaign runs (no seed chase strip there).
+	var rect := Rect2(Vector2((viewport_width - width) * 0.5, get_viewport_rect().size.y - 52.0), Vector2(width, 44.0))
+	draw_rect(rect, Color("121b2c", 0.86))
+	draw_rect(rect, Color("42d6c5", 0.7), false, 2.0)
+	var title := "%s  %s" % [str(campaign_level.get("level_id")), tr(str(campaign_level.get("title")))]
+	draw_string(font, rect.position + Vector2(12.0, 18.0), title, HORIZONTAL_ALIGNMENT_LEFT, width - 110.0, 13, Color("edf3ff"))
+	# Stars taken this attempt.
+	for index in range(campaign_star_total):
+		var center := Vector2(rect.end.x - 18.0 - float(campaign_star_total - 1 - index) * 22.0, rect.position.y + 14.0)
+		_draw_star_icon(center, 8.0, index < campaign_stars)
+	var bar := Rect2(rect.position + Vector2(12.0, 28.0), Vector2(width - 24.0, 8.0))
+	if campaign_boss_hp >= 0:
+		var pip_width := (bar.size.x + 4.0) / float(maxi(campaign_boss_max_hp, 1))
+		for index in range(campaign_boss_max_hp):
+			var pip := Rect2(Vector2(bar.position.x + float(index) * pip_width, bar.position.y), Vector2(pip_width - 4.0, bar.size.y))
+			draw_rect(pip, Color("ff647c") if index < campaign_boss_hp else Color("2b3346"))
+		return
+	var length := float(campaign_level.get("length_px"))
+	var progress := clampf(distance_m / maxf(length, 1.0), 0.0, 1.0)
+	draw_rect(bar, Color("2b3346"))
+	draw_rect(Rect2(bar.position, Vector2(bar.size.x * progress, bar.size.y)), Color("42d6c5"))
+	# Star markers along the bar, the flag at the end.
+	var stars: PackedVector2Array = campaign_level.get("stars")
+	for star in stars:
+		var star_ratio := clampf((star.x - 180.0) / maxf(length, 1.0), 0.0, 1.0)
+		draw_rect(Rect2(Vector2(bar.position.x + bar.size.x * star_ratio - 1.0, bar.position.y - 2.0), Vector2(2.0, bar.size.y + 4.0)), Color("f5d45e", 0.8))
+	var flag_x := bar.end.x
+	draw_line(Vector2(flag_x, bar.position.y - 6.0), Vector2(flag_x, bar.end.y + 2.0), Color("edf3ff"), 2.0)
+	draw_colored_polygon(PackedVector2Array([Vector2(flag_x, bar.position.y - 6.0), Vector2(flag_x - 10.0, bar.position.y - 3.0), Vector2(flag_x, bar.position.y)]), Color("f5d45e"))
+	var runner_x := bar.position.x + bar.size.x * progress
+	draw_circle(Vector2(runner_x, bar.position.y + bar.size.y * 0.5), 5.0, Color("edf3ff"))
+
+func _draw_star_icon(center: Vector2, radius: float, filled: bool) -> void:
+	var points := PackedVector2Array()
+	for i in range(10):
+		var angle := -PI * 0.5 + float(i) * PI / 5.0
+		var r := radius if i % 2 == 0 else radius * 0.45
+		points.append(center + Vector2(cos(angle), sin(angle)) * r)
+	draw_colored_polygon(points, Color("ffcd3c") if filled else Color("3a4256"))
+	points.append(points[0])
+	draw_polyline(points, Color("14141c"), 1.5)
+
+func _draw_campaign_callout(viewport_width: float, viewport_height: float) -> void:
+	if _callouts.is_empty():
+		return
+	var callout: Dictionary = _callouts[0]
+	var left := float(callout.left)
+	var alpha := clampf(minf(left / 0.45, (CALLOUT_SECONDS - left) / 0.18), 0.0, 1.0)
+	var color: Color = callout.color
+	color.a = alpha
+	var y := viewport_height * 0.25
+	var font := ThemeDB.fallback_font
+	var text := str(callout.text)
+	var text_width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 22).x
+	var back := Rect2(Vector2((viewport_width - text_width) * 0.5 - 18.0, y - 26.0), Vector2(text_width + 36.0, 38.0))
+	draw_rect(back, Color("101827", 0.78 * alpha))
+	draw_string(font, Vector2(0.0, y), text, HORIZONTAL_ALIGNMENT_CENTER, viewport_width, 22, color)
 
 func _draw_seed_chase_strip(viewport_width: float, viewport_height: float) -> void:
 	var track_left := 205.0

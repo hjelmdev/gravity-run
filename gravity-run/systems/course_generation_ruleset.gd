@@ -20,10 +20,17 @@ const CourseDifficultyProfileScript = preload("res://systems/course_difficulty_p
 ## Per-profile multipliers allow a ruleset to favor or suppress individual
 ## encounter families without coupling the generator to specific hazard types.
 @export var profile_weight_multipliers: Dictionary = {}
+## Campaign stages keep one biome for the whole course. Empty means the normal
+## distance-based biome rotation. Part of the fingerprint only when set, so
+## existing endless/challenge identities are unchanged.
+@export var locked_biome: StringName = &""
+const LOCKABLE_BIOMES := ["", "classic", "cave", "haunted", "lava"]
 
 func validate(available_profiles: Array) -> String:
 	if ruleset_id == StringName():
 		return "A ruleset needs a stable ID."
+	if String(locked_biome) not in LOCKABLE_BIOMES:
+		return "Ruleset '%s' locks an unknown biome '%s'." % [ruleset_id, locked_biome]
 	if revision < 1:
 		return "A ruleset revision must be positive."
 	if not include_all_profiles and included_profile_ids.is_empty():
@@ -99,6 +106,8 @@ func get_fingerprint() -> String:
 	]
 	if not is_equal_approx(coin_density, 1.0) or coin_revision != 1:
 		payload.append([snappedf(coin_density, 0.0001), coin_revision])
+	if locked_biome != StringName():
+		payload.append(["locked_biome", String(locked_biome)])
 	var context := HashingContext.new()
 	context.start(HashingContext.HASH_SHA256)
 	context.update(JSON.stringify(payload).to_utf8_buffer())
@@ -114,7 +123,7 @@ func to_payload() -> Dictionary:
 	var weights: Dictionary = {}
 	for key in profile_weight_multipliers:
 		weights[str(key)] = snappedf(float(profile_weight_multipliers[key]), 0.0001)
-	return {
+	var payload := {
 		"ruleset_id": String(ruleset_id),
 		"revision": revision,
 		"include_all_profiles": include_all_profiles,
@@ -127,6 +136,9 @@ func to_payload() -> Dictionary:
 		"coin_revision": coin_revision,
 		"profile_weight_multipliers": weights,
 	}
+	if locked_biome != StringName():
+		payload["locked_biome"] = String(locked_biome)
+	return payload
 
 static func from_payload(payload: Variant) -> Resource:
 	# PostgREST normally returns JSONB as a nested object. Accept a serialized
@@ -182,4 +194,8 @@ static func from_payload(payload: Variant) -> Resource:
 			return null
 		weights[str(key)] = float(weight)
 	ruleset.set("profile_weight_multipliers", weights)
+	var locked_biome_value: Variant = payload.get("locked_biome", "")
+	if not locked_biome_value is String or str(locked_biome_value) not in LOCKABLE_BIOMES:
+		return null
+	ruleset.set("locked_biome", StringName(str(locked_biome_value)))
 	return ruleset

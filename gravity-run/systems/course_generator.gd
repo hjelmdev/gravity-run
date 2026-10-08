@@ -80,6 +80,8 @@ var _rhythm_event_index := 0
 var _seed := 0
 var _generator_version := GENERATOR_VERSION
 var _biome_start_offset := 0.0
+## Set from the ruleset for campaign stages; empty keeps biome rotation.
+var _locked_biome := ""
 var _difficulty: Resource
 var _spawn_lead_distance := 0.0
 var _configuration_failed := false
@@ -149,6 +151,8 @@ func configure_ruleset(ruleset: Resource, generator_version: int = GENERATOR_VER
 		_configuration_failed = true
 		return false
 	_difficulty = ruleset.call("create_difficulty_profile")
+	var locked: Variant = ruleset.get("locked_biome")
+	_locked_biome = String(locked) if locked is StringName or locked is String else ""
 	return true
 
 func configure_run_definition(definition: Resource, additional_profiles: Array[CourseHazardProfile] = []) -> bool:
@@ -179,6 +183,7 @@ func configure_default_profiles(generator_version: int = GENERATOR_VERSION) -> b
 	_profiles.clear()
 	_barrel_profile = null
 	_difficulty = null
+	_locked_biome = ""
 	var spikes_weight := 3.35 if generator_version >= GENERATOR_VERSION_9 else 3.0
 	_profiles.append(_make_profile(&"spike_group", &"spikes", spikes_weight, BOTH_LANES, Vector2(124.0, 188.0), Vector2i(4, 6), PackedFloat32Array([32.0])))
 	_profiles.append(_make_profile(&"block", &"block", 2.3, BOTH_LANES, Vector2(44.0, 64.0), Vector2i(1, 1), PackedFloat32Array([82.0, 132.0, 168.0])))
@@ -1056,6 +1061,8 @@ func _get_versioned_profile_weight(profile: CourseHazardProfile, course_distance
 	return base_weight * BiomeEncounterMixScript.multiplier(_generator_version, biome, profile.profile_id)
 
 func _biome_id_at(course_distance: float) -> String:
+	if not _locked_biome.is_empty():
+		return _locked_biome
 	return BiomeRenderer.biome_id_for_generator(course_distance + _biome_start_offset, _generator_version)
 
 func _is_narrow_supported_corridor(course_distance: float) -> bool:

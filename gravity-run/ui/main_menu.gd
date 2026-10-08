@@ -9,6 +9,7 @@ const COURSE_GENERATOR_SCRIPT := preload("res://systems/course_generator.gd")
 const COURSE_RULESET_SCRIPT := preload("res://systems/course_generation_ruleset.gd")
 const MusicVolumeControlScript := preload("res://ui/music_volume_control.gd")
 const GameIconScript := preload("res://ui/game_icon.gd")
+const WorldMapScript := preload("res://ui/campaign/world_map.gd")
 
 var menu_panel: PanelContainer
 var _leaderboard_rows: VBoxContainer
@@ -50,9 +51,13 @@ var _game_hub: Control
 var _inventory_screen: Control
 var _multiplayer_lobby: Control
 var _return_to_hub_after_screen := false
+var _world_map: Control
 
 func _ready() -> void:
 	MusicController.enter_menu()
+	BiomeRenderer.set_locked_biome(&"")
+	# In the menus no stage is being played; the map sets one when you press Play.
+	Campaign.clear_active()
 	MobileTextEntry.entry_submitted.connect(_on_mobile_text_submitted)
 	Leaderboard.top_runs_received.connect(_on_top_runs_received)
 	AuthService.auth_state_changed.connect(_on_auth_state_changed)
@@ -76,6 +81,10 @@ func _ready() -> void:
 	if AppNavigation.consume_multiplayer_lobby_request():
 		_show_game_hub()
 		_show_multiplayer_lobby()
+		return
+	if AppNavigation.consume_campaign_map_request():
+		_show_game_hub()
+		_show_world_map()
 		return
 	if AppNavigation.consume_game_hub_request():
 		_show_game_hub()
@@ -192,6 +201,7 @@ func _show_game_hub() -> void:
 		_game_hub.queue_free()
 	_game_hub = GAME_HUB_SCENE.instantiate()
 	_game_hub.start_run_requested.connect(_start_run_from_hub)
+	_game_hub.campaign_requested.connect(_show_world_map)
 	_game_hub.challenges_requested.connect(_show_challenge_options)
 	_game_hub.leaderboard_requested.connect(_show_leaderboard_menu)
 	_game_hub.achievements_requested.connect(_open_hub_achievements)
@@ -236,6 +246,28 @@ func _open_hub_achievements() -> void:
 	_show_achievements_menu()
 
 func _start_run_from_hub() -> void:
+	Campaign.clear_active()
+	get_tree().change_scene_to_packed(GAME_SCENE)
+
+func _show_world_map() -> void:
+	if is_instance_valid(_world_map):
+		_world_map.queue_free()
+	_world_map = WorldMapScript.new() as Control
+	_world_map.name = "WorldMap"
+	_world_map.play_requested.connect(_start_campaign_level)
+	_world_map.back_requested.connect(_close_world_map)
+	if is_instance_valid(_game_hub):
+		_game_hub.visible = false
+	add_child(_world_map)
+
+func _close_world_map() -> void:
+	if is_instance_valid(_world_map):
+		_world_map.queue_free()
+	_world_map = null
+	_show_game_hub()
+
+func _start_campaign_level(level: CampaignLevel) -> void:
+	Campaign.start_level(level)
 	get_tree().change_scene_to_packed(GAME_SCENE)
 
 func _return_to_main_menu() -> void:
@@ -1592,6 +1624,9 @@ func _clear_menu_panel() -> void:
 	if is_instance_valid(_inventory_screen):
 		_inventory_screen.queue_free()
 		_inventory_screen = null
+	if is_instance_valid(_world_map):
+		_world_map.queue_free()
+		_world_map = null
 	_close_achievement_group_overlay()
 	_achievement_group_overlay_id = ""
 

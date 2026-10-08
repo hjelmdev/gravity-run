@@ -12,6 +12,51 @@ Det är en skiss, inte slutlig grafik.
 checkpoints, banorna ska vara 90–120 sekunder, egenskaper och upplåsningar tas senare,
 Rullaren byggs som prototyp först, och fler biom ger fler världar längre fram.
 
+## Status 2026-10-08: fas 0–2 är byggda
+
+Spelbart nu: **Spel → Kampanj** öppnar världskartan. Ängen har 1-1 till 1-6 och bossen
+Rullaren (1-B). Att besegra Rullaren låser upp Grottan, som visas med "banorna är på väg".
+
+| Del | Filer |
+|---|---|
+| Data: bana, värld, katalog | `campaign/campaign_level.gd`, `campaign_world.gd`, `campaign_catalog.gd` |
+| Progress (lokal) | `campaign/campaign_service.gd` (autoload `Campaign`, sparas i `user://gravity_run_campaign.cfg`) |
+| Körning i SP-scenen | `campaign/campaign_run.gd` (stjärnor, mål, "Nytt:"-utrop, boss), krokar i `main.gd` |
+| Stjärnor, mål, resultat | `campaign/gravity_star.gd`, `finish_line.gd`, `campaign_result_panel.gd`, `star_icon.gd` |
+| Rullaren | `campaign/rullaren_boss.gd` (schema och tillstånd), `rullaren_view.gd` (pixelart i kod), `pressure_plate.gd` |
+| Karta | `ui/campaign/world_map.gd`, bakgrunder i `assets/campaign/map_*.png` från `tools/campaign/generate_world_maps.py` |
+| Ängens utseende i spelet | `assets/biomes/definitions/meadow.tres` + `_draw_meadow_backdrop` i `biomes/biome_renderer.gd` |
+| Verktyg och test | `tools/campaign/campaign_level_tool.gd` (seed + stjärnor), `campaign_runtime_test.tscn`, `campaign_capture.tscn` (skärmdumpar) |
+
+Så fungerar det:
+- **Biomlås.** `CourseGenerationRuleset.locked_biome` låser generatorns biom (ingår bara i
+  fingeravtrycket när det är satt, så alla befintliga seeds och utmaningar är oförändrade,
+  bevisat med `generator_equivalence_dump`). `BiomeRenderer.set_locked_biome()` låser
+  utseendet. Ängen genereras som *classic* men ritas som den nya *meadow*-biomen
+  (dagsljus, kullar, gräs-tiles). Menyn och multiplayer nollställer låset.
+- **Banorna** är seed + regelverk + generatorversion 21, alltså samma generator som endless.
+  Varje bana lägger till en hinderfamilj (1-1 spikar och block … 1-5 stenar och sågar, 1-6
+  allt). Inga nya hinder spawnar de sista 1 200 px före målflaggan.
+- **Stjärnor.** Verktyget planerar banans mynt och tar stjärnorna från de positionerna:
+  en tidig, en i taket mitt i banan och en "riskrad" sent när det finns. Mynt som ligger
+  på en stjärna tas bort. Testet kontrollerar att stjärnorna fortfarande ligger på planerade
+  myntpositioner och inte krockar med hinder.
+- **Poäng** = mynt × 10 + stjärnor × 500. Stjärnor räknas bara när du når målet och
+  samlas på över flera försök. Inga checkpoints; döden ger "Försök igen" direkt.
+- **Rullaren** kör ett fast schema med vanliga tunnor, takblock och takspikar. Efter varje
+  våg kommer en lysande platta i golvet eller taket. Spring över den på rätt sida så tar
+  maskinen skada. Tre träffar, tre faser. Missar du plattan körs fasen om.
+- **Kartan** ritar progress ovanpå den målade bakgrunden: klarade stenar (turkos), öppen
+  sten (guld), låsta (grå med hänglås), stjärnor under varje sten och din karaktär i ditt
+  utseende som går längs stigen. Tangentbord, mus och touch fungerar.
+
+Medvetet utanför fas 0–2:
+- Kampanjrundor sparas bara lokalt. De skickas inte till topplistor eller kontots
+  distans och mynt. Det kommer med backend-fasen (4).
+- Hemligheter, achievements och upplåsningar av karaktärer (fas 6 och senare beslut).
+- Banorna är inte frysta som händelselistor än. De bygger på generatorversion 21, som
+  inte ändras, men frysning och hand-finjustering hör till verktygsfasen (3).
+
 ---
 
 ## 1. Grundidé
@@ -136,7 +181,9 @@ musik, `levels[6]`, `boss`, och karaktären eller skinet man får för alla heml
 - Kontroller: tangentbord (←/→ mellan noder, Enter spelar), mus och touch.
 
 ### 4.5 Progress och lagring
-- **Lokalt (gäst):** `PlayerProfile` får en `campaign`-sektion:
+- **Lokalt (gäst):** byggt som en egen fil, `user://gravity_run_campaign.cfg` (autoload
+  `Campaign`), i stället för en sektion i `PlayerProfile`. Varje post sparar banans
+  identitet; ändras banan behåller den sin upplåsning men får nya rekord. Format:
   `{level_id: {best_score, golden_mask, secret, perfect, completions}}`.
 - **Inloggad:** en Supabase-tabell `campaign_progress (user_id, level_id, best_score,
   golden_mask, secret_found, perfect, completions, updated_at)` med RPC:n
@@ -160,7 +207,7 @@ anges i px vid 500 px/s.
 | 1 | spikar + block, täthet 0,7, marginal 1,5 | ytgrund + stenar | spikar + spöke (jagare) | lavaspricka |
 | 2 | + luckor i golv/tak | + istappar | + svävande spöke (flyby) | + trappsteg vid lava |
 | 3 | + tunnor | + trappsteg/sluttningar | + sågar | + vulkan (solfjäder) |
-| 4 | + trappsteg/sluttning, checkpoint | + spikade tunnor | + förföljande spöke (pursuit) | + tidvattenpool |
+| 4 | + trappsteg/sluttning | + spikade tunnor | + förföljande spöke (pursuit) | + tidvattenpool |
 | 5 | + fallande sten + såg | mix, täthet 1,3 | mix, täthet 1,4 | mix, täthet 1,5 |
 | 6 | examen: allt, täthet 1,2, marginal 1,0 | examen 1,5 | examen 1,6 | examen 1,8, marginal 0,85 |
 
@@ -186,8 +233,8 @@ hinder.
 | Spökskogen | **Spökkungen**, som speglar din fil med fördröjning | flyby och pursuit, lyktor som släcks | lockas in i en lykta: flippa precis innan den låser |
 | Vulkanen | **Magmaormen**, som reser sig ur lavan bakom dig | vulkansolfjädrar, sprickor, tidvatten | glödande fjäll som exponeras efter varje solfjäder |
 
-- Faser: fas 1 (3 attacker, sedan svag punkt) → fas 2 (snabbare) → fas 3 (blandat). Varje
-  fas har en checkpoint.
+- Faser: fas 1 (3 attacker, sedan svag punkt) → fas 2 (snabbare) → fas 3 (blandat). Ingen
+  checkpoint mellan faserna i steg 1; utvärderas efter speltest.
 - Rullaren först: den använder bara tunnor och block, som redan har bäst simulering och
   render-interpolation, och blir mallen för de andra.
 - Grafik: placeholder (en stor sprite och en ram-animation) tills art finns.
@@ -214,9 +261,9 @@ Nya metriker räknas från `campaign_progress` på servern, alltså samma mönst
 
 | Fas | Innehåll | Klart när |
 |---|---|---|
-| **0 – grunden** | `CampaignLevel`/`CampaignWorld`, biomlås, målflagga, "Bana klar"-skärm, banlista som enkel meny, 2–3 banor i Ängen | man kan spela 1-1 → 1-3 i ett fast biom till mål |
-| **1 – kartan och stjärnor** | världskarta enligt mockupen, avatar, låsta noder, 3 gravitationsstjärnor per bana, lokal progress, resten av Ängen | Ängen 1-1…1-6 spelbar från kartan, stjärnor sparas |
-| **2 – Rullaren (prototyp)** | bossbana med schemalagda tunn- och blockattacker, tryckplattor som svag punkt, 3 faser | Ängen kan avslutas med en boss och nästa värld låses upp |
+| **0 – grunden** ✅ | `CampaignLevel`/`CampaignWorld`, biomlås, målflagga, "Bana klar"-skärm, banlista som enkel meny, 2–3 banor i Ängen | man kan spela 1-1 → 1-3 i ett fast biom till mål |
+| **1 – kartan och stjärnor** ✅ | världskarta enligt mockupen, avatar, låsta noder, 3 gravitationsstjärnor per bana, lokal progress, resten av Ängen | Ängen 1-1…1-6 spelbar från kartan, stjärnor sparas |
+| **2 – Rullaren (prototyp)** ✅ | bossbana med schemalagda tunn- och blockattacker, tryckplattor som svag punkt, 3 faser | Ängen kan avslutas med en boss och nästa värld låses upp |
 | **3 – verktyg och innehåll** | seed-sökare, frysning, validering, banor för Grottan, Spökskogen och Vulkanen | 24 banor som klarar valideringen |
 | **4 – backend** | `campaign_progress` + RPC, topplista per bana, gästsammanslagning, achievements-migration | progress följer kontot, achievements låses upp |
 | **5 – övriga bossar** | Stalaktitjätten, Spökkungen och Magmaormen enligt Rullarens mall | varje värld har en boss |

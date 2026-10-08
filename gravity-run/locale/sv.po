@@ -1471,3 +1471,198 @@ msgstr "Robot som springer på reservbatterier."
 
 msgid "Cat who always lands on its feet."
 msgstr "Katt som alltid landar på fötterna."
+
+msgid "Campaign"
+msgstr "Kampanj"
+
+msgid "Fixed stages, gravity stars and bosses"
+msgstr "Fasta banor, gravitationsstjärnor och bossar"
+
+msgid "WORLD %d · %s"
+msgstr "VÄRLD %d · %s"
+
+msgid "The Meadow"
+msgstr "Ängen"
+
+msgid "The Cave"
+msgstr "Grottan"
+
+msgid "Haunted Woods"
+msgstr "Spökskogen"
+
+msgid "The Volcano"
+msgstr "Vulkanen"
+
+msgid "Gravity stars %d/%d  ·  Stages %d/%d"
+msgstr "Gravitationsstjärnor %d/%d  ·  Banor %d/%d"
+
+msgid "Coming soon"
+msgstr "Kommer snart"
+
+msgid "Boss: %s"
+msgstr "Boss: %s"
+
+msgid "Boss: %s · beaten"
+msgstr "Boss: %s · besegrad"
+
+msgid "Beat the boss of %s to open this world"
+msgstr "Besegra bossen i %s för att öppna den här världen"
+
+msgid "The stages of this world are on their way"
+msgstr "Banorna i den här världen är på väg"
+
+msgid "Best: %d"
+msgstr "Bästa: %d"
+
+msgid "Not cleared yet"
+msgstr "Inte klarad än"
+
+msgid "PLAY"
+msgstr "SPELA"
+
+msgid "Previous world"
+msgstr "Föregående värld"
+
+msgid "Next world"
+msgstr "Nästa värld"
+
+msgid "First Steps"
+msgstr "Första stegen"
+
+msgid "Mind the Gap"
+msgstr "Se upp för hålen"
+
+msgid "Rolling Barrels"
+msgstr "Rullande tunnor"
+
+msgid "Ups and Downs"
+msgstr "Upp och ner"
+
+msgid "Falling Rocks"
+msgstr "Fallande stenar"
+
+msgid "Meadow Exam"
+msgstr "Ängens examen"
+
+msgid "Rullaren"
+msgstr "Rullaren"
+
+msgid "Boss: the barrel machine"
+msgstr "Boss: tunnmaskinen"
+
+msgid "New: spikes and blocks"
+msgstr "Nytt: spikar och block"
+
+msgid "New: holes in the floor and ceiling"
+msgstr "Nytt: hål i golv och tak"
+
+msgid "New: rolling barrels"
+msgstr "Nytt: rullande tunnor"
+
+msgid "New: steps and slopes"
+msgstr "Nytt: trappsteg och backar"
+
+msgid "New: falling rocks and saw blades"
+msgstr "Nytt: fallande stenar och sågklingor"
+
+msgid "Everything the meadow has taught you"
+msgstr "Allt som ängen har lärt dig"
+
+msgid "New: %s!"
+msgstr "Nytt: %s!"
+
+msgid "spikes"
+msgstr "spikar"
+
+msgid "blocks"
+msgstr "block"
+
+msgid "hole in the floor"
+msgstr "hål i golvet"
+
+msgid "hole in the ceiling"
+msgstr "hål i taket"
+
+msgid "rolling barrels"
+msgstr "rullande tunnor"
+
+msgid "steps"
+msgstr "trappsteg"
+
+msgid "slopes"
+msgstr "backar"
+
+msgid "falling rock"
+msgstr "fallande sten"
+
+msgid "saw blade"
+msgstr "sågklinga"
+
+msgid "Gravity star %d/%d!"
+msgstr "Gravitationsstjärna %d/%d!"
+
+msgid "Direct hit! Rullaren speeds up"
+msgstr "Fullträff! Rullaren varvar upp"
+
+msgid "Missed the plate, it comes around again"
+msgstr "Missade plattan, den kommer igen"
+
+msgid "Rullaren is beaten!"
+msgstr "Rullaren är besegrad!"
+
+msgid "FINISH"
+msgstr "MÅL"
+
+msgid "STAGE CLEAR!"
+msgstr "BANAN KLAR!"
+
+msgid "RULLAREN IS BEATEN!"
+msgstr "RULLAREN ÄR BESEGRAD!"
+
+msgid "RULLAREN WINS THIS ROUND"
+msgstr "RULLAREN VANN DEN HÄR GÅNGEN"
+
+msgid "OUCH!"
+msgstr "AJ!"
+
+msgid "You made it %d%% of the way"
+msgstr "Du kom %d%% av vägen"
+
+msgid "Hit the glowing plates to damage it"
+msgstr "Spring över de lysande plattorna för att skada den"
+
+msgid "No checkpoints: the stage starts over from the beginning."
+msgstr "Inga checkpoints: banan börjar om från början."
+
+msgid "Try again"
+msgstr "Försök igen"
+
+msgid "Replay"
+msgstr "Spela igen"
+
+msgid "Map"
+msgstr "Kartan"
+
+msgid "Next stage"
+msgstr "Nästa bana"
+
+msgid "Score: %d"
+msgstr "Poäng: %d"
+
+msgid "New best!"
+msgstr "Nytt rekord!"
+
+msgid "Coins %d  ·  Stars %d/%d  ·  Best %d"
+msgstr "Mynt %d  ·  Stjärnor %d/%d  ·  Bästa %d"
+
+msgid "Coins %d  ·  Best %d"
+msgstr "Mynt %d  ·  Bästa %d"
+
+msgid "New world unlocked: %s"
+msgstr "Ny värld upplåst: %s"
+
+msgid "Unlocked: %s %s"
+msgstr "Upplåst: %s %s"
+
+msgid "+%d new gravity stars"
+msgstr "+%d nya gravitationsstjärnor"

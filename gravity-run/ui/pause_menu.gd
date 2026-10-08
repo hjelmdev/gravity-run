@@ -334,7 +334,11 @@ func _close_inventory() -> void:
 func _quit_to_main_menu() -> void:
 	manual_pause_requested = false
 	get_tree().paused = false
-	AppNavigation.request_game_hub()
+	if Campaign.is_active():
+		# Leaving a campaign stage goes back to its world map.
+		AppNavigation.request_campaign_map()
+	else:
+		AppNavigation.request_game_hub()
 	get_tree().change_scene_to_file(MAIN_MENU_SCENE)
 
 func _panel_style() -> StyleBoxFlat:

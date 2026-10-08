@@ -6,6 +6,9 @@ const CLASSIC: BiomeDefinition = preload("res://assets/biomes/definitions/classi
 const CAVE: BiomeDefinition = preload("res://assets/biomes/definitions/cave.tres")
 const HAUNTED: BiomeDefinition = preload("res://assets/biomes/definitions/haunted.tres")
 const LAVA: BiomeDefinition = preload("res://assets/biomes/definitions/lava.tres")
+## Campaign-only presentation biome (world 1). Never part of the rotation;
+## generation treats it as classic.
+const MEADOW: BiomeDefinition = preload("res://assets/biomes/definitions/meadow.tres")
 const GENERATOR_VERSION_14 := 14
 const GENERATOR_VERSION_16 := 16
 const GENERATOR_VERSION_21 := 21
@@ -15,10 +18,37 @@ const GEN14_CYCLE_LENGTH := THEME_LENGTH * 4.0
 const TILE_WORLD_SIZE := 64.0
 const LOGICAL_BACKGROUND_HEIGHT := 540.0
 
+## Presentation/runtime-filter lock for campaign stages. Set by the singleplayer
+## scene from its ruleset at run start and cleared by every non-campaign entry
+## point, so endless runs and multiplayer always see the normal rotation.
+static var _locked_definition: BiomeDefinition = null
+
+static func set_locked_biome(biome_id: StringName) -> void:
+	match biome_id:
+		&"classic": _locked_definition = CLASSIC
+		&"cave": _locked_definition = CAVE
+		&"haunted": _locked_definition = HAUNTED
+		&"lava": _locked_definition = LAVA
+		&"meadow": _locked_definition = MEADOW
+		_: _locked_definition = null
+
+static func locked_biome_id() -> StringName:
+	return _locked_definition.biome_id if _locked_definition != null else &""
+
+static func definition_for_id(biome_id: StringName) -> BiomeDefinition:
+	match biome_id:
+		&"meadow": return MEADOW
+		&"cave": return CAVE
+		&"haunted": return HAUNTED
+		&"lava": return LAVA
+		_: return CLASSIC
+
 static func definition_at(distance: float) -> BiomeDefinition:
 	return definition_for_generator(distance, GENERATOR_VERSION_14 - 1)
 
 static func definition_for_generator(distance: float, generator_version: int) -> BiomeDefinition:
+	if _locked_definition != null:
+		return _locked_definition
 	var cycle_length := GEN14_CYCLE_LENGTH if generator_version >= GENERATOR_VERSION_14 else CYCLE_LENGTH
 	var slot := int(floor(fposmod(maxf(distance, 0.0), cycle_length) / THEME_LENGTH))
 	match slot:
@@ -75,6 +105,7 @@ static func draw_backdrop(canvas: CanvasItem, view_left: float, view_size: Vecto
 				&"cave": _draw_cave_backdrop(canvas, cursor, layout_size, course_distance, fragment_offset, biome)
 				&"haunted": pass
 				&"lava": _draw_lava_backdrop(canvas, cursor, layout_size, distance, view_left, course_distance, biome)
+				&"meadow": _draw_meadow_backdrop(canvas, cursor, layout_size, view_left, course_distance, presentation_time_seconds)
 				_: _draw_classic_backdrop(canvas, cursor, layout_size, course_distance * 0.12 + fragment_offset, biome)
 		if biome.biome_id == &"haunted":
 			_draw_haunted_backdrop(canvas, cursor, layout_size, distance, view_left, Vector2(view_size.x, layout_size.y), course_distance, biome, cycle_length)
@@ -102,6 +133,10 @@ static func _draw_weather_layer(canvas: CanvasItem, biome: BiomeDefinition, left
 			period = 156.0
 			speed = 18.0
 			salt = 3137
+		"meadow":
+			period = 120.0
+			speed = 16.0
+			salt = 3181
 		"lava":
 			period = 94.0
 			speed = 11.0
@@ -165,6 +200,12 @@ static func _draw_weather_layer(canvas: CanvasItem, biome: BiomeDefinition, left
 				canvas.draw_colored_polygon(ember_shape, ember)
 				canvas.draw_line(Vector2(x - 3.5, y + 5.0), Vector2(x - 6.0, y + 8.0), Color(1.0, 0.54, 0.19, 0.42 * edge_fade), 2.0, true)
 				canvas.draw_circle(Vector2(x + 1.0, y - 1.0), 1.6, ember_core)
+			"meadow":
+				# Drifting petals and pollen, a few px, well below pickup scale.
+				var petal := Color(1.0, 0.93, 0.98, 0.55 * edge_fade) if int(motif.x) % 3 != 0 else Color(1.0, 0.86, 0.42, 0.6 * edge_fade)
+				var sway := sin(presentation_time_seconds * 1.7 + motif.x * 0.05) * 2.0
+				canvas.draw_rect(Rect2(Vector2(x - 2.0 + sway, y - 1.0), Vector2(4.0, 2.0)), petal)
+				canvas.draw_rect(Rect2(Vector2(x - 1.0 + sway, y - 2.0), Vector2(2.0, 4.0)), petal)
 			"_":
 				var sparkle := Color(0.91, 0.96, 1.0, 0.24 * edge_fade)
 				canvas.draw_circle(Vector2(x, y), 1.5, sparkle)
@@ -179,6 +220,7 @@ static func weather_primitive_extent(biome_kind: String) -> float:
 		"cave": return 7.0
 		"lava": return 9.0
 		"haunted": return 35.0
+		"meadow": return 5.0
 		_: return 2.0
 
 static func weather_primitive_fits_fragment(fragment_left: float, fragment_width: float, center_x: float, extent: float) -> bool:
@@ -358,6 +400,52 @@ static func _draw_atlas_decorations(canvas: CanvasItem, biome: BiomeDefinition, 
 		if destination.position.x < left or destination.end.x > left + size.x:
 			continue
 		canvas.draw_texture_rect_region(source.texture, destination, atlas_region, biome.surface_tint)
+
+## Daylight meadow for the campaign: sky band, sun, drifting clouds and two
+## parallax ranges of rolling hills. Every shape is a function of course
+## position, so fragments at theme boundaries join without seams.
+static func _draw_meadow_backdrop(canvas: CanvasItem, left: float, size: Vector2, view_left: float, camera_course_distance: float, time_seconds: float) -> void:
+	var right := left + size.x
+	canvas.draw_rect(Rect2(Vector2(left, 0.0), Vector2(size.x, size.y * 0.30)), Color(0.47, 0.72, 0.92))
+	canvas.draw_rect(Rect2(Vector2(left, size.y * 0.30), Vector2(size.x, size.y * 0.12)), Color(0.52, 0.76, 0.93))
+	# The sun keeps its place on screen.
+	var sun := Vector2(view_left + 760.0, size.y * 0.27)
+	if sun.x - 30.0 >= left and sun.x + 30.0 <= right:
+		canvas.draw_circle(sun, 30.0, Color(1.0, 0.95, 0.7, 0.35))
+		canvas.draw_circle(sun, 21.0, Color(1.0, 0.92, 0.58))
+	# Clouds: chunky rounded rows, slow parallax plus a little wind drift.
+	var cloud_parallax := camera_course_distance * 0.06 + time_seconds * 6.0
+	var period := 420.0
+	var first := floori((cloud_parallax + (left - view_left) - 120.0) / period)
+	var last := ceili((cloud_parallax + (right - view_left) + 120.0) / period)
+	for cell in range(first, last + 1):
+		var landmark := _landmark_for_cell(cell, period, 4211)
+		var cx := view_left + landmark.x - cloud_parallax
+		var cy := size.y * (0.20 + landmark.y * 0.16)
+		var w := 60.0 + landmark.y * 50.0
+		if cx - w * 0.6 < left or cx + w * 0.6 > right:
+			continue
+		var cloud := Color(1.0, 1.0, 1.0, 0.85)
+		canvas.draw_rect(Rect2(Vector2(cx - w * 0.5, cy - 8.0), Vector2(w, 16.0)), cloud)
+		canvas.draw_rect(Rect2(Vector2(cx - w * 0.3, cy - 18.0), Vector2(w * 0.45, 12.0)), cloud)
+		canvas.draw_rect(Rect2(Vector2(cx - w * 0.05, cy - 24.0), Vector2(w * 0.3, 10.0)), cloud)
+	_draw_meadow_hills(canvas, left, size, view_left, camera_course_distance * 0.10, size.y * 0.52, 34.0, 0.011, Color(0.55, 0.77, 0.6))
+	_draw_meadow_hills(canvas, left, size, view_left, camera_course_distance * 0.22, size.y * 0.64, 28.0, 0.017, Color(0.4, 0.66, 0.42))
+
+static func _draw_meadow_hills(canvas: CanvasItem, left: float, size: Vector2, view_left: float, parallax_offset: float, base_y: float, amplitude: float, frequency: float, color: Color) -> void:
+	var points := PackedVector2Array()
+	var x := left
+	var right := left + size.x
+	while true:
+		var u := parallax_offset + (x - view_left)
+		var y := base_y - amplitude * (0.6 * sin(u * frequency) + 0.4 * sin(u * frequency * 2.3 + 1.7))
+		points.append(Vector2(x, roundf(y / 3.0) * 3.0))
+		if x >= right:
+			break
+		x = minf(x + 12.0, right)
+	points.append(Vector2(right, size.y))
+	points.append(Vector2(left, size.y))
+	canvas.draw_colored_polygon(points, color)
 
 static func _draw_classic_backdrop(canvas: CanvasItem, left: float, size: Vector2, parallax_left: float, biome: BiomeDefinition) -> void:
 	for point in _landmarks_in_course(parallax_left, parallax_left + size.x, 82.0, 13):

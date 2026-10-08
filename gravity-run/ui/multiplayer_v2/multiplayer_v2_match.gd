@@ -146,6 +146,8 @@ var _mp_achievement_flips := 0
 var _mp_achievement_hazards: Dictionary = {}
 
 func _ready() -> void:
+	# Campaign stages lock the biome; a shared race always uses the rotation.
+	BiomeRendererScript.set_locked_biome(&"")
 	set_process_unhandled_input(true)
 	_touch_gesture.diagnostic.connect(_on_touch_gesture_diagnostic)
 	_configure_profiling()

@@ -48,6 +48,10 @@ const BIOME_RENDERER_SCRIPT := preload("res://biomes/biome_renderer.gd")
 const CoursePresentation := preload("res://systems/race_course_presentation.gd")
 const SfxAudibilityRules := preload("res://systems/sfx_audibility_rules.gd")
 const SfxAudioDiagnosticCapture := preload("res://systems/sfx_audio_diagnostic_capture.gd")
+const CampaignRunScript := preload("res://campaign/campaign_run.gd")
+const CampaignResultPanelScript := preload("res://campaign/campaign_result_panel.gd")
+## Ticks the runner keeps running past the finish line before the result.
+const CAMPAIGN_RUNOUT_TICKS := 75
 
 @onready var player: Node2D = $Player
 @onready var run_state: Node = $RunState
@@ -96,6 +100,11 @@ const PLANNED_SCAN_SETTLED_BEHIND := 6000.0
 var _early_spawn_scan_index := 0
 var _saw_activation_scan_index := 0
 var _manifest_builder: RefCounted
+## Campaign stage of this run (null for endless, challenge and demo runs).
+var _campaign_level: CampaignLevel
+var _campaign_run: Node2D
+var _campaign_result_panel: CanvasLayer
+var _campaign_runout_ticks := -1
 var floor_level_y := screen_height - 80.0
 var ceiling_level_y := 80.0
 var planned_floor_level_y := screen_height - 80.0
@@ -198,20 +207,28 @@ func _start_run() -> void:
 	player.call("set_loadout_snapshot", loadout_snapshot)
 	run_state.call("start_run")
 	course_distance = 0.0
-	var run_seed := ChallengeService.begin_run()
+	_campaign_level = null if demo_mode else Campaign.active_level
+	# Campaign stages pin one biome; every other run uses the rotation.
+	BIOME_RENDERER_SCRIPT.set_locked_biome(_campaign_level.get_presentation_biome() if _campaign_level != null else &"")
+	_manifest_builder.call("clear_runtime_cache")
+	var run_seed := _campaign_level.seed_value if _campaign_level != null else ChallengeService.begin_run()
 	loot_spawn_planner.reset(run_seed)
 	_active_seed = run_seed
-	_active_seed_version = ChallengeService.generation_version
+	_active_seed_version = _campaign_level.generator_version if _campaign_level != null else ChallengeService.generation_version
 	_seed_scores.clear()
 	_pending_hazard_discoveries.clear()
-	var run_definition := COURSE_RUN_DEFINITION_SCRIPT.new() as Resource
-	run_definition.set("scenario_id", &"seed_challenge" if ChallengeService.active else &"endless")
-	run_definition.set("seed_value", run_seed)
-	run_definition.set("generator_version", _active_seed_version)
-	run_definition.set("ruleset", ChallengeService.ruleset if ChallengeService.ruleset != null else _default_ruleset)
+	var run_definition: Resource
+	if _campaign_level != null:
+		run_definition = _campaign_level.create_run_definition()
+	else:
+		run_definition = COURSE_RUN_DEFINITION_SCRIPT.new() as Resource
+		run_definition.set("scenario_id", &"seed_challenge" if ChallengeService.active else &"endless")
+		run_definition.set("seed_value", run_seed)
+		run_definition.set("generator_version", _active_seed_version)
+		run_definition.set("ruleset", ChallengeService.ruleset if ChallengeService.ruleset != null else _default_ruleset)
 	if not course_generator.configure_run_definition(run_definition):
 		push_error("Could not apply this run's seed and ruleset to the course generator.")
-	if not demo_mode:
+	if not demo_mode and _campaign_level == null:
 		hud.call("set_seed", ChallengeService.generation_version, run_seed)
 		ChallengeService.fetch_current_scores()
 	coin_distance = 0.0
@@ -236,6 +253,8 @@ func _start_run() -> void:
 		_coin_trace_counts = {"spawned": 0, "spawned_before_capture": 0, "near_sweep": 0, "swept_contact": 0, "collected": 0, "expired_uncollected": 0}
 	_shared_coin_planner = SHARED_COIN_PLANNER_SCRIPT.new()
 	var coin_ruleset: Resource = ChallengeService.ruleset if ChallengeService.ruleset != null else _default_ruleset
+	if _campaign_level != null:
+		coin_ruleset = _campaign_level.ruleset
 	_shared_coin_planner.reset(_active_seed, PLAYER_X, int(coin_ruleset.get("coin_revision")), float(coin_ruleset.get("coin_density")))
 	floor_level_y = WORLD_HEIGHT - 80.0
 	ceiling_level_y = 80.0
@@ -259,7 +278,30 @@ func _start_run() -> void:
 	if demo_mode:
 		player.call("set_running", true)
 	hud.call("set_run_blocked", false)
+	_setup_campaign_run()
 	queue_redraw()
+
+func _setup_campaign_run() -> void:
+	_campaign_runout_ticks = -1
+	if is_instance_valid(_campaign_run):
+		_campaign_run.queue_free()
+	_campaign_run = null
+	if is_instance_valid(_campaign_result_panel):
+		_campaign_result_panel.call("hide_panel")
+	hud.call("set_campaign", _campaign_level)
+	if _campaign_level == null:
+		return
+	_campaign_run = CampaignRunScript.new() as Node2D
+	_campaign_run.name = "CampaignRun"
+	add_child(_campaign_run)
+	_campaign_run.call("setup", _campaign_level)
+	_campaign_run.connect("callout", Callable(hud, "show_campaign_callout"))
+	_campaign_run.connect("stars_changed", Callable(hud, "set_campaign_stars"))
+	_campaign_run.connect("boss_changed", Callable(hud, "set_campaign_boss"))
+	if not _campaign_level.intro.is_empty():
+		hud.call("show_campaign_callout", "%s · %s" % [tr(_campaign_level.title), tr(_campaign_level.intro)], Color("edf3ff"))
+	if _campaign_level.is_boss():
+		hud.call("set_campaign_boss", RullarenBoss.MAX_HP, RullarenBoss.MAX_HP)
 
 func _sync_screen_size() -> void:
 	var viewport_size := get_viewport_rect().size
@@ -317,8 +359,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event is InputEventMouseButton and event.pressed:
 			get_viewport().set_input_as_handled()
 		elif event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
-			AppNavigation.request_game_hub()
-			get_tree().change_scene_to_file("res://ui/main_menu.tscn")
+			return_to_main_menu()
 			get_viewport().set_input_as_handled()
 
 func _process(delta: float) -> void:
@@ -345,6 +386,8 @@ func _process(delta: float) -> void:
 	var sprite := player.get_node("AnimatedSprite2D") as AnimatedSprite2D
 	sprite.position = _render_player_position - player.position + Vector2(0.0, -float(player.call("get_gravity_direction")))
 	_update_camera()
+	if is_instance_valid(_campaign_run):
+		_campaign_run.call("update_presentation", float(camera.get("left")), screen_width, Callable(self, "_surface_y_at"))
 	_update_singleplayer_rock_warning_pulse(delta)
 	_ghost_warning_pulse.call("advance", delta)
 	_render_presentation_ready_usec = Time.get_ticks_usec()
@@ -511,6 +554,11 @@ func _physics_process(delta: float) -> void:
 			if demo_restart_timer >= 0.8:
 				_start_run()
 		return
+	if _campaign_runout_ticks >= 0:
+		_campaign_runout_ticks += 1
+		if _campaign_runout_ticks >= CAMPAIGN_RUNOUT_TICKS:
+			_complete_campaign_level()
+			return
 	var previous_player_rect: Rect2 = player.call("get_player_rect")
 	var previous_world_x := float(player.get("world_x"))
 	_step_start_barrel_centers.clear()
@@ -547,6 +595,8 @@ func _physics_process(delta: float) -> void:
 			var planned_events := course_generator.get_planned_events()
 			for planned_index in range(_early_spawn_scan_index, planned_events.size()):
 				var planned_event: Dictionary = planned_events[planned_index]
+				if is_instance_valid(_campaign_run) and not bool(_campaign_run.call("allows_event", planned_event)):
+					continue
 				var planned_kind := str(planned_event.get("kind", ""))
 				var event_distance := float(planned_event.get("course_distance", INF))
 				if planned_kind == "rock" and event_distance <= rock_spawn_line:
@@ -572,6 +622,8 @@ func _physics_process(delta: float) -> void:
 			while _early_spawn_scan_index < planned_events.size() and _early_spawn_is_settled(planned_events[_early_spawn_scan_index]):
 				_early_spawn_scan_index += 1
 		for event in course_generator.pop_events_until(spawn_line):
+			if is_instance_valid(_campaign_run) and not bool(_campaign_run.call("allows_event", event)):
+				continue
 			var event_kind := str(event.get("kind", ""))
 			if event_kind == "rock":
 				var event_id := _singleplayer_rock_key(event)
@@ -589,6 +641,9 @@ func _physics_process(delta: float) -> void:
 					continue
 				_spawned_early_ghost_ids[event_id] = true
 			_spawn_course_event(event)
+		if is_instance_valid(_campaign_run):
+			for boss_event in _campaign_run.call("pop_boss_events", spawn_line):
+				_spawn_course_event(boss_event)
 		if RUN_LOOT_ENABLED:
 			for loot_event in loot_spawn_planner.pop_events_until(spawn_line):
 				_spawn_loot_pickup(loot_event)
@@ -684,7 +739,12 @@ func _physics_process(delta: float) -> void:
 		for pickup in loot_pickups:
 			if _player_hits_obstacle(pickup):
 				pickup.call("collect")
-	if run_end_requested:
+	if is_instance_valid(_campaign_run) and _campaign_runout_ticks < 0:
+		var campaign_lethal := lethal_fraction if lethal_fraction >= 0.0 and lethal_fraction <= 1.0 else (1.0 if run_end_requested else INF)
+		var campaign_status := str(_campaign_run.call("physics_tick", previous_player_rect, final_player_rect, campaign_lethal, float(player.get("world_x")), int(player.call("get_gravity_direction")), bool(player.get("grounded"))))
+		if campaign_status == "finished":
+			_begin_campaign_runout()
+	if run_end_requested and _campaign_runout_ticks < 0:
 		_end_run()
 	var camera_left := course_distance
 	if render_diagnostics_enabled:
@@ -707,12 +767,63 @@ func _end_run() -> void:
 		if obstacle.has_method("freeze_render_motion"):
 			obstacle.call("freeze_render_motion")
 	player.call("set_input_enabled", false)
+	if _campaign_level != null:
+		# Campaign stages stay local until the campaign backend exists: no
+		# leaderboard run, no account distance, a quick retry instead.
+		AchievementService.finish_run()
+		Campaign.record_death()
+		var progress := float(_campaign_run.call("get_progress", course_distance)) if is_instance_valid(_campaign_run) else 0.0
+		_show_campaign_result({"failed": true, "progress": progress})
+		return
 	if not demo_mode:
 		AchievementService.finish_run()
 		run_state.call("finish_run")
 		run_end_panel.call("show_result", float(run_state.get("distance_m")), int(run_state.get("coins")), ChallengeService.get_challenge_code(), ChallengeService.active, str(run_state.get("last_run_id")))
 
+## The runner crossed the finish line: let it run out calmly, then score.
+func _begin_campaign_runout() -> void:
+	_campaign_runout_ticks = 0
+	player.set("input_enabled", false)
+	SfxController.play_event("coin", "%s|campaign_finish" % _singleplayer_audio_round_id, true)
+
+func _complete_campaign_level() -> void:
+	if game_over:
+		return
+	game_over = true
+	_campaign_runout_ticks = -1
+	_presentation.reset(player.position)
+	player.call("set_input_enabled", false)
+	MusicController.enter_menu()
+	AchievementService.finish_run()
+	var star_mask := int(_campaign_run.get("star_mask")) if is_instance_valid(_campaign_run) else 0
+	var result: Dictionary = Campaign.record_completion(int(run_state.get("coins")), star_mask)
+	result["failed"] = false
+	result["coins"] = int(run_state.get("coins"))
+	_show_campaign_result(result)
+
+func _show_campaign_result(result: Dictionary) -> void:
+	if not is_instance_valid(_campaign_result_panel):
+		_campaign_result_panel = CampaignResultPanelScript.new() as CanvasLayer
+		_campaign_result_panel.name = "CampaignResultPanel"
+		_campaign_result_panel.layer = 30
+		add_child(_campaign_result_panel)
+		_campaign_result_panel.connect("retry_requested", retry_run)
+		_campaign_result_panel.connect("next_requested", _play_next_campaign_level)
+		_campaign_result_panel.connect("map_requested", return_to_main_menu)
+	_campaign_result_panel.call("show_result", _campaign_level, result)
+
+func _play_next_campaign_level() -> void:
+	var next := CampaignCatalog.next_level(_campaign_level) if _campaign_level != null else null
+	if next == null or not Campaign.is_level_unlocked(next):
+		return_to_main_menu()
+		return
+	Campaign.start_level(next)
+	_start_run()
+
 func retry_run() -> void:
+	if _campaign_level != null:
+		_start_run()
+		return
 	if not bool(ChallengeService.get("active")) and _active_seed > 0:
 		ChallengeService.call("start_singleplayer_seed_input", "GR%d-%d" % [_active_seed_version, _active_seed])
 	_start_run()
@@ -722,6 +833,10 @@ func new_random_run() -> void:
 	_start_run()
 
 func return_to_main_menu() -> void:
+	if _campaign_level != null:
+		AppNavigation.request_campaign_map()
+		get_tree().change_scene_to_file("res://ui/main_menu.tscn")
+		return
 	AppNavigation.request_game_hub()
 	get_tree().change_scene_to_file("res://ui/main_menu.tscn")
 
@@ -906,6 +1021,8 @@ func _spawn_course_event(event: Dictionary) -> void:
 		if lane_clearance < height + 44.0 + 12.0:
 			return
 	var hazard_id := str(event.get("id", ""))
+	if is_instance_valid(_campaign_run):
+		_campaign_run.call("on_event_spawned", event)
 	if not hazard_id.is_empty():
 		_pending_hazard_discoveries.append({
 			"hazard_id": hazard_id,
@@ -1440,6 +1557,8 @@ func _spawn_shared_coins() -> void:
 			continue
 		_pending_shared_coins.remove_at(index)
 		_spawned_shared_coin_ids[entity_id] = true
+		if is_instance_valid(_campaign_run) and not bool(_campaign_run.call("allows_coin", float(item.world_x), float(item.world_y))):
+			continue
 		var coin := COIN_SCENE.instantiate() as Node2D
 		coin.set_meta("coin_trace_id", entity_id)
 		coin.connect("collected", Callable(run_state, "add_coins"))
