@@ -1939,3 +1939,24 @@ msgstr "Irrbloss fångat"
 
 msgid "+%d coins"
 msgstr "+%d mynt"
+
+msgid "item.boots_regret_01.name"
+msgstr "Ångerskor"
+
+msgid "item.boots_regret_01.description"
+msgstr "Ångrade du dig mitt i en flip? Tryck på flip igen för att vända tillbaka."
+
+msgid "item.backpack_anchor_01.name"
+msgstr "Gravitationsankare"
+
+msgid "item.backpack_anchor_01.description"
+msgstr "Lås dig mitt på banan och glid där en stund."
+
+msgid "Reverse a flip during the first %d%% of the flight"
+msgstr "Vänd tillbaka en flip under de första %d%% av flygturen"
+
+msgid "Glide along the middle for 1 s, recharges in %d s"
+msgstr "Glid längs mitten i 1 s, laddar om på %d s"
+
+msgid "Use gravity anchor"
+msgstr "Använd gravitationsankare"

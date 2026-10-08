@@ -14,6 +14,8 @@ const EFFECT_REGISTRY := {
 	"bubble_shield": {"max_level": 3, "slots": [&"helmet"]},
 	"spike_plate": {"max_level": 3, "slots": [&"helmet"]},
 	"coin_magnet": {"max_level": 3, "slots": [&"backpack"]},
+	"regret_flip": {"max_level": 3, "slots": [&"boots"]},
+	"gravity_anchor": {"max_level": 3, "slots": [&"backpack"]},
 }
 const STAT_ORDER: Array[String] = ["run_speed_percent", "flip_cooldown_percent"]
 const STAT_REGISTRY := {

@@ -21,6 +21,10 @@ const ENGLISH_FALLBACKS := {
 	"item.helmet_spikeplate_01.description": "Spikes cannot hurt you for a moment after each flip.",
 	"item.backpack_magnet_01.name": "Coin Magnet",
 	"item.backpack_magnet_01.description": "Coins near you fly into your pack.",
+	"item.boots_regret_01.name": "Regret Boots",
+	"item.boots_regret_01.description": "Changed your mind mid-flip? Press flip again to turn back.",
+	"item.backpack_anchor_01.name": "Gravity Anchor",
+	"item.backpack_anchor_01.description": "Lock onto the middle of the course and glide there for a moment.",
 }
 static var _warned_invalid_modifiers: Dictionary = {}
 
@@ -103,6 +107,12 @@ static func effect_text(definition: Dictionary) -> String:
 		"coin_magnet":
 			var radius: Array[int] = [90, 140, 190]
 			return TranslationServer.translate("Pulls in coins within %d px") % radius[level - 1]
+		"regret_flip":
+			var window_percent: Array[int] = [50, 65, 80]
+			return TranslationServer.translate("Reverse a flip during the first %d%% of the flight") % window_percent[level - 1]
+		"gravity_anchor":
+			var anchor_seconds: Array[int] = [15, 12, 9]
+			return TranslationServer.translate("Glide along the middle for 1 s, recharges in %d s") % anchor_seconds[level - 1]
 	return ""
 
 static func tooltip(definition: Dictionary, context: Dictionary = {}) -> String:

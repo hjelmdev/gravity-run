@@ -19,6 +19,10 @@ static func effect_for_icon_key(icon_key: String) -> String:
 			return "spike_plate"
 		"backpack_magnet_01":
 			return "coin_magnet"
+		"boots_regret_01":
+			return "regret_flip"
+		"backpack_anchor_01":
+			return "gravity_anchor"
 	return ""
 
 ## Draws one effect glyph centered on `center`, fitting a square of `size`.
@@ -46,8 +50,30 @@ static func draw_glyph(canvas: CanvasItem, effect_id: String, center: Vector2, s
 			canvas.draw_line(arc_center + Vector2(8.0, 0.0) * unit, center + Vector2(8.0, 8.0) * unit, ink, maxf(2.5, 4.5 * unit), true)
 			canvas.draw_line(center + Vector2(-8.0, 6.0) * unit, center + Vector2(-8.0, 11.0) * unit, Color("ff647c"), maxf(2.5, 4.5 * unit), true)
 			canvas.draw_line(center + Vector2(8.0, 6.0) * unit, center + Vector2(8.0, 11.0) * unit, accent, maxf(2.5, 4.5 * unit), true)
+		"regret_flip":
+			# A boot sole with a U-turn arrow over it: up, then back down.
+			var turn_width := maxf(2.0, 3.0 * unit)
+			canvas.draw_rect(Rect2(center + Vector2(-11.0, 7.0) * unit, Vector2(22.0, 4.0) * unit), accent)
+			canvas.draw_line(center + Vector2(-6.0, 3.0) * unit, center + Vector2(-6.0, -6.0) * unit, ink, turn_width)
+			canvas.draw_arc(center + Vector2(0.0, -6.0) * unit, 6.0 * unit, PI, TAU, 12, ink, turn_width, true)
+			canvas.draw_line(center + Vector2(6.0, -6.0) * unit, center + Vector2(6.0, 1.0) * unit, ink, turn_width)
+			canvas.draw_colored_polygon(PackedVector2Array([
+				center + Vector2(1.0, 0.0) * unit,
+				center + Vector2(11.0, 0.0) * unit,
+				center + Vector2(6.0, 6.5) * unit,
+			]), ink)
+		"gravity_anchor":
+			# A ring, a shank and flukes, with a dashed middle line behind it.
+			var anchor_width := maxf(2.0, 3.0 * unit)
+			for dash in range(4):
+				var dash_x := (-14.0 + float(dash) * 8.0) * unit
+				canvas.draw_line(center + Vector2(dash_x, 0.0), center + Vector2(dash_x + 4.0 * unit, 0.0), accent, maxf(1.5, 2.0 * unit))
+			canvas.draw_arc(center + Vector2(0.0, -9.0) * unit, 3.0 * unit, 0.0, TAU, 14, ink, anchor_width * 0.8, true)
+			canvas.draw_line(center + Vector2(0.0, -6.0) * unit, center + Vector2(0.0, 9.0) * unit, ink, anchor_width)
+			canvas.draw_line(center + Vector2(-5.0, -2.0) * unit, center + Vector2(5.0, -2.0) * unit, ink, anchor_width)
+			canvas.draw_arc(center + Vector2(0.0, 3.0) * unit, 9.0 * unit, 0.1 * PI, 0.9 * PI, 14, ink, anchor_width, true)
 		_:
-			canvas.draw_rect(Rect2(center - Vector2(8.0, 8.0) * unit, Vector2(16.0, 16.0) * unit), Color("8292aa"), false, 2.0)
+			canvas.draw_rect(Rect2(center - Vector2(8.0, 8.0) * unit * unit, Vector2(16.0, 16.0) * unit), Color("8292aa"), false, 2.0)
 
 ## Draws a HUD slot for an entry of RunEffects.get_hud_entries(): a dark tile,
 ## a meter that fills from the bottom while the item recharges, the glyph, and a

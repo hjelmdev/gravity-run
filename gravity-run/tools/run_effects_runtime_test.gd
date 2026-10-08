@@ -5,6 +5,10 @@ extends Node
 ##    before it recharges; the pop leaves the runner invulnerable for a moment;
 ##  - spike plate ignores spikes right after a flip, not later;
 ##  - coin magnet collects coins off the runner's line, not beyond its radius;
+##  - regret boots reverse a flip during the first part of the flight, once, and
+##    not after the window or without the boots;
+##  - gravity anchor holds the middle of the course for 60 ticks, recharges
+##    before it can be used again and is absent without the item;
 ##  - runs without equipment, campaign runs and unknown server slots/effects
 ##    behave as before.
 
@@ -35,6 +39,9 @@ func _run() -> void:
 	await _check_bubble_helmet()
 	await _check_spike_plate()
 	await _check_coin_magnet()
+	_check_regret_and_anchor_timers()
+	await _check_regret_boots()
+	await _check_gravity_anchor()
 	await _check_campaign_ignores_effects()
 	_check_unknown_server_data_is_ignored()
 	InventoryService.inventory_state = original_state
@@ -67,6 +74,12 @@ func _plate() -> Dictionary:
 
 func _magnet() -> Dictionary:
 	return _catalog_entry("backpack_magnet_01", "backpack", "coin_magnet")
+
+func _regret() -> Dictionary:
+	return _catalog_entry("boots_regret_01", "boots", "regret_flip")
+
+func _anchor() -> Dictionary:
+	return _catalog_entry("backpack_anchor_01", "backpack", "gravity_anchor")
 
 func _make_game() -> Node:
 	var game := MainScene.instantiate() as Node
@@ -263,3 +276,146 @@ func _check_unknown_server_data_is_ignored() -> void:
 	_check(snapshot.is_valid(), "unknown slots and effects from the server do not invalidate the loadout")
 	_check(not snapshot.has_effects(), "an unknown effect is dropped")
 	_check(int(snapshot.get_resolved_stats().get("run_speed_percent", 0)) > 10000, "known items in the same loadout still apply")
+
+
+func _effects_for(entries: Array[Dictionary], level: int = 1) -> RefCounted:
+	var loadout: Array = []
+	for entry in entries:
+		loadout.append({"slot_type": entry.slot_type, "instance_id": "i-%s" % entry.item_id, "definition": ItemDefinition.from_catalog_entry(entry)})
+	var effects: RefCounted = RunEffectsScript.new()
+	effects.configure(RunLoadoutSnapshot.create(loadout, 3, CharacterStats.new().get_base_stats()))
+	return effects
+
+func _check_regret_and_anchor_timers() -> void:
+	var regret := _effects_for([_regret()])
+	_check(regret.has_any() and not regret.can_reverse_flip(), "regret boots cannot reverse before a flip")
+	regret.on_flip()
+	_check(regret.can_reverse_flip(), "a flip opens the reverse window")
+	for _i in range(RunEffectsScript.REGRET_WINDOW_TICKS[0] - 1):
+		regret.tick()
+	_check(regret.can_reverse_flip(), "the window is still open on its last tick")
+	regret.tick()
+	_check(not regret.can_reverse_flip() and not regret.consume_reverse_flip(), "the window closes after its tick count")
+	regret.on_flip()
+	_check(regret.consume_reverse_flip() and not regret.consume_reverse_flip(), "one reverse per flip")
+	regret.on_flip()
+	regret.on_land()
+	_check(not regret.can_reverse_flip(), "landing closes the window")
+	_check(RunEffectsScript.REGRET_WINDOW_TICKS[1] > RunEffectsScript.REGRET_WINDOW_TICKS[0] and RunEffectsScript.REGRET_WINDOW_TICKS[2] > RunEffectsScript.REGRET_WINDOW_TICKS[1], "higher levels widen the window")
+	var anchor := _effects_for([_anchor()])
+	_check(anchor.anchor_ready() and anchor.has_anchor() and anchor.has_any(), "the anchor starts ready")
+	_check(anchor.activate_anchor() and anchor.is_anchor_gliding() and not anchor.activate_anchor(), "the anchor cannot be fired twice")
+	_check(not anchor.is_invulnerable() and not anchor.on_lethal_contact(), "gliding gives no protection from hazards")
+	for _i in range(RunEffectsScript.ANCHOR_GLIDE_TICKS - 1):
+		anchor.tick()
+	_check(anchor.is_anchor_gliding(), "the glide lasts 60 ticks")
+	anchor.tick()
+	_check(not anchor.is_anchor_gliding() and not anchor.anchor_ready() and not anchor.activate_anchor(), "the glide ends and the anchor is recharging")
+	var entry: Dictionary = anchor.get_hud_entries()[0]
+	_check(entry.effect_id == "gravity_anchor" and not bool(entry.ready) and float(entry.charge) < 0.01, "the HUD meter starts empty after the glide")
+	for _i in range(RunEffectsScript.ANCHOR_RECHARGE_TICKS[0] - 1):
+		anchor.tick()
+	_check(not anchor.anchor_ready(), "the anchor is still charging one tick before 15 s")
+	anchor.tick()
+	_check(anchor.anchor_ready() and anchor.activate_anchor(), "the anchor is ready after 15 s (900 ticks)")
+	_check(RunEffectsScript.ANCHOR_RECHARGE_TICKS[0] == 900 and RunEffectsScript.ANCHOR_RECHARGE_TICKS[1] == 720 and RunEffectsScript.ANCHOR_RECHARGE_TICKS[2] == 540, "recharge is 15 s, 12 s, 9 s by level")
+
+func _check_regret_boots() -> void:
+	_equip([_regret()])
+	var game: Node = await _make_game()
+	var player := _player(game)
+	_check(bool(game.get_node("RunState").get("modified")), "a run with regret boots is flagged modified")
+	_check((game.get("hud").get("effect_entries") as Array).size() == 1, "the HUD shows the regret boots")
+	_step(game, 5)
+	player.call("_try_flip", -1)
+	_step(game, 5)
+	_check(int(player.call("get_gravity_direction")) == -1 and not bool(player.get("grounded")), "the first flip sends the runner up")
+	player.call("_try_flip", 1)
+	_check(int(player.call("get_gravity_direction")) == 1 and float(player.get("vertical_speed")) > 0.0, "a second press inside the window reverses the flip")
+	_step(game, 3)
+	player.call("_try_flip", -1)
+	_check(int(player.call("get_gravity_direction")) == 1, "only one reverse per flip")
+	var landed := 3 + _step_until_grounded(game)
+	_check(bool(player.get("grounded")) and int(player.call("get_gravity_direction")) == 1 and landed < 60, "the runner lands back on the surface it left (%d ticks)" % landed)
+	_check(not bool(game.get("game_over")), "the reversed flight is survivable")
+	# A full flight outlasts the widest window.
+	_step(game, 30)
+	player.call("_try_flip", -1)
+	var flight_ticks := _step_until_grounded(game)
+	print("INFO full flip flight takes %d ticks" % flight_ticks)
+	_check(flight_ticks > RunEffectsScript.REGRET_WINDOW_TICKS[2] and int(player.call("get_gravity_direction")) == -1, "a full flight is longer than the widest window")
+	# A new flip gives a new reverse; a press after the window is ignored.
+	_step(game, 30)
+	player.call("_try_flip", 1)
+	_step(game, RunEffectsScript.REGRET_WINDOW_TICKS[0] + 2)
+	_check(not bool(player.get("grounded")), "the runner is still in the air after the window")
+	player.call("_try_flip", -1)
+	_check(int(player.call("get_gravity_direction")) == 1, "a press after the window is ignored")
+	_step_until_grounded(game)
+	_step(game, 30)
+	player.call("_try_flip", -1)
+	_step(game, RunEffectsScript.REGRET_WINDOW_TICKS[0] - 1)
+	player.call("_try_flip", 1)
+	_check(int(player.call("get_gravity_direction")) == 1, "a press on the last tick of the window still reverses")
+	await _free_game(game)
+	InventoryService.inventory_state = {}
+	var control: Node = await _make_game()
+	var control_player := _player(control)
+	_check(not _effects(control).has_any(), "no regret effect without the boots")
+	_step(control, 5)
+	control_player.call("_try_flip", -1)
+	_step(control, 5)
+	control_player.call("_try_flip", 1)
+	_check(int(control_player.call("get_gravity_direction")) == -1, "without the boots the second press is ignored as before")
+	await _free_game(control)
+
+func _step_until_grounded(game: Node) -> int:
+	var ticks := 0
+	while not bool(_player(game).get("grounded")) and ticks < 200:
+		ticks += _step(game, 1)
+		if bool(game.get("game_over")):
+			break
+	return ticks
+
+func _check_gravity_anchor() -> void:
+	_equip([_anchor()])
+	var game: Node = await _make_game()
+	var player := _player(game)
+	_check(bool(game.get_node("RunState").get("modified")), "a run with the gravity anchor is flagged modified")
+	_check((game.get("hud").get("effect_entries") as Array).size() == 1, "the HUD shows the anchor")
+	_check(game.get_node("HUDLayer/GravityAnchorButton").visible, "the touch button is shown with the anchor")
+	_step(game, 5)
+	var middle := (float(game.get("floor_level_y")) + float(game.get("ceiling_level_y"))) * 0.5
+	_check(bool(player.call("try_use_anchor")), "the anchor fires when ready")
+	var held := 0
+	for tick_index in range(RunEffectsScript.ANCHOR_GLIDE_TICKS):
+		_step(game, 1)
+		if absf(player.position.y - middle) < 1.0:
+			held += 1
+	_check(held >= RunEffectsScript.ANCHOR_GLIDE_TICKS - 8 and not bool(game.get("game_over")), "the runner holds the middle for the glide (%d of 60 ticks)" % held)
+	_check(not bool(player.call("try_use_anchor")), "recharge blocks reuse")
+	_step(game, 10)
+	_check(absf(player.position.y - middle) > 20.0 and int(player.call("get_gravity_direction")) == 1 and float(player.get("vertical_speed")) > 0.0, "normal gravity resumes in the old direction")
+	var entries: Array = game.get("hud").get("effect_entries")
+	_check(entries.size() == 1 and not bool(entries[0].ready) and float(entries[0].charge) < 0.1, "the HUD meter shows the recharge")
+	await _free_game(game)
+	# Hazards still hit while gliding: a spike on the floor kills a runner that
+	# was holding the middle and then drops back onto it.
+	var hit_game: Node = await _make_game()
+	var hit_player := _player(hit_game)
+	_step(hit_game, 5)
+	hit_player.call("try_use_anchor")
+	hit_game.call("_spawn_spike_group", 10, false, float(hit_player.get("world_x")) + 420.0)
+	var hit_obstacles: Array = hit_game.get("obstacles")
+	hit_obstacles[hit_obstacles.size() - 1].set_meta("fixture", true)
+	_step(hit_game, 50)
+	_check(not bool(hit_game.get("game_over")), "the glide passes over a floor spike")
+	_step(hit_game, 80)
+	_check(bool(hit_game.get("game_over")), "after the glide the runner falls onto the spike and dies")
+	await _free_game(hit_game)
+	InventoryService.inventory_state = {}
+	var control: Node = await _make_game()
+	_check(not bool(_player(control).call("try_use_anchor")), "without the item the anchor does nothing")
+	_check(not control.get_node("HUDLayer/GravityAnchorButton").visible, "no touch button without the anchor")
+	_check((control.get("hud").get("effect_entries") as Array).is_empty(), "no anchor in the HUD without the item")
+	await _free_game(control)

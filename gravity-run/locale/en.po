@@ -145,3 +145,15 @@ msgstr "Could not save capture ZIP."
 
 msgid "Skin"
 msgstr "Skin"
+
+msgid "item.boots_regret_01.name"
+msgstr "Regret Boots"
+
+msgid "item.boots_regret_01.description"
+msgstr "Changed your mind mid-flip? Press flip again to turn back."
+
+msgid "item.backpack_anchor_01.name"
+msgstr "Gravity Anchor"
+
+msgid "item.backpack_anchor_01.description"
+msgstr "Lock onto the middle of the course and glide there for a moment."

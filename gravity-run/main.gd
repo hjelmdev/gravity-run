@@ -26,6 +26,7 @@ const LOOT_PICKUP_SCENE := preload("res://collectibles/loot_pickup.tscn")
 const LOOT_PLANNER_SCRIPT := preload("res://systems/loot_spawn_planner.gd")
 const SHARED_COIN_PLANNER_SCRIPT := preload("res://systems/shared_coin_planner.gd")
 const RUN_EFFECTS_SCRIPT := preload("res://systems/run_effects.gd")
+const ANCHOR_BUTTON_SCRIPT := preload("res://ui/anchor_touch_button.gd")
 const FALLING_ROCK_SCENE := preload("res://hazards/falling_rock.tscn")
 const FALLING_ROCK_MODEL := preload("res://systems/falling_rock_model.gd")
 const SAW_BLADE_SCENE := preload("res://hazards/saw_blade.tscn")
@@ -100,6 +101,7 @@ var _sfx_audio_diagnostic_capture: Node
 var _rock_warning_pulse: RefCounted = ROCK_WARNING_PULSE_SCRIPT.new()
 var _ghost_warning_pulse: RefCounted = GHOST_WARNING_PULSE_SCRIPT.new()
 var _rock_warning_accessibility_button: Button
+var _anchor_button: Control
 var _spawned_early_rock_ids: Dictionary = {}
 var _spawned_early_saw_ids: Dictionary = {}
 var _spawned_early_ghost_ids: Dictionary = {}
@@ -166,6 +168,10 @@ func _ready() -> void:
 	_rock_warning_accessibility_button.size = Vector2(48.0, 48.0)
 	_rock_warning_accessibility_button.visible = false
 	$HUDLayer.add_child(_rock_warning_accessibility_button)
+	_anchor_button = ANCHOR_BUTTON_SCRIPT.new()
+	_anchor_button.name = "GravityAnchorButton"
+	$HUDLayer.add_child(_anchor_button)
+	_anchor_button.connect("pressed", Callable(player, "try_use_anchor"))
 	course_generator = COURSE_GENERATOR_SCRIPT.new()
 	loot_spawn_planner = LOOT_PLANNER_SCRIPT.new()
 	_manifest_builder = MANIFEST_BUILDER_SCRIPT.new()
@@ -185,6 +191,8 @@ func _ready() -> void:
 	player.connect("gravity_flipped", Callable(run_state, "record_gravity_flip"))
 	player.connect("gravity_flipped", Callable(self, "_on_singleplayer_gravity_flipped"))
 	player.connect("gravity_flipped", Callable(_run_effects, "on_flip"))
+	player.connect("gravity_reversed", Callable(self, "_on_singleplayer_gravity_flipped"))
+	player.connect("anchor_used", Callable(self, "_on_singleplayer_gravity_flipped"))
 	player.connect("status_changed", Callable(hud, "update_player_status"))
 	ChallengeService.leaderboard_received.connect(_on_seed_leaderboard_received)
 	if demo_mode:
@@ -231,7 +239,8 @@ func _start_run() -> void:
 	_run_effects.call("configure", loadout_snapshot if effects_enabled else null)
 	player.call("set_run_effects", _run_effects)
 	run_state.set("modified", effects_enabled and loadout_snapshot != null and bool(loadout_snapshot.call("has_effects")))
-	hud.call("set_effect_entries", _run_effects.call("get_hud_entries"))
+	_publish_effect_entries()
+	_anchor_button.visible = bool(_run_effects.call("has_anchor"))
 	run_state.call("start_run")
 	course_distance = 0.0
 	_campaign_level = null if demo_mode else Campaign.active_level
@@ -886,8 +895,17 @@ func _physics_process(delta: float) -> void:
 	coins = _prune_passed_nodes(coins, camera_left - 100.0, true)
 	loot_pickups = _prune_passed_nodes(loot_pickups, camera_left - 100.0, false)
 	_run_effects.call("tick")
-	hud.call("set_effect_entries", _run_effects.call("get_hud_entries"))
+	_publish_effect_entries()
 	queue_redraw()
+
+## Sends the effect meters to the HUD and the anchor's touch button.
+func _publish_effect_entries() -> void:
+	var entries: Array[Dictionary] = _run_effects.call("get_hud_entries")
+	hud.call("set_effect_entries", entries)
+	if _anchor_button.visible:
+		for entry in entries:
+			if str(entry.get("effect_id", "")) == "gravity_anchor":
+				_anchor_button.call("set_entry", entry)
 
 ## Coin magnet: coins inside the radius fly to the runner and are then picked up
 ## by the normal pickup sweep. A pulled coin stays pulled even if it leaves the
@@ -1975,6 +1993,8 @@ func _draw() -> void:
 	_draw_rock_hud_warning()
 	_draw_ghost_hud_warning()
 	_draw_bubble_shield()
+	_draw_regret_ring()
+	_draw_gravity_anchor()
 	if render_diagnostics_enabled and not _render_diagnostic_frames.is_empty():
 		var frame_record: Dictionary = _render_diagnostic_frames.back()
 		if int(frame_record.get("render_callback_index", -1)) == _render_callback_index:
@@ -2003,6 +2023,38 @@ func _draw_bubble_shield() -> void:
 		for index in range(8):
 			var direction := Vector2.from_angle(TAU * float(index) / 8.0)
 			draw_circle(center + direction * (31.0 + 52.0 * pop), 3.0 * (1.0 - pop), Color(0.26, 0.84, 0.77, 1.0 - pop))
+
+## Regret boots: a short ring where the runner turned around.
+func _draw_regret_ring() -> void:
+	if demo_mode or game_over:
+		return
+	var progress := float(_run_effects.call("regret_flash_progress"))
+	if progress < 0.0:
+		return
+	var center := _render_player_position
+	draw_arc(center, 14.0 + 30.0 * progress, 0.0, TAU, 28, Color(0.96, 0.83, 0.37, 1.0 - progress), 3.0, true)
+	var back := -float(player.call("get_gravity_direction"))
+	for index in range(3):
+		var offset := Vector2((float(index) - 1.0) * 9.0, back * (10.0 + 18.0 * progress + float(index) * 4.0))
+		draw_rect(Rect2(center + offset - Vector2(2.0, 2.0), Vector2(4.0, 4.0)), Color(0.93, 0.95, 1.0, 1.0 - progress))
+
+## Gravity anchor: a dashed guide along the middle of the course and speed
+## streaks behind the runner while it glides.
+func _draw_gravity_anchor() -> void:
+	if demo_mode or game_over or not bool(_run_effects.call("is_anchor_gliding")):
+		return
+	var center := _render_player_position
+	var view_left := camera.get_screen_center_position().x - screen_width * 0.5 if is_instance_valid(camera) else center.x - PLAYER_X
+	var scroll := fmod(float(_singleplayer_simulation_tick) * 14.0, 40.0)
+	var x := view_left - scroll
+	while x < view_left + screen_width:
+		draw_line(Vector2(x, center.y), Vector2(x + 20.0, center.y), Color(0.26, 0.84, 0.77, 0.35), 2.0)
+		x += 40.0
+	for index in range(4):
+		var streak_y := center.y + (float(index) - 1.5) * 9.0
+		var streak_length := 38.0 + float((index * 7 + _singleplayer_simulation_tick) % 5) * 9.0
+		draw_line(Vector2(center.x - 24.0, streak_y), Vector2(center.x - 24.0 - streak_length, streak_y), Color(0.93, 0.95, 1.0, 0.45), 2.0)
+	draw_arc(center, 28.0, 0.0, TAU, 28, Color(0.26, 0.84, 0.77, 0.75), 2.0, true)
 
 func _draw_falling_rock_warning_markers() -> void:
 	if not is_instance_valid(camera):

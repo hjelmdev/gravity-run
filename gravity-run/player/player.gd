@@ -6,11 +6,17 @@ const TouchGestureLifecycleScript := preload("res://systems/touch_gesture_lifecy
 
 signal status_changed(gravity_direction: int, cooldown_left: float)
 signal gravity_flipped
+## Regret boots turned a flip around mid-air.
+signal gravity_reversed
+## The gravity anchor was fired.
+signal anchor_used
 
 const PLAYER_X := 180.0
 const PLAYER_SIZE := RunnerMotionScript.SIZE
 const SPRITE_SURFACE_GAP := 1.0
 const SWIPE_DISTANCE_MIN := 48.0
+## How fast the gravity anchor pulls the runner to the middle of the course.
+const ANCHOR_PULL_SPEED := 1800.0
 
 var vertical_speed := 0.0
 var gravity_direction := 1
@@ -125,8 +131,21 @@ func is_spike_immune() -> bool:
 func set_run_effects(run_effects: RefCounted) -> void:
 	_run_effects = run_effects
 
+## Gravity anchor: locks the runner to the middle of the course for a moment.
+## Does nothing without the item, while it recharges or when input is off.
+func try_use_anchor() -> bool:
+	if not input_enabled or _run_effects == null or not bool(_run_effects.call("activate_anchor")):
+		return false
+	grounded = false
+	vertical_speed = 0.0
+	anchor_used.emit()
+	return true
+
 func advance(delta: float, floor_surface_y: float, ceiling_surface_y: float, floor_supported: bool = true, ceiling_supported: bool = true) -> void:
 	effects.call("tick", delta)
+	if _run_effects != null and bool(_run_effects.call("is_anchor_gliding")):
+		_advance_anchor_glide(delta, floor_surface_y, ceiling_surface_y)
+		return
 	var motion_state := {
 		"y": position.y,
 		"vertical_speed": vertical_speed,
@@ -142,7 +161,36 @@ func advance(delta: float, floor_surface_y: float, ceiling_surface_y: float, flo
 	cooldown_left = float(motion_state.cooldown)
 	_visual_flip = move_toward(_visual_flip, float(gravity_direction), 2.0 * delta / VISUAL_FLIP_SECONDS)
 	_update_sprite_orientation()
+	if grounded and _run_effects != null:
+		_run_effects.call("on_land")
 	status_changed.emit(gravity_direction, cooldown_left)
+
+## One tick of the anchor glide: slide to the middle between the surfaces and
+## stay there. Gravity keeps its direction and takes over again afterwards.
+func _advance_anchor_glide(delta: float, floor_surface_y: float, ceiling_surface_y: float) -> void:
+	position.y = move_toward(position.y, (floor_surface_y + ceiling_surface_y) * 0.5, ANCHOR_PULL_SPEED * delta)
+	vertical_speed = 0.0
+	grounded = false
+	cooldown_left = maxf(cooldown_left - delta, 0.0)
+	_visual_flip = move_toward(_visual_flip, float(gravity_direction), 2.0 * delta / VISUAL_FLIP_SECONDS)
+	_update_sprite_orientation()
+	status_changed.emit(gravity_direction, cooldown_left)
+
+## Regret boots: a flip press while airborne turns the runner back toward the
+## surface it left. Returns true when the press was used for that.
+func _try_reverse_flip(new_direction: int, input_source: String) -> bool:
+	if _run_effects == null or grounded or new_direction != -gravity_direction:
+		return false
+	if not bool(_run_effects.call("consume_reverse_flip")):
+		return false
+	gravity_direction = new_direction
+	vertical_speed = float(new_direction) * RunnerMotionScript.FLIP_SPEED
+	gravity_reversed.emit()
+	if not input_source.is_empty():
+		_record_input_diagnostic("flip_reversed", {"source": input_source, "direction": gravity_direction})
+	_update_sprite_orientation()
+	status_changed.emit(gravity_direction, cooldown_left)
+	return true
 
 func _update_sprite_orientation() -> void:
 	if not is_instance_valid(sprite):
@@ -168,6 +216,8 @@ func _try_flip(new_direction: int, input_source: String = "") -> void:
 		"cooldown": cooldown_left,
 	}
 	if not RunnerMotionScript.try_flip(motion_state, new_direction, _flip_cooldown_multiplier):
+		if _try_reverse_flip(new_direction, input_source):
+			return
 		if not input_source.is_empty():
 			_record_input_diagnostic("flip_rejected", {"source": input_source, "reason": "cooldown" if cooldown_left > 0.0 else "airborne_or_same_direction", "cooldown": cooldown_left, "grounded": grounded})
 		return
@@ -225,6 +275,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			_try_flip(-gravity_direction, "mouse")
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_E or event.keycode == KEY_SHIFT:
+			try_use_anchor()
+			return
 		if PlayerProfile.flip_control != "keyboard":
 			return
 		if event.keycode == KEY_UP or event.keycode == KEY_W:
