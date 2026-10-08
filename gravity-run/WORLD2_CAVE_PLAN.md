@@ -33,7 +33,7 @@ Kartan (`map_cave.png`) och kartnoderna (`CAVE_MAP_NODES`) finns redan.
 Varje bana får ”Nytt hinder”-banner, tre gravitationsstjärnor och kontroll av
 golv- och takhål (`gap_conflicts`), precis som i Ängen.
 
-## 3. Skriptade grottinslag (förslag, välj vilka)
+## 3. Skriptade grottinslag (alla fyra ska med)
 
 1. **Ras.** En varningsrad av damm i taket, sedan faller 3–4 stenar i följd. Bygger på
    befintlig `falling_rock`.
@@ -63,10 +63,15 @@ En jättefladdermus hänger i taket och följer med framför löparen.
      om vartannat.
   3. **Dyket:** fladdermusen störtar längs en fil, och en röd varningsstrimma visar vilken.
      Du flippar bort.
-- **Svag punkt:** efter varje dyk sitter den fast ett ögonblick, och en **kristall** lyser
-  på golvet eller i taket. Spring igenom kristallen på rätt sida, så krossas den och
-  ekot bedövar bossen. Det fungerar som Rullarens tryckplattor, så `PressurePlate` och
-  `observe_runner` kan återanvändas. Bossen har 3 HP, och farten ökar per träff.
+- **Svag punkt: lura den in i en istapp** (beslut 2026-10-08, ett nytt moment).
+  Jätteistappar med lysande spricka hänger på utmärkta ställen, i taket eller på golvet.
+  Fladdermusen dyker mot den fil du är i. Stå kvar på istappens sida när varningen kommer
+  och flippa bort i sista stund. Då dyker den rakt in i istappen, som brister och träffar
+  den. Flippar du för tidigt följer den efter dig och dyker i fel fil, och då kommer
+  istappen tillbaka nästa varv.
+  Logiken blir `observe_runner` i två fönster: först ska löparen vara på istappens sida
+  när varningen startar, sedan på motsatt sida när dyket når fram. Bossen har 3 HP och
+  dyker snabbare och med kortare varning för varje träff.
 - **Testbot:** samma typ av bot som för Rullaren, som klarar bossen två gånger i
   `campaign_runtime_test`.
 
@@ -76,17 +81,16 @@ En jättefladdermus hänger i taket och följer med framför löparen.
    (`cave`), sök seeds och frys stjärnorna.
 2. Bygg grottlyftet av utseendet (stalaktiter, kristaller, droppar), grottmusiken och
    ljuden.
-3. Bygg de skriptade inslagen. Det börjar med ras, och sedan kommer de inslag som väljs
-   i 3.
+3. Bygg de skriptade inslagen. Det börjar med ras, och sedan kommer fladdermöss, mörker och gruvvagnar
+   (se 3).
 4. Bygg bossen Stalaktitjätten: logik, vy, bot och test.
 5. Lägg in översättningar (sv.po), skärmdumpar, webbexport och mobiltest.
 
 Steg 1 räcker för att Grottan ska vara spelbar, med riktiga banor efter Rullaren. Resten
 kan komma pass för pass.
 
-## 7. Öppna frågor
+## 7. Beslut (2026-10-08)
 
-- Vilka skriptade inslag ska med (ras, fladdermöss, mörker, gruvvagnar)?
-- Ska bossens svaga punkt vara kristallen enligt förslaget, eller något annat (t.ex. att
-  locka den att dyka in i en istapp)?
-- Ska Pingo (pingvinen) låsas upp av Grottan, som CAMPAIGN_PLAN föreslår?
+- Alla fyra skriptade inslag ska med: ras, fladdermussvärm, mörker och gruvvagnar.
+- Bossens svaga punkt är istapp-luringen (se 5), inte kristallplattor.
+- Grottan låser upp Pingo (pingvinen).
