@@ -1,17 +1,25 @@
 # Gravity Run – kampanjläge (plan, 2026-10-08)
 
 Planen beskriver ett kampanjläge med fasta banor som blir svårare steg för steg, en
-världskarta, guldföremål och hemligheter, bossar och achievements. Den är skriven så att
+världskarta, gravitationsstjärnor och hemligheter, bossar och achievements. Den är skriven så att
 den kan implementeras i faser. Varje fas är spelbar för sig.
 
-Mockup av kartan: `docs/campaign_map_mockup.png` (en skiss, inte slutlig grafik).
+Mockup av kartan: `docs/campaign_map_mockup.png`, genererad av
+`tools/pixel_characters/generate_world_map_mockup.py` (pixelkonst i 320×180 skalad ×3).
+Det är en skiss, inte slutlig grafik.
+
+**Beslut 2026-10-08:** guldföremålen heter *gravitationsstjärnor*, steg 1 har inga
+checkpoints, banorna ska vara 90–120 sekunder, egenskaper och upplåsningar tas senare,
+Rullaren byggs som prototyp först, och fler biom ger fler världar längre fram.
 
 ---
 
 ## 1. Grundidé
 
-- **Fyra världar**, en per biom: Ängen (classic), Grottan (cave), Spökskogen (haunted)
-  och Vulkanen (lava).
+- **Fyra världar till att börja med**, en per biom med egna hinder: Ängen (classic),
+  Grottan (cave), Spökskogen (haunted) och Vulkanen (lava). Fler världar tillkommer med fler
+  biom (det finns redan biomdefinitioner för blue_gray, green_green, red_brown och
+  yellow_green). Kartan och datamodellen har därför ingen fast gräns på antal världar.
 - **Sex banor plus en boss per värld**, totalt 24 banor och 4 bossar.
   - Bana 1–5 introducerar och kombinerar hinder.
   - Bana 6 är världens examen.
@@ -20,31 +28,29 @@ Mockup av kartan: `docs/campaign_map_mockup.png` (en skiss, inte slutlig grafik)
   kampanjen låses biomet (se 4.2).
 - **Banorna är alltid identiska.** Varje bana har en permanent seed, ett regelverk och en
   generatorversion, eller en "frusen" händelselista (se 4.1). Samma bana ger samma
-  hinder, mynt och guld varje gång och för alla spelare.
+  hinder, mynt och stjärnor varje gång och för alla spelare.
 - **Banorna har ett mål.** En målflagga efter en fast längd ersätter dagens ändlösa
-  löpning. Längden är 30–75 sekunder vid 500 px/s, vilket blir 15 000–37 500 px.
+  löpning. Längden är **90–120 sekunder** vid 500 px/s, vilket blir 45 000–60 000 px.
 
 ## 2. Spelarens loop
 
 1. Kartan visar världens sju noder, förbundna med en stig. Avataren (vald karaktär och
    utseende) står på senast valda nod.
-2. Klarade noder visar sina guldföremål (●●○). Nästa olåsta nod lyser, låsta noder är grå
+2. Klarade noder visar sina stjärnor (●●○). Nästa olåsta nod lyser, låsta noder är grå
    med hänglås men syns.
 3. Spelaren väljer nod, ser ett kort ("1-4 Fallande stenar · Nytt hinder: fallande sten
    · Bästa: 1 240 p") och trycker **Spela**.
-4. Dör man startar banan om från början, eller från checkpoint (se 3.3). Når man målet
-   visas en resultatskärm med poäng, guld x/3, hemlighet och personbästa, och nästa nod
+4. Dör man startar banan om från början (inga checkpoints i steg 1). Når man målet
+   visas en resultatskärm med poäng, stjärnor x/3, hemlighet och personbästa, och nästa nod
    låses upp. Avataren går längs stigen till nästa nod.
-5. Klarade banor kan spelas om för bättre poäng, saknat guld eller hemligheter.
+5. Klarade banor kan spelas om för bättre poäng, saknade stjärnor eller hemligheter.
 
 ## 3. Mål och belöningar per bana
 
-### 3.1 Tre guldföremål per bana
-Namnet är inte bestämt. Förslag: **Gravitationsstjärnor**, **Guldkugghjul** eller
-**Kometsplitter**.
+### 3.1 Tre gravitationsstjärnor per bana
 - De ligger på fasta, handplacerade positioner. Minst ett ligger "fel" sida eller nära
   ett hinder, så att man måste välja en riskabel fil eller flippa mitt i en sekvens.
-- Ett plockat guld räknas bara om man också når målet. Då lönar det sig inte att plocka
+- En plockad stjärna räknas bara om man också når målet. Då lönar det sig inte att plocka
   och sedan dö med flit.
 
 ### 3.2 Hemlighet (en per bana, inte på alla banor i början)
@@ -54,15 +60,15 @@ Namnet är inte bestämt. Förslag: **Gravitationsstjärnor**, **Guldkugghjul** 
   utseende. Förslag: Ängen ger Flinka (räv), Grottan Pingo, Spökskogen Misse och Vulkanen Bit.
 
 ### 3.3 Poäng och liv
-- **Poäng** = mynt × 10 + guld × 500 + hemlighet × 1 000 + bonus för noll dödsfall.
-  Farten är konstant, så tid används inte i poängen.
-- **Checkpoint** från bana 4 i varje värld, i mitten av banan. Den nollställer guld
-  plockat efter checkpointen och ger ingen bonus för noll dödsfall.
+- **Poäng** = mynt × 10 + stjärnor × 500 + hemlighet × 1 000. Farten är konstant, så tid
+  används inte i poängen.
+- **Inga checkpoints i steg 1:** dör man börjar banan om. Med 90–120 sekunder per bana kan
+  checkpoints behövas för de svåraste banorna. Det utvärderas efter speltest (se 4.3).
 - **Inga liv eller game over** på kartnivå. Det passar en webb- och mobilrunner bäst.
 
 ### 3.4 Medaljer per bana (visas på kartnoden)
-- Klar, alla tre guld, och "perfekt" (utan att dö och med hemligheten). Det blir tre ikoner
-  under noden.
+- Kartnoden visar tre stjärnor (tagna eller grå). Hemligheten visas som en egen liten ikon
+  när den är hittad.
 
 ## 4. Teknik
 
@@ -77,7 +83,7 @@ kan vara resurser med permanent seed och regelverk.
 2. Den bästa seeden **fryses** till en datafil (`campaign/levels/1-4.tres`) med den
    färdiga händelselistan (källhändelser för `CourseManifestBuilder`). Då påverkar
    framtida generatorändringar aldrig befintliga banor.
-3. Guld, hemlighet, checkpoint och mål läggs till för hand i samma fil.
+3. Stjärnor, hemlighet och mål läggs till för hand i samma fil.
 4. Vid laddning körs den frysta listan genom samma resolver och manifest som MP. Den
    valideras med `is_plan_solvable` och de befintliga säkerhetsfiltren, så kampanjen
    använder exakt samma hindermodeller som resten av spelet.
@@ -87,8 +93,9 @@ kan vara resurser med permanent seed och regelverk.
 id: "1-4"            world: &"classic"          title_key: "Fallande stenar"
 length_px: 22000     source_events: Array[Dictionary]  (frusen)
 generator_version: 21   ruleset: CourseGenerationRuleset (för fingeravtryck)
-golden: [ {x, lane}, {x, lane}, {x, lane} ]   secret: {x, lane, reward_id}
-checkpoint_x: -1 | px      new_hazards: ["falling_rock"]   coin_layout: auto | frusen
+stars: [ {x, lane}, {x, lane}, {x, lane} ]   secret: {x, lane, reward_id}
+new_hazards: ["falling_rock"]   coin_layout: auto | frusen
+(checkpoint_x läggs till senare om speltest visar att det behövs)
 par_score: int       boss: null | CampaignBoss
 ```
 `CampaignWorld` (Resource): id, biom, titel, kartlayout (nodpositioner och stig),
@@ -108,13 +115,12 @@ musik, `levels[6]`, `boss`, och karaktären eller skinet man får för alla heml
 - Ett `scenario_id = &"campaign"` sätter en målflagga vid `length_px`: hinder slutar spawna
   innan målet, och löparen springer i mål och saktar in. Det triggar en ny
   `run_end_panel`-variant med "Bana klar".
-- Guld och hemlighet spawnas som pickups, med en ny variant av `collectibles/coin.tscn`
+- Stjärnor och hemlighet spawnas som pickups, med en ny variant av `collectibles/coin.tscn`
   med egen grafik och eget ljud.
-- Checkpoint: spara banans tillstånd vid `checkpoint_x` (tick, position, plockat). Vid
-  död startar `_start_run` från checkpointens distans.
-  - Simuleringen är distansbaserad, så det räcker att generera fram till samma punkt.
-  - **Risk:** hinder som triggas före checkpointen och lever efter den. Lösningen är att
-    placera checkpointen i en hinderfri sektion, och verktyget kontrollerar det.
+- Checkpoints ingår inte i steg 1. Om de behövs senare: spara tillståndet vid en
+  hinderfri sektion och starta `_start_run` från den distansen (simuleringen är
+  distansbaserad). Hinder som lever över checkpointen är risken, så verktyget ska bara
+  tillåta checkpoints i tomma sektioner.
 - Hinderintroduktion: första gången ett hinder i `new_hazards` syns visas ett kort utrop
   ("Ny: fallande sten!") och kameran zoomar ut lite. Det är bara presentation.
 
@@ -158,7 +164,9 @@ anges i px vid 500 px/s.
 | 5 | + fallande sten + såg | mix, täthet 1,3 | mix, täthet 1,4 | mix, täthet 1,5 |
 | 6 | examen: allt, täthet 1,2, marginal 1,0 | examen 1,5 | examen 1,6 | examen 1,8, marginal 0,85 |
 
-- Längden ökar från cirka 15 000 px (1-1) till cirka 37 500 px (4-6).
+- Längden ökar från cirka 45 000 px (90 s, 1-1) till cirka 60 000 px (120 s, bana 6 och
+  senare världar). Långa banor kräver tydliga "andningspauser": lugnare 5–8-sekunders
+  sektioner med mynt mellan intensiva partier, styrt av seed-sökarens betyg.
 - Senare världar börjar något svårare än förra världens bana 6, men bana 1 i varje värld
   är alltid "lugn" med ett nytt hinder.
 
@@ -192,12 +200,12 @@ Kräver en migration som utökar `achievement_metric_supported` (och `scope_key`
 |---|---|---|
 | Första steget – klara 1-1 | `campaign_levels_completed` ≥ 1 | – |
 | Världsvandrare – klara en hel värld (inkl. boss) | `campaign_world_completed` | värld |
-| Guldgrävare – 10 / 30 / 72 guld | `campaign_golden_total` | – |
-| Allt guld i en värld | `campaign_world_golden` = 18 | värld |
+| Stjärnsamlare – 10 / 30 / 72 gravitationsstjärnor | `campaign_stars_total` | – |
+| Alla stjärnor i en värld | `campaign_world_stars` = 18 | värld |
 | Hemlighetsjägare – alla hemligheter i en värld | `campaign_world_secrets` = 6 | värld |
 | Bosskrossare – besegra varje boss | `campaign_boss_defeated` | värld |
-| Felfri – klara en bana utan att dö (med checkpoint-banor) | `campaign_perfect_levels` | – |
-| Kampanjmästare – allt guld + alla hemligheter | `campaign_complete_100` | – |
+| Första försöket – klara en bana utan att ha dött på den | `campaign_first_try_levels` | – |
+| Kampanjmästare – alla stjärnor + alla hemligheter | `campaign_complete_100` | – |
 
 Nya metriker räknas från `campaign_progress` på servern, alltså samma mönster som
 `achievements.sql`, så upplåsningen blir idempotent.
@@ -206,23 +214,25 @@ Nya metriker räknas från `campaign_progress` på servern, alltså samma mönst
 
 | Fas | Innehåll | Klart när |
 |---|---|---|
-| **0 – grunden** | `CampaignLevel`/`CampaignWorld`, biomlås, målflagga, "Bana klar"-skärm, banlista som enkel meny, 3 banor i Ängen | man kan spela 1-1 → 1-3 i ett fast biom till mål |
-| **1 – kartan** | världskarta, avatar, låsta noder, guld (3/bana), lokal progress, resten av Ängen | Ängen 1-1…1-6 spelbar från kartan, guld sparas |
-| **2 – verktyg och innehåll** | seed-sökare, frysning, validering, banor för alla 4 världar | 24 banor som klarar valideringen |
-| **3 – backend** | `campaign_progress` + RPC, topplista per bana, gästsammanslagning, achievements-migration | progress följer kontot, achievements låses upp |
-| **4 – bossar** | Rullaren (mall), sedan övriga | Ängen kan avslutas med boss, nästa värld låses upp |
-| **5 – hemligheter och belöningar** | hemligheter, karaktärsupplåsning per värld, medaljer på kartan | alla hemligheter i Ängen låser upp Flinka |
+| **0 – grunden** | `CampaignLevel`/`CampaignWorld`, biomlås, målflagga, "Bana klar"-skärm, banlista som enkel meny, 2–3 banor i Ängen | man kan spela 1-1 → 1-3 i ett fast biom till mål |
+| **1 – kartan och stjärnor** | världskarta enligt mockupen, avatar, låsta noder, 3 gravitationsstjärnor per bana, lokal progress, resten av Ängen | Ängen 1-1…1-6 spelbar från kartan, stjärnor sparas |
+| **2 – Rullaren (prototyp)** | bossbana med schemalagda tunn- och blockattacker, tryckplattor som svag punkt, 3 faser | Ängen kan avslutas med en boss och nästa värld låses upp |
+| **3 – verktyg och innehåll** | seed-sökare, frysning, validering, banor för Grottan, Spökskogen och Vulkanen | 24 banor som klarar valideringen |
+| **4 – backend** | `campaign_progress` + RPC, topplista per bana, gästsammanslagning, achievements-migration | progress följer kontot, achievements låses upp |
+| **5 – övriga bossar** | Stalaktitjätten, Spökkungen och Magmaormen enligt Rullarens mall | varje värld har en boss |
+| **6 – hemligheter och belöningar** | hemligheter, upplåsningar (bestäms senare) | hemligheterna ger något |
 
-Fas 0 och 1 kan jag göra direkt när du säger till. Fas 3 kräver att Gravity Runs
-Supabase-projekt är åtkomligt för mig, eller att Codex kör migrationerna.
+Fas 0–2 kan jag göra utan backend. Fas 4 kräver att Gravity Runs Supabase-projekt är
+åtkomligt för mig, eller att Codex kör migrationerna.
 
-## 9. Beslut som behöver dig
+## 9. Beslut
 
-1. **Namn på guldföremålen** (förslag i 3.1).
-2. **Checkpoints** från bana 4, eller inga alls ("varje bana i ett svep")?
-3. **Banlängd:** 30–75 sekunder är förslaget. Kortare eller längre?
-4. **Karaktärsegenskaper i kampanjen:** samma för alla, eller ska egenskaper påverka?
-   Det påverkar topplistor per bana.
-5. **Vad hemligheterna låser upp:** karaktärer, utseenden eller något nytt
-   (till exempel spår vid flip)?
-6. **Bossarna:** ska Rullaren testas först som prototyp innan vi bestämmer resten?
+Tagna 2026-10-08: namnet *gravitationsstjärnor*, inga checkpoints i steg 1, 90–120
+sekunder per bana, Rullaren som första boss och prototyp.
+
+Öppna (tas senare):
+1. Karaktärsegenskaper i kampanjen och om topplistor ska vara per karaktär.
+2. Vad hemligheterna och världarna låser upp.
+3. Om de svåraste banorna behöver checkpoints efter speltest.
+4. Slutlig kartgrafik: mockupen kan bli riktig grafik i samma pixelstil, eller ersättas
+   av målade kartor per värld.
