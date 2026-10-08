@@ -2,6 +2,23 @@
 
 Förloppet för de schemalagda passen (se NATTPASS.md). Nyast överst.
 
+## 2026-10-08 23:40 – pass 1 pågår
+- Klart sedan förra posten:
+  - Spökkungen 3-B med testbot (d46fb3f), Spökskogens utseende/musik/ljud (494c5af).
+  - Pingo låses upp av Grottans boss, Misse av Spökkungen (6270058). OBS: de som redan valt
+    Pingo eller Misse får standardlöparen tills bossen är slagen.
+  - Småfixar ur backloggen avsnitt 8, alla fem (7056f84).
+  - Grottans skriptade inslag (992fd6b). Nivåverktyget: `-- features [bana]` skriver ut
+    inslagens positioner. 2-6 fick ingen fladdermussvärm (inget lugnt fönster kvar).
+  - Utrustning steg 1: bubbelhjälm, spikplåt, myntmagnet (421c2fd). Migrationen
+    `202610080002_effect_items_backpack.sql` är INTE körd mot Supabase. Servern behöver även
+    `p_modified` på seed-RPC:erna och en `modified`-kolumn i topplistan.
+- Pågår: Spökskogens skriptade inslag (händer, gravstenar, irrbloss, dimma), full regressionskörning.
+- Nästa: webbexport och publicering när allt är grönt. Därefter utrustning steg 2
+  (ångerskor, gravitationsankare) och steg 3 (lobbytoggle).
+- Teknik: worktreen committas via tar + `apply.sh` på enheten (skriver filer på plats).
+  Exportmallar för 4.7.2 web_nothreads hämtas med `tpz.py` (HTTP range) i molnet.
+
 ## 2026-10-08 23:15 – pass 1 pågår
 - Klart: Grottans och Spökskogens banor i katalogen, sex var med seeds och stjärnor (19ee4c3).
   Nivåverktyget söker nu i alla världar (`-- 99 2-` söker alla grottbanor) och väger in
