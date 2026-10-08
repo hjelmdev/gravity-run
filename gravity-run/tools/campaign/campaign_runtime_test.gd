@@ -41,6 +41,8 @@ func _run() -> void:
 	await _check_stalactite("hit")
 	await _check_stalactite("early")
 	await _check_stalactite("stay")
+	await _check_ghost_king("hit")
+	await _check_ghost_king("early")
 	_check_unlocks()
 	BiomeRendererScript.set_locked_biome(&"")
 	print("CAMPAIGN_RUNTIME_TEST failures=%d" % failures)
@@ -306,6 +308,60 @@ func _check_stalactite(mode: String) -> void:
 				_check(bat != null and bat.get_scheduled_events().size() > 23, "a dive at the wrong side repeats the round (%d attacks scheduled)" % (bat.get_scheduled_events().size() if bat != null else 0))
 		"stay":
 			_check(bat != null and bat.hp == StalactiteBoss.MAX_HP and bool(game.get("game_over")) and str(bat.dive.get("state", "")) == "caught", "staying on the locked side gets the runner caught by the dive (%d ticks)" % ticks)
+	game.queue_free()
+	await get_tree().process_frame
+	Campaign.clear_active()
+
+## Follows the Ghost King's schedule. mode "early" flips away from the first
+## lantern so early that the king has already followed (a miss).
+func _ghost_king_bot(game: Node, state: Dictionary) -> void:
+	var run: Node = game.get("_campaign_run")
+	if not is_instance_valid(run):
+		return
+	var king: GhostKingBoss = run.get("boss")
+	var player: Node = game.get_node("Player")
+	var course := float(player.get("world_x")) - 180.0
+	var target := 0
+	var probe := course
+	while probe <= course + 340.0:
+		var side := king.required_side_at(probe)
+		if side != 0:
+			target = side
+			break
+		probe += 20.0
+	if str(state.mode) == "early" and king.hp == GhostKingBoss.MAX_HP and king.attempts_in_phase == 0 and not king.lantern.is_empty():
+		var distance := float(king.lantern.distance)
+		var lantern_side := -1 if bool(king.lantern.ceiling) else 1
+		if course >= distance - 1100.0 and course <= distance + 80.0:
+			target = lantern_side if course < distance - 900.0 else -lantern_side
+	var current := int(player.call("get_gravity_direction"))
+	if target != 0 and target != current and bool(player.get("grounded")) and float(player.call("get_cooldown_left")) <= 0.0:
+		player.call("_try_flip", target)
+
+func _check_ghost_king(mode: String) -> void:
+	var boss_level := CampaignCatalog.get_level(&"3-B")
+	_check(boss_level != null and boss_level.boss_id == &"ghost_king", "the haunted woods have the Ghost King as their boss")
+	if boss_level == null:
+		return
+	Campaign.start_level(boss_level)
+	var game: Node = await _make_game()
+	var state := {"mode": mode}
+	var bot := func(g: Node) -> void: _ghost_king_bot(g, state)
+	var ticks := _step(game, 12000, bot)
+	var run: Node = game.get("_campaign_run")
+	var king: GhostKingBoss = run.get("boss") if is_instance_valid(run) else null
+	var panel: Node = game.get("_campaign_result_panel")
+	var label := "" if mode == "hit" else " after a missed lantern"
+	_check(king != null and king.is_defeated(), "the Ghost King is beaten by luring him into lanterns%s (%d ticks, hp %d)" % [label, ticks, king.hp if king != null else -1])
+	_check(bool(game.get("game_over")) and is_instance_valid(panel) and bool(panel.get("visible")) and bool(panel.get("visible")) and king != null and king.finish_distance > 0.0, "the haunted boss stage ends at its flag%s" % label)
+	var fires := 0
+	if king != null:
+		for event in king.get_scheduled_events():
+			if bool(event.get("ghost_fire", false)):
+				fires += 1
+	_check(fires >= 3, "the king drops ghost fire on the runner's old side (%d)" % fires)
+	if mode == "early":
+		_check(king != null and king.get_scheduled_events().size() > 0 and fires > 0, "a missed lantern repeats the phase")
 	game.queue_free()
 	await get_tree().process_frame
 	Campaign.clear_active()

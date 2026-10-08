@@ -63,6 +63,12 @@ func _run() -> void:
 		add_child(game)
 		await _frames(2)
 		game.set_physics_process(false)
+		if level.boss_id == &"ghost_king":
+			await _capture_ghost_king(game)
+			game.queue_free()
+			await _frames(2)
+			Campaign.clear_active()
+			continue
 		if level.boss_id == &"stalactite":
 			await _capture_stalactite(game)
 			game.queue_free()
@@ -110,6 +116,35 @@ func _capture_stalactite(game: Node) -> void:
 			saved["defeat"] = i + 60
 		elif saved.has("defeat") and int(saved["defeat"]) == i:
 			shot = "defeated"
+		if not shot.is_empty():
+			for _f in range(3):
+				await get_tree().process_frame
+			await _save("%s_boss_%s" % [world_id, shot])
+	bot_host.free()
+
+## Plays the Ghost King with the runtime test's bot; a shot every 300 ticks
+## and one right after each lantern hit.
+func _capture_ghost_king(game: Node) -> void:
+	var bot_host = RuntimeTest.new()
+	var state := {"mode": "hit"}
+	var king: GhostKingBoss = game.get("_campaign_run").get("boss")
+	var last_hp := king.hp
+	var hit_shot_at := -1
+	for i in range(4000):
+		if bool(game.get("game_over")):
+			break
+		bot_host.call("_ghost_king_bot", game, state)
+		game.call("_physics_process", TICK)
+		if i % 4 == 0:
+			await get_tree().process_frame
+		if king.hp != last_hp:
+			last_hp = king.hp
+			hit_shot_at = i + 12
+		var shot := ""
+		if i % 300 == 150:
+			shot = "t%04d" % i
+		elif i == hit_shot_at:
+			shot = "lantern_hit_hp%d" % king.hp
 		if not shot.is_empty():
 			for _f in range(3):
 				await get_tree().process_frame

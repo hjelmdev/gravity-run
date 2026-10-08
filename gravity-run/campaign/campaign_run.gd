@@ -15,6 +15,8 @@ const PressurePlateScript := preload("res://campaign/pressure_plate.gd")
 const RullarenViewScript := preload("res://campaign/rullaren_view.gd")
 const StalactiteViewScript := preload("res://campaign/stalactite_view.gd")
 const GiantIcicleScript := preload("res://campaign/giant_icicle.gd")
+const GhostKingViewScript := preload("res://campaign/ghost_king_view.gd")
+const BossLanternScript := preload("res://campaign/boss_lantern.gd")
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const COURSE_START_X := 180.0
 const STAR_COIN_CLEARANCE := 44.0
@@ -29,8 +31,10 @@ var _finish_line: Node2D
 var _boss_view: Node2D
 var _plates: Array[Node2D] = []
 var _icicles: Array[Node2D] = []
+var _lanterns: Array[Node2D] = []
 var _announced_hazards: Dictionary = {}
 var _last_plate_distance := -INF
+var _last_course_distance := 0.0
 
 func setup(stage: CampaignLevel) -> void:
 	level = stage
@@ -43,7 +47,14 @@ func setup(stage: CampaignLevel) -> void:
 		star.name = "GravityStar%d" % index
 		add_child(star)
 		_stars.append(star)
-	if level.is_boss() and level.boss_id == &"stalactite":
+	if level.is_boss() and level.boss_id == &"ghost_king":
+		boss = GhostKingBoss.new()
+		boss.reset()
+		_boss_view = GhostKingViewScript.new() as Node2D
+		_boss_view.name = "GhostKing"
+		add_child(_boss_view)
+		_add_lantern_for_current()
+	elif level.is_boss() and level.boss_id == &"stalactite":
 		boss = StalactiteBoss.new()
 		boss.reset()
 		_boss_view = StalactiteViewScript.new() as Node2D
@@ -177,8 +188,11 @@ func physics_tick(previous_rect: Rect2, final_rect: Rect2, lethal_fraction: floa
 			star_mask |= 1 << int(star.get("star_index"))
 			stars_changed.emit(get_star_count(), get_star_total())
 			callout.emit("star", tr("Gravity star"), "%d / %d" % [get_star_count(), get_star_total()], "")
+	_last_course_distance = runner_world_x - COURSE_START_X
 	if boss != null and lethal_fraction > 1.0:
-		if boss is StalactiteBoss:
+		if boss is GhostKingBoss:
+			_tick_ghost_king(runner_world_x - COURSE_START_X, gravity_direction)
+		elif boss is StalactiteBoss:
 			if _tick_stalactite(runner_world_x - COURSE_START_X, gravity_direction):
 				return "caught"
 		else:
@@ -246,6 +260,44 @@ func _tick_stalactite(course_distance: float, gravity_direction: int) -> bool:
 			_add_icicle_for_current()
 	return false
 
+func _tick_ghost_king(course_distance: float, gravity_direction: int) -> void:
+	var king := boss as GhostKingBoss
+	var lantern_index := _lanterns.size() - 1
+	var lantern: Node2D = _lanterns[lantern_index] if lantern_index >= 0 and is_instance_valid(_lanterns[lantern_index]) else null
+	var result := king.observe_runner(course_distance, gravity_direction, true)
+	match result:
+		"fire":
+			_boss_view.call("notify_fired")
+		"hit", "defeated":
+			if lantern != null:
+				lantern.call("flare")
+			SfxController.play_event("lantern_chime", "campaign|lantern|%d" % int(king.lantern.distance), true)
+			_boss_view.call("notify_hit", king.hp)
+			boss_changed.emit(king.hp, GhostKingBoss.MAX_HP)
+			if result == "hit":
+				callout.emit("boss", tr("Caught in the light!"), tr("The Ghost King follows faster"), tr("%d hits left") % king.hp)
+				_add_lantern_for_current()
+			else:
+				_boss_view.call("notify_defeated")
+				callout.emit("boss", tr("Boss beaten"), tr("The Ghost King is beaten!"), tr("Run to the finish"))
+				_place_finish_line(COURSE_START_X + king.finish_distance)
+		"missed":
+			if lantern != null:
+				lantern.call("fade_out")
+			callout.emit("boss", tr("He slipped past the lantern"), tr("Another lantern comes"), tr("Be on its side, then flip away just before it"))
+			_add_lantern_for_current()
+
+func _add_lantern_for_current() -> void:
+	var king := boss as GhostKingBoss
+	if king == null or king.lantern.is_empty():
+		return
+	var lantern := BossLanternScript.new() as Node2D
+	lantern.name = "BossLantern%d" % _lanterns.size()
+	lantern.set("on_ceiling", bool(king.lantern.ceiling))
+	lantern.position = Vector2(COURSE_START_X + float(king.lantern.distance), 0.0)
+	add_child(lantern)
+	_lanterns.append(lantern)
+
 func _add_icicle_for_current() -> void:
 	var bat := boss as StalactiteBoss
 	if bat == null or bat.dive.is_empty():
@@ -278,10 +330,16 @@ func update_presentation(view_left: float, view_width: float, surface_y_at: Call
 	for plate in _plates:
 		if is_instance_valid(plate):
 			plate.set("surface_y", float(surface_y_at.call(plate.position.x, bool(plate.get("on_ceiling")))))
+	for lantern in _lanterns:
+		if is_instance_valid(lantern):
+			lantern.call("set_surfaces", float(surface_y_at.call(lantern.position.x, false)), float(surface_y_at.call(lantern.position.x, true)))
 	for icicle in _icicles:
 		if is_instance_valid(icicle):
 			icicle.call("set_surfaces", float(surface_y_at.call(icicle.position.x, false)), float(surface_y_at.call(icicle.position.x, true)))
-	if is_instance_valid(_boss_view) and boss is StalactiteBoss:
+	if is_instance_valid(_boss_view) and boss is GhostKingBoss:
+		var king_edge := view_left + view_width - 10.0
+		_boss_view.call("place", king_edge, float(surface_y_at.call(king_edge - 70.0, true)), float(surface_y_at.call(king_edge - 70.0, false)), (boss as GhostKingBoss).king_on_ceiling(_last_course_distance))
+	elif is_instance_valid(_boss_view) and boss is StalactiteBoss:
 		var edge := view_left + view_width - 10.0
 		_boss_view.call("place", edge, float(surface_y_at.call(edge - 90.0, true)), float(surface_y_at.call(edge - 90.0, false)), view_left)
 	elif is_instance_valid(_boss_view):

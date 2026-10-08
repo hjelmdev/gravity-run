@@ -1858,3 +1858,27 @@ msgstr "Istappen kommer tillbaka"
 
 msgid "Wait on the icicle's side, then flip away"
 msgstr "Vänta på istappens sida och flippa sedan bort"
+
+msgid "Ghost King"
+msgstr "Spökkungen"
+
+msgid "Boss: the king who copies you"
+msgstr "Boss: kungen som härmar dig"
+
+msgid "Caught in the light!"
+msgstr "Fångad i ljuset!"
+
+msgid "The Ghost King follows faster"
+msgstr "Spökkungen följer efter snabbare"
+
+msgid "The Ghost King is beaten!"
+msgstr "Spökkungen är besegrad!"
+
+msgid "He slipped past the lantern"
+msgstr "Han smet förbi lyktan"
+
+msgid "Another lantern comes"
+msgstr "En ny lykta kommer"
+
+msgid "Be on its side, then flip away just before it"
+msgstr "Var på dess sida och flippa bort strax före den"

@@ -493,6 +493,9 @@ func _draw_mini_boss(origin: Vector2) -> void:
 	if boss != null and boss.boss_id == &"stalactite":
 		_draw_mini_bat(origin)
 		return
+	if boss != null and boss.boss_id == &"ghost_king":
+		_draw_mini_ghost_king(origin)
+		return
 	# A tiny Rullaren on its stone: body, stack, eyes and a barrel.
 	var body := Color("8c5a46")
 	_px(origin, -6, -8, 13, 9, OUTLINE)
@@ -520,3 +523,16 @@ func _draw_mini_bat(origin: Vector2) -> void:
 	_px(origin, -7, -7 - flap, 4, 1, wing)
 	_px(origin, 4, -8 - flap, 5, 3, OUTLINE)
 	_px(origin, 4, -7 - flap, 4, 1, wing)
+
+## A tiny Ghost King bobbing over its stone.
+func _draw_mini_ghost_king(origin: Vector2) -> void:
+	var bob := Vector2(0.0, roundf(sin(_time * 2.4)))
+	var at := origin + bob * MAP_PIXEL
+	_px(at, -4, -9, 9, 10, OUTLINE)
+	_px(at, -3, -8, 7, 8, Color("d9d2ff"))
+	_px(at, -2, -6, 1, 2, Color("2c1a4f"))
+	_px(at, 1, -6, 1, 2, Color("2c1a4f"))
+	_px(at, -3, -11, 7, 2, Color("ffd23f"))
+	_px(at, -3, -12, 1, 1, Color("ffd23f"))
+	_px(at, 0, -12, 1, 1, Color("ffd23f"))
+	_px(at, 3, -12, 1, 1, Color("ffd23f"))
