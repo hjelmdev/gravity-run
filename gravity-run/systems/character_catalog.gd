@@ -6,6 +6,13 @@ const DEFINITIONS: Array[CharacterDefinition] = [
 	preload("res://characters/runner.tres"),
 	preload("res://characters/nova.tres"),
 	preload("res://characters/nova_mini.tres"),
+	preload("res://characters/fox.tres"),
+	preload("res://characters/frog.tres"),
+	preload("res://characters/penguin.tres"),
+	preload("res://characters/panda.tres"),
+	preload("res://characters/axolotl.tres"),
+	preload("res://characters/robot.tres"),
+	preload("res://characters/cat.tres"),
 ]
 
 static func default_definition() -> CharacterDefinition:

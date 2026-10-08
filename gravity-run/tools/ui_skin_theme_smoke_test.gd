@@ -40,12 +40,19 @@ func _ready() -> void:
 	bag.call("_cycle_character", 1)
 	if PlayerProfile.selected_character_id != &"nova_mini":
 		failures.append("bag picker did not advance (got %s)" % PlayerProfile.selected_character_id)
-	bag.call("_cycle_character", 1)
-	bag.call("_cycle_character", 1)
+	for _step in CharacterCatalog.DEFINITIONS.size() - 1:
+		bag.call("_cycle_character", 1)
 	if PlayerProfile.selected_character_id != &"nova":
 		failures.append("bag picker did not wrap (got %s)" % PlayerProfile.selected_character_id)
 	for i in 10:
 		await get_tree().process_frame
+	# Every character must load its frames and apply to a runner.
+	for definition in CharacterCatalog.DEFINITIONS:
+		if definition.sprite_frames == null or definition.sprite_frames.get_frame_count("run") != 8:
+			failures.append("character %s has no 8-frame run animation" % definition.id)
+		player.call("apply_character", definition)
+		if sprite.sprite_frames != definition.sprite_frames:
+			failures.append("could not apply %s" % definition.id)
 	PlayerProfile.set_selected_character_id(original_character)
 	PlayerProfile.set_preferred_skin_id(original)
 	for f in failures:

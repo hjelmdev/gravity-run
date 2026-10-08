@@ -1450,3 +1450,24 @@ msgstr "Astronautlöpare, 32x32 pixlar."
 
 msgid "The same astronaut as 16x16 pixel art."
 msgstr "Samma astronaut i 16x16 pixlar."
+
+msgid "Quick-footed fox with a bushy tail."
+msgstr "Kvicktänkt räv med yvig svans."
+
+msgid "Frog who would rather be jumping."
+msgstr "Groda som helst av allt vill hoppa."
+
+msgid "Penguin who finally learned to run."
+msgstr "Pingvin som äntligen lärt sig springa."
+
+msgid "Calm panda, unbothered by gravity."
+msgstr "Lugn panda som inte bryr sig om gravitationen."
+
+msgid "Axolotl straight out of the lab tank."
+msgstr "Axolotl direkt från labbets akvarium."
+
+msgid "Robot running on spare batteries."
+msgstr "Robot som springer på reservbatterier."
+
+msgid "Cat who always lands on its feet."
+msgstr "Katt som alltid landar på fötterna."

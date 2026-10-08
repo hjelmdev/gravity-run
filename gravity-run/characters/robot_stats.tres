@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="CharacterStats" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://systems/character_stats.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+character_id = &"robot"
+base_stats = {
+"flip_cooldown_percent": 10000,
+"run_speed_percent": 10000
+}

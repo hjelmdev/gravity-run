@@ -1,0 +1,18 @@
+[gd_resource type="Resource" script_class="CharacterDefinition" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://characters/character_definition.gd" id="1"]
+[ext_resource type="SpriteFrames" path="res://assets/characters/panda/frames.tres" id="2"]
+[ext_resource type="Resource" path="res://characters/panda_stats.tres" id="3"]
+
+[resource]
+script = ExtResource("1")
+id = &"panda"
+display_name = "Bambu"
+description = "Calm panda, unbothered by gravity."
+trait_text = ""
+sprite_frames = ExtResource("2")
+pixel_scale = 2.0
+sprite_offset = Vector2(0, -5)
+stats = ExtResource("3")
+unlocked_by_default = true
+unlock_cost_coins = 0
