@@ -1,6 +1,6 @@
 # Gen21 rubber barrel and biome weather status
 
-Status: IN_PROGRESS — focused behavior/renderer checks pass; final root review still pending. No commit, database apply, push, or Pages publication.
+Status: RELEASE_COMPLETE — scoped source, reviewed migration gate, exact-commit Web export, Azure source push, and Pages publication are complete. Root independently approved the implementation before release.
 
 ## Baseline and scope
 
@@ -51,3 +51,15 @@ Status: IN_PROGRESS — focused behavior/renderer checks pass; final root review
 - The MP gameplay capture is an offline actual match-scene fixture, not a connected session. Route timing and SP/MP shared-state parity come from the shared simulation fixture. No live migration or publication has occurred.
 
 All owned Godot invocations are bounded; the user’s editor remains untouched.
+## Release evidence
+
+- Source commit: `0ba96d34157ee5f7623aee512f0e41d60f1d0b06` (`Add Gen21 rubber barrels and biome weather`), pushed to Azure `codex/current-prototype`. A follow-up documentation-only commit will update this status file.
+- Scoped `main.gd` staging contained only Gen21 barrel spawn/interaction and shared weather-time hunks. Older render-capture/diagnostics edits, `tools/singleplayer_render_capture.gd`, and `ui/main_menu.gd` remain outside the feature commit.
+- Migration `202610080001_generator21_rubber_barrel_weather.sql`: linked history initially showed this as the only pending migration; dry-run listed only this migration. A later `db push --linked` returned `upToDate=true` with no migration applied by that invocation, and the subsequent linked history lists local and remote `202610080001` in sync. No auth, wallet, or data migration was part of this release.
+- Clean archive: `E:\Utveckling\Gravity Run\.codex-clean-gen21-0ba96d3\gravity-run`, produced from exact commit `0ba96d3`. Clean editor import/parse exited 0; only host certificate-store warning remained. The Web export succeeded using the installed Godot 4.7.2 template after sandboxed access to the user template directory was denied.
+- Export directory: `E:\Utveckling\Gravity Run\.codex-gen21-export-0ba96d3-host`. PCK size `3,761,100` bytes; SHA-256 `44007DD774F826BB1916EBB1B73AA7CF2C3DF9553B98D8E0ED115ED338FE3053`.
+- Pages commit: `846c819dd134622023952913bfe5139e03dad178` on `main`, pushed to `https://github.com/hjelmdev/gravity-run.git`. Workflow [37746883287](https://github.com/hjelmdev/gravity-run/actions/runs/37746883287) completed successfully for that exact Pages commit.
+- Published build ID, both root and active game bundle: `gen21-rubber-barrel-weather-0ba96d3-20261008`. The root shell loader points to `docs/game/index.html` with the same build query; the active loader selects `index.gen21-rubber-barrel-weather-0ba96d3-20261008.pck`.
+- Public PCK download: `3,761,100` bytes, SHA-256 `44007DD774F826BB1916EBB1B73AA7CF2C3DF9553B98D8E0ED115ED338FE3053`, matching the clean local export exactly. Public URL: `https://hjelmdev.github.io/gravity-run/`.
+- Clean exact-commit checks passed: editor import/parse, Gen21 weather contract, Gen21 shared simulation, actual SP generated-barrel adapter, release-version contract, and immutable Gen17/Gen18 freeze suites. All test processes exited; the user editor was not touched. No connected multiplayer session is claimed; MP evidence remains offline match-scene/shared simulation fixtures as described above.
+- The sampled route limitation at seed `100000007` / 750 px/s remains as documented; it also occurs in its matched Gen20 control. No claim is made that every route or speed is safe.
