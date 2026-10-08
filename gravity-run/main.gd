@@ -51,6 +51,7 @@ const SfxAudioDiagnosticCapture := preload("res://systems/sfx_audio_diagnostic_c
 const CampaignRunScript := preload("res://campaign/campaign_run.gd")
 const MEADOW_MUSIC: AudioStream = preload("res://assets/audio/music/meadow_summer.ogg")
 const CampaignResultPanelScript := preload("res://campaign/campaign_result_panel.gd")
+const CampaignBannerScript := preload("res://campaign/campaign_banner.gd")
 ## Ticks the runner keeps running past the finish line before the result.
 const CAMPAIGN_RUNOUT_TICKS := 75
 ## Singleplayer pickup reach. The pixel runners are drawn wider than the shared
@@ -110,6 +111,7 @@ var _manifest_builder: RefCounted
 var _campaign_level: CampaignLevel
 var _campaign_run: Node2D
 var _campaign_result_panel: CanvasLayer
+var _campaign_banner: CanvasLayer
 var _campaign_runout_ticks := -1
 var floor_level_y := screen_height - 80.0
 var ceiling_level_y := 80.0
@@ -290,7 +292,35 @@ func _start_run() -> void:
 	_setup_campaign_run()
 	queue_redraw()
 
+## The ceiling can rise to y 40, under the top HUD band (its height is part
+## of the shared course geometry, so it is not capped). When the runner's art
+## reaches up there, the HUD fades so the runner stays visible.
+const HUD_BAND_BOTTOM := 52.0
+const HUD_FADED_ALPHA := 0.3
+var _hud_alpha := 1.0
+
+func _update_hud_fade(delta: float) -> void:
+	if demo_mode or not is_instance_valid(hud):
+		return
+	var camera_top := camera.get_screen_center_position().y - screen_height * 0.5 if is_instance_valid(camera) else 0.0
+	var runner_top := _render_player_position.y - camera_top - RUNNER_MOTION_SCRIPT.SIZE.y * 0.5 - 12.0
+	var under := not game_over and runner_top < HUD_BAND_BOTTOM
+	_hud_alpha = move_toward(_hud_alpha, HUD_FADED_ALPHA if under else 1.0, delta * 5.0)
+	hud.modulate.a = _hud_alpha
+	var pause_menu := get_node_or_null("PauseMenu")
+	if pause_menu != null and pause_menu.has_method("set_toolbar_alpha"):
+		pause_menu.call("set_toolbar_alpha", _hud_alpha)
+
+func _campaign_banner_node() -> CanvasLayer:
+	if not is_instance_valid(_campaign_banner):
+		_campaign_banner = CampaignBannerScript.new() as CanvasLayer
+		_campaign_banner.name = "CampaignBanner"
+		add_child(_campaign_banner)
+	return _campaign_banner
+
 func _setup_campaign_run() -> void:
+	if is_instance_valid(_campaign_banner):
+		_campaign_banner.call("clear")
 	_campaign_runout_ticks = -1
 	if is_instance_valid(_campaign_run):
 		_campaign_run.queue_free()
@@ -304,12 +334,12 @@ func _setup_campaign_run() -> void:
 	_campaign_run.name = "CampaignRun"
 	add_child(_campaign_run)
 	_campaign_run.call("setup", _campaign_level)
-	_campaign_run.connect("callout", Callable(hud, "show_campaign_callout"))
+	_campaign_run.connect("callout", _campaign_banner_node().show_banner)
 	_campaign_run.connect("stars_changed", Callable(hud, "set_campaign_stars"))
 	_campaign_run.connect("stars_changed", _on_campaign_star_collected)
 	_campaign_run.connect("boss_changed", Callable(hud, "set_campaign_boss"))
 	if not _campaign_level.intro.is_empty():
-		hud.call("show_campaign_callout", "%s · %s" % [tr(_campaign_level.title), tr(_campaign_level.intro)], Color("edf3ff"))
+		_campaign_banner_node().show_banner("boss" if _campaign_level.is_boss() else "stage", str(_campaign_level.level_id), tr(_campaign_level.title), tr(_campaign_level.intro))
 	if _campaign_level.is_boss():
 		hud.call("set_campaign_boss", RullarenBoss.MAX_HP, RullarenBoss.MAX_HP)
 
@@ -418,6 +448,7 @@ func _process(delta: float) -> void:
 	var sprite := player.get_node("AnimatedSprite2D") as AnimatedSprite2D
 	sprite.position = _render_player_position - player.position + Vector2(0.0, -float(player.call("get_gravity_direction")))
 	_update_camera()
+	_update_hud_fade(delta)
 	if is_instance_valid(_campaign_run):
 		_campaign_run.call("update_presentation", float(camera.get("left")), screen_width, Callable(self, "_surface_y_at"))
 	_update_singleplayer_rock_warning_pulse(delta)
@@ -834,6 +865,8 @@ func _complete_campaign_level() -> void:
 	_show_campaign_result(result)
 
 func _show_campaign_result(result: Dictionary) -> void:
+	if is_instance_valid(_campaign_banner):
+		_campaign_banner.call("clear")
 	if not is_instance_valid(_campaign_result_panel):
 		_campaign_result_panel = CampaignResultPanelScript.new() as CanvasLayer
 		_campaign_result_panel.name = "CampaignResultPanel"

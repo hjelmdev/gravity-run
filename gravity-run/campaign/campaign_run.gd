@@ -4,7 +4,8 @@ extends Node2D
 ## boss script, its plates and its art. main.gd stays the simulation; this
 ## node only filters what main spawns and reports pickups and the finish.
 
-signal callout(text: String, color: Color)
+## kind: "hazard", "star", "stage" or "boss"; texts are already translated.
+signal callout(kind: String, heading: String, title: String, description: String)
 signal stars_changed(collected: int, total: int)
 signal boss_changed(hp: int, max_hp: int)
 
@@ -15,9 +16,6 @@ const RullarenViewScript := preload("res://campaign/rullaren_view.gd")
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const COURSE_START_X := 180.0
 const STAR_COIN_CLEARANCE := 44.0
-const CALLOUT_GOLD := Color("f5d45e")
-const CALLOUT_TEAL := Color("42d6c5")
-const CALLOUT_RED := Color("ff647c")
 
 var level: CampaignLevel
 var boss: RullarenBoss
@@ -113,7 +111,23 @@ func on_event_spawned(event: Dictionary) -> void:
 	if hazard_id.is_empty() or _announced_hazards.has(hazard_id) or not level.new_hazards.has(hazard_id):
 		return
 	_announced_hazards[hazard_id] = true
-	callout.emit(tr("New: %s!") % tr(hazard_display_name(hazard_id)), CALLOUT_TEAL)
+	callout.emit("hazard", tr("New hazard"), _sentence_case(tr(hazard_display_name(hazard_id))), tr(hazard_tip(hazard_id)))
+
+static func _sentence_case(text: String) -> String:
+	return text.substr(0, 1).to_upper() + text.substr(1)
+
+## One-line hint shown with the "New hazard" banner.
+static func hazard_tip(hazard_id: String) -> String:
+	match hazard_id:
+		"spike_group": return "Flip to the other side to pass them"
+		"block": return "A wall in your lane: switch sides in time"
+		"floor_gap", "ceiling_gap": return "No ground there: run on the other side"
+		"barrel_chain": return "They roll at you: get off the floor"
+		"terrain_step": return "Steps stop you: flip over them"
+		"terrain_slope": return "The track tilts: keep your footing"
+		"falling_rock": return "Watch the warning and leave the floor"
+		"saw_blade": return "It moves along the surface: time your flip"
+	return ""
 
 static func hazard_display_name(hazard_id: String) -> String:
 	match hazard_id:
@@ -142,7 +156,7 @@ func physics_tick(previous_rect: Rect2, final_rect: Rect2, lethal_fraction: floa
 			star.call("collect")
 			star_mask |= 1 << int(star.get("star_index"))
 			stars_changed.emit(get_star_count(), get_star_total())
-			callout.emit(tr("Gravity star %d/%d!") % [get_star_count(), get_star_total()], CALLOUT_GOLD)
+			callout.emit("star", tr("Gravity star"), "%d / %d" % [get_star_count(), get_star_total()], tr("Counts when you reach the finish"))
 	if boss != null and lethal_fraction > 1.0:
 		_tick_boss(runner_world_x - COURSE_START_X, gravity_direction, grounded)
 	if lethal_fraction > 1.0 and runner_world_x >= get_finish_world_x():
@@ -161,15 +175,15 @@ func _tick_boss(course_distance: float, gravity_direction: int, grounded: bool) 
 		"hit":
 			_boss_view.call("notify_hit", boss.hp)
 			boss_changed.emit(boss.hp, RullarenBoss.MAX_HP)
-			callout.emit(tr("Direct hit! Rullaren speeds up"), CALLOUT_GOLD)
+			callout.emit("boss", tr("Direct hit!"), tr("Rullaren speeds up"), tr("%d hits left") % boss.hp)
 			_add_plate_for_current()
 		"missed":
-			callout.emit(tr("Missed the plate, it comes around again"), CALLOUT_RED)
+			callout.emit("boss", tr("Missed the plate"), tr("It comes around again"), tr("Be on the glowing side when you pass it"))
 			_add_plate_for_current()
 		"defeated":
 			_boss_view.call("notify_defeated")
 			boss_changed.emit(0, RullarenBoss.MAX_HP)
-			callout.emit(tr("Rullaren is beaten!"), CALLOUT_GOLD)
+			callout.emit("boss", tr("Boss beaten"), tr("Rullaren is beaten!"), tr("Run to the finish"))
 			_place_finish_line(COURSE_START_X + boss.finish_distance)
 
 func _add_plate_for_current() -> void:

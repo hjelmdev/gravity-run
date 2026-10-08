@@ -331,6 +331,13 @@ func _close_inventory() -> void:
 		_show_pause_actions()
 	_apply_pause_state()
 
+## Fades the in-run toolbar (pause, character, shop) while the runner is
+## underneath it. The buttons stay clickable.
+func set_toolbar_alpha(alpha: float) -> void:
+	for child in get_children():
+		if child is Button:
+			(child as Button).modulate.a = alpha
+
 func _quit_to_main_menu() -> void:
 	manual_pause_requested = false
 	get_tree().paused = false

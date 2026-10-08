@@ -1687,3 +1687,60 @@ msgstr "Lösenord"
 
 msgid "Replay this course"
 msgstr "Kör banan igen"
+
+msgid "New hazard"
+msgstr "Nytt hinder"
+
+msgid "Gravity star"
+msgstr "Gravitationsstjärna"
+
+msgid "Counts when you reach the finish"
+msgstr "Räknas när du når målet"
+
+msgid "Direct hit!"
+msgstr "Fullträff!"
+
+msgid "Rullaren speeds up"
+msgstr "Rullaren varvar upp"
+
+msgid "%d hits left"
+msgstr "%d träffar kvar"
+
+msgid "Missed the plate"
+msgstr "Missade plattan"
+
+msgid "It comes around again"
+msgstr "Den kommer igen"
+
+msgid "Be on the glowing side when you pass it"
+msgstr "Var på den lysande sidan när du passerar"
+
+msgid "Boss beaten"
+msgstr "Bossen besegrad"
+
+msgid "Run to the finish"
+msgstr "Spring i mål"
+
+msgid "Flip to the other side to pass them"
+msgstr "Byt sida för att komma förbi"
+
+msgid "A wall in your lane: switch sides in time"
+msgstr "En vägg i din fil: byt sida i tid"
+
+msgid "No ground there: run on the other side"
+msgstr "Ingen mark där: spring på andra sidan"
+
+msgid "They roll at you: get off the floor"
+msgstr "De rullar mot dig: lämna golvet"
+
+msgid "Steps stop you: flip over them"
+msgstr "Trappsteg stoppar dig: flippa förbi"
+
+msgid "The track tilts: keep your footing"
+msgstr "Banan lutar: håll fotfästet"
+
+msgid "Watch the warning and leave the floor"
+msgstr "Se varningen och lämna golvet"
+
+msgid "It moves along the surface: time your flip"
+msgstr "Den åker längs ytan: tajma din flip"
