@@ -1882,3 +1882,6 @@ msgstr "En ny lykta kommer"
 
 msgid "Be on its side, then flip away just before it"
 msgstr "Var på dess sida och flippa bort strax före den"
+
+msgid "New runner unlocked: %s"
+msgstr "Ny löpare upplåst: %s"

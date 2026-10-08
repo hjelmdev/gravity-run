@@ -152,6 +152,9 @@ func show_result(level: CampaignLevel, result: Dictionary) -> void:
 		var world_unlocked: CampaignWorld = result.get("world_unlocked")
 		if world_unlocked != null:
 			unlock_lines.append(tr("New world unlocked: %s") % tr(world_unlocked.title))
+		if level != null and level.is_boss() and world_unlocked != null:
+			for character in CharacterCatalog.unlocked_by_world(level.world_id):
+				unlock_lines.append(tr("New runner unlocked: %s") % character.display_name)
 		var next: CampaignLevel = result.get("next_level")
 		if bool(result.get("next_unlocked_now", false)) and next != null:
 			unlock_lines.append(tr("Unlocked: %s %s") % [str(next.level_id), tr(next.title)])

@@ -386,6 +386,15 @@ func _check_unlocks() -> void:
 		if level.is_boss():
 			_check(final.get("world_unlocked") == cave, "beating the boss unlocks the cave")
 	_check(Campaign.is_world_unlocked(cave), "the cave is open after the boss")
+	var pingo := CharacterCatalog.get_definition(&"penguin")
+	var misse := CharacterCatalog.get_definition(&"cat")
+	_check(not CharacterCatalog.is_unlocked(pingo) and not CharacterCatalog.is_unlocked(misse), "Pingo and Misse are locked before their worlds' bosses")
+	Campaign.start_level(cave.get_boss())
+	Campaign.record_completion(0, 0)
+	_check(CharacterCatalog.is_unlocked(pingo) and not CharacterCatalog.is_unlocked(misse), "beating the cave boss unlocks Pingo")
+	Campaign.start_level(CampaignCatalog.get_world(&"haunted").get_boss())
+	Campaign.record_completion(0, 0)
+	_check(CharacterCatalog.is_unlocked(misse), "beating the Ghost King unlocks Misse")
 	Campaign.clear_active()
 	Campaign.reset_progress()
 

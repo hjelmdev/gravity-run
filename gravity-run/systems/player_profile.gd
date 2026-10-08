@@ -176,7 +176,9 @@ func _save_profile() -> void:
 		push_warning("Could not save Gravity Run profile (error %s)." % error)
 
 func get_selected_character() -> CharacterDefinition:
-	return CharacterCatalog.get_definition(selected_character_id)
+	var definition := CharacterCatalog.get_definition(selected_character_id)
+	# A campaign character runs only once it is unlocked.
+	return definition if CharacterCatalog.is_unlocked(definition) else CharacterCatalog.default_definition()
 
 func set_selected_character_id(character_id: StringName) -> bool:
 	var definition := CharacterCatalog.get_definition(character_id)

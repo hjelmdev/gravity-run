@@ -38,4 +38,18 @@ static func index_of(character_id: StringName) -> int:
 
 ## Characters the player may pick. Unlocking via coins/achievements plugs in here.
 static func is_unlocked(definition: CharacterDefinition) -> bool:
-	return definition != null and definition.unlocked_by_default
+	if definition == null or not definition.unlocked_by_default:
+		return false
+	if definition.campaign_unlock_world != StringName():
+		var world := CampaignCatalog.get_world(definition.campaign_unlock_world)
+		var boss := world.get_boss() if world != null else null
+		return boss != null and Campaign.is_completed(boss)
+	return true
+
+## Characters that beating this world's boss unlocks.
+static func unlocked_by_world(world_id: StringName) -> Array[CharacterDefinition]:
+	var result: Array[CharacterDefinition] = []
+	for definition in DEFINITIONS:
+		if definition.campaign_unlock_world == world_id:
+			result.append(definition)
+	return result

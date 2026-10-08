@@ -16,3 +16,4 @@ sprite_offset = Vector2(0, -5)
 stats = ExtResource("3")
 unlocked_by_default = true
 unlock_cost_coins = 0
+campaign_unlock_world = &"haunted"

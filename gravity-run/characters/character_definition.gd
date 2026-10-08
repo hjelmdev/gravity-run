@@ -20,3 +20,5 @@ class_name CharacterDefinition
 @export var unlocked_by_default: bool = true
 ## Price in coins once unlocking is wired to the account wallet (0 = free).
 @export var unlock_cost_coins: int = 0
+## Non-empty: the character unlocks when this campaign world's boss is beaten.
+@export var campaign_unlock_world: StringName = &""
