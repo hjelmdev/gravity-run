@@ -14,6 +14,9 @@ var bounce_count := 0
 var bounce_ticks := 0
 var retired := false
 var motion_speed_multiplier := 1.0
+## Presentation only. "mine_cart" draws the barrel as a mine cart (campaign cave
+## stages); the collision circle and motion are unchanged.
+var skin := ""
 var _local_render_motion := false
 var _previous_position := Vector2.ZERO
 var _previous_rotation := 0.0
@@ -152,22 +155,25 @@ func _draw() -> void:
 		detail_color = Color("143f57")
 	if is_rubber and bounce_ticks > 0:
 		body_color = Color("77e2d3")
-	draw_circle(Vector2(0.0, center_y), radius, body_color)
-	draw_arc(Vector2(0.0, center_y), radius - 8.0, 0.0, TAU, 24, detail_color, 4.0)
-	if is_rubber:
-		for stripe in range(3):
-			var stripe_x := float(stripe - 1) * radius * 0.52
-			draw_line(Vector2(stripe_x, center_y - radius * 0.54), Vector2(stripe_x, center_y + radius * 0.54), detail_color, 5.0)
-		if retired:
-			draw_line(Vector2(-radius * 0.44, center_y - 3.0), Vector2(radius * 0.44, center_y - 3.0), Color("b6e6dc"), 3.0)
-			draw_line(Vector2(-radius * 0.44, center_y + 3.0), Vector2(radius * 0.44, center_y + 3.0), Color("b6e6dc"), 3.0)
-	var first_start := Vector2(-radius * 0.55, -radius * 0.45).rotated(rendered_roll) + Vector2(0.0, center_y)
-	var first_end := Vector2(radius * 0.55, radius * 0.45).rotated(rendered_roll) + Vector2(0.0, center_y)
-	var second_start := Vector2(radius * 0.55, -radius * 0.45).rotated(rendered_roll) + Vector2(0.0, center_y)
-	var second_end := Vector2(-radius * 0.55, radius * 0.45).rotated(rendered_roll) + Vector2(0.0, center_y)
-	if not is_rubber:
-		draw_line(first_start, first_end, detail_color, 4.0)
-		draw_line(second_start, second_end, detail_color, 4.0)
+	if skin == "mine_cart":
+		_draw_mine_cart(radius, center_y, rendered_roll, is_rubber)
+	else:
+		draw_circle(Vector2(0.0, center_y), radius, body_color)
+		draw_arc(Vector2(0.0, center_y), radius - 8.0, 0.0, TAU, 24, detail_color, 4.0)
+		if is_rubber:
+			for stripe in range(3):
+				var stripe_x := float(stripe - 1) * radius * 0.52
+				draw_line(Vector2(stripe_x, center_y - radius * 0.54), Vector2(stripe_x, center_y + radius * 0.54), detail_color, 5.0)
+			if retired:
+				draw_line(Vector2(-radius * 0.44, center_y - 3.0), Vector2(radius * 0.44, center_y - 3.0), Color("b6e6dc"), 3.0)
+				draw_line(Vector2(-radius * 0.44, center_y + 3.0), Vector2(radius * 0.44, center_y + 3.0), Color("b6e6dc"), 3.0)
+		var first_start := Vector2(-radius * 0.55, -radius * 0.45).rotated(rendered_roll) + Vector2(0.0, center_y)
+		var first_end := Vector2(radius * 0.55, radius * 0.45).rotated(rendered_roll) + Vector2(0.0, center_y)
+		var second_start := Vector2(radius * 0.55, -radius * 0.45).rotated(rendered_roll) + Vector2(0.0, center_y)
+		var second_end := Vector2(-radius * 0.55, radius * 0.45).rotated(rendered_roll) + Vector2(0.0, center_y)
+		if not is_rubber:
+			draw_line(first_start, first_end, detail_color, 4.0)
+			draw_line(second_start, second_end, detail_color, 4.0)
 	if is_spiked:
 		for index in range(8):
 			var angle := TAU * float(index) / 8.0 + rendered_roll
@@ -179,3 +185,35 @@ func intersects_rect(rect: Rect2) -> bool:
 	var radius := HazardRules.barrel_radius(size.x, size.y)
 	var center := HazardRules.barrel_center(global_position, size.x, size.y, from_ceiling)
 	return HazardRules.circle_intersects_rect(center, radius, rect)
+
+## A mine cart that fits inside the barrel's collision circle: a tapered iron
+## body with a rim band and an ore pile, two spinning wheels under it.
+func _draw_mine_cart(radius: float, center_y: float, wheel_angle: float, teal: bool) -> void:
+	var ground := center_y + radius
+	var body_color := Color("3f8f8a") if teal else Color("9b5a3a")
+	var rim_color := Color("1c3f4a") if teal else Color("3b2a24")
+	var plank_color := body_color.darkened(0.25)
+	var top := center_y - radius * 0.38
+	var bottom := ground - radius * 0.42
+	var body := PackedVector2Array([
+		Vector2(-radius * 0.92, top), Vector2(radius * 0.92, top),
+		Vector2(radius * 0.68, bottom), Vector2(-radius * 0.68, bottom),
+	])
+	# Ore pile heaped above the rim.
+	var ore := Color("5b6670") if teal else Color("d1a94c")
+	draw_colored_polygon(PackedVector2Array([
+		Vector2(-radius * 0.80, top), Vector2(-radius * 0.5, top - radius * 0.34), Vector2(-radius * 0.15, top - radius * 0.2),
+		Vector2(radius * 0.2, top - radius * 0.42), Vector2(radius * 0.58, top - radius * 0.22), Vector2(radius * 0.80, top),
+	]), ore)
+	draw_colored_polygon(body, body_color)
+	draw_line(Vector2(-radius * 0.80, top + (bottom - top) * 0.5), Vector2(radius * 0.80, top + (bottom - top) * 0.5), plank_color, 2.0)
+	draw_line(Vector2(-radius * 0.2, top), Vector2(-radius * 0.14, bottom), plank_color, 2.0)
+	draw_line(Vector2(radius * 0.3, top), Vector2(radius * 0.25, bottom), plank_color, 2.0)
+	draw_rect(Rect2(Vector2(-radius * 0.98, top - 3.0), Vector2(radius * 1.96, 7.0)), rim_color)
+	var wheel_radius := radius * 0.24
+	for wheel_x in [-radius * 0.46, radius * 0.46]:
+		var wheel_center := Vector2(wheel_x, ground - wheel_radius)
+		draw_circle(wheel_center, wheel_radius, rim_color)
+		draw_circle(wheel_center, wheel_radius * 0.45, Color("b8b2a6"))
+		var spoke := Vector2.RIGHT.rotated(wheel_angle) * wheel_radius * 0.9
+		draw_line(wheel_center - spoke, wheel_center + spoke, Color("b8b2a6"), 2.0)

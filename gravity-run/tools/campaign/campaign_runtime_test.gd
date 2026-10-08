@@ -15,6 +15,7 @@ const Gen := preload("res://systems/course_generator.gd")
 const Builder := preload("res://systems/course_manifest_builder.gd")
 const CoinPlanner := preload("res://systems/shared_coin_planner.gd")
 const BiomeRendererScript := preload("res://biomes/biome_renderer.gd")
+const CampaignRunScript := preload("res://campaign/campaign_run.gd")
 const LevelTool := preload("res://tools/campaign/campaign_level_tool.gd")
 const TICK := 1.0 / 60.0
 
@@ -34,6 +35,17 @@ func _run() -> void:
 	Campaign.persist = false
 	Campaign.reset_progress()
 	_check_catalog()
+	_check_features_frozen()
+	_check_feature_channel()
+	_check_bat_sweep()
+	await _check_darkness_lights()
+	await _check_mine_carts()
+	await _check_feature_stage("cave_in", "floor", false)
+	await _check_feature_stage("cave_in", "floor", true)
+	await _check_feature_stage("bat_swarm", "floor", false)
+	await _check_feature_stage("bat_swarm", "floor", true)
+	await _check_feature_stage("bat_swarm", "ceiling", false)
+	await _check_feature_stage("bat_swarm", "ceiling", true)
 	await _check_synthetic_stage()
 	await _check_failed_attempt()
 	await _check_boss(false)
@@ -118,6 +130,202 @@ static func _foreign_encounters(world_id: StringName) -> Array:
 		&"haunted":
 			return ["lava_crack", "volcano", "cave_icicle", "lava_tidal_pool"]
 	return ["ghost", "lava_crack", "volcano", "cave_icicle"]
+
+## Frozen feature positions per cave stage: [kind, at]. A change here is a
+## change to the stage, so it has to be deliberate.
+const FROZEN_FEATURES := {
+	"2-1": [],
+	"2-2": [["bat_swarm", 2960.0], ["bat_swarm", 6630.0], ["bat_swarm", 13120.0]],
+	"2-3": [["bat_swarm", 4150.0], ["bat_swarm", 6990.0]],
+	"2-4": [["cave_in", 9630.0], ["cave_in", 13880.0], ["cave_in", 17350.0]],
+	"2-5": [["darkness", 5400.0], ["darkness", 13950.0]],
+	"2-6": [["darkness", 13920.0], ["cave_in", 22010.0]],
+}
+
+func _check_features_frozen() -> void:
+	for spec in CampaignCatalog.CAVE_STAGES:
+		var level := CampaignCatalog.get_level(spec.id)
+		var frozen: Array = FROZEN_FEATURES.get(str(spec.id), [])
+		var actual: Array = []
+		for feature in level.features:
+			actual.append([str(feature.kind), float(feature.at)])
+		_check(actual == frozen, "%s features are frozen at %s" % [spec.id, str(frozen)])
+		if level.features.is_empty():
+			continue
+		var course := LevelTool.plan_level(level)
+		var clean := true
+		for feature in level.features:
+			var problems := CampaignFeatures.conflicts(feature, course.planned, level.stars, level.length_px, course.surface)
+			if not problems.is_empty():
+				clean = false
+				print("  ", spec.id, " ", feature.kind, "@", feature.at, " ", problems)
+		_check(clean, "%s features sit in quiet windows clear of generated events, holes, steps, slopes and stars" % spec.id)
+		_check(CampaignFeatures.overlaps(level.features).is_empty(), "%s features do not crowd each other" % spec.id)
+		# The channel must hand main every event of the stage's features.
+		var expected := 0
+		for feature in level.features:
+			expected += CampaignFeatures.events_of(feature).size()
+		var run := CampaignRunScript.new()
+		run.setup(level)
+		var popped := run.pop_feature_events(1.0e9, 1.0e9)
+		_check(popped.size() == expected, "%s pops all %d feature events (%d)" % [spec.id, expected, popped.size()])
+		run.free()
+	BiomeRendererScript.set_locked_biome(&"")
+	_check(CampaignCatalog.get_level(&"2-2").new_features.has("bat_swarm") and CampaignCatalog.get_level(&"2-4").new_features.has("cave_in"), "2-2 introduces the bat swarm and 2-4 the cave-in")
+	_check(CampaignRunScript.hazard_display_name("bat_swarm") == "bat swarm" and not CampaignRunScript.hazard_tip("cave_in").is_empty() and not CampaignRunScript.hazard_tip("bat_swarm").is_empty(), "the new hazards have a name and a tip")
+	TranslationServer.set_locale("sv")
+	_check(tr(CampaignRunScript.hazard_tip("bat_swarm")) != CampaignRunScript.hazard_tip("bat_swarm") and tr("cave-in") == "ras" and tr("bat swarm") == "fladdermussvärm", "the new hazard callouts are translated to Swedish")
+	TranslationServer.set_locale("en")
+
+## The channel pops events by spawn line or early lead and announces new kinds.
+func _check_feature_channel() -> void:
+	var level := CampaignCatalog.get_level(&"2-4")
+	var run := CampaignRunScript.new()
+	run.setup(level)
+	var first_at := float(level.features[0].at)
+	_check(run.pop_feature_events(0.0, 1000.0).is_empty(), "no feature event pops before its time")
+	var early := run.pop_feature_events(first_at - 1500.0, first_at - 1500.0 + 1000.0)
+	_check(early.size() == 1 and str(early[0].kind) == "rock" and float(early[0].course_distance) == first_at, "a cave-in's rocks pop early (before the spawn line) so they can wake up (%d)" % early.size())
+	early.append_array(run.pop_feature_events(first_at - 1100.0, first_at - 1100.0 + 1000.0))
+	_check(early.size() == 3 and run.pop_feature_events(first_at - 1100.0, first_at - 1100.0 + 1000.0).is_empty(), "feature events pop once each")
+	var announced: Array[String] = []
+	run.callout.connect(func(kind: String, _heading: String, title: String, _description: String) -> void:
+		if kind == "hazard":
+			announced.append(title))
+	run.on_event_spawned(early[0])
+	run.on_event_spawned(early[1])
+	_check(announced.size() == 1 and announced[0] == "Cave-in", "the first cave-in rock shows the New hazard callout once (%s)" % str(announced))
+	run.free()
+
+## The swarm moves while the runner moves: the 60 Hz sweep must see a touch
+## that happens only because the swarm slid into the runner.
+func _check_bat_sweep() -> void:
+	var swarm := BatSwarm.new()
+	add_child(swarm)
+	swarm.configure_swarm(CampaignFeatures.events_of({"kind": "bat_swarm", "at": 1000.0, "side": "floor"})[0], 1180.0, 460.0)
+	swarm.phase = "flying"
+	var rect := swarm.get_hitbox_rect()
+	var runner_size := Vector2(34.0, 44.0)
+	# Runner standing just left of the swarm, the swarm slides 6 px into it.
+	var start := Rect2(Vector2(rect.position.x - runner_size.x - 3.0, 416.0), runner_size)
+	swarm.advance_motion(1.0 / 60.0, 10.0, Vector2(start.position.x, 438.0), Callable(), Callable())
+	var moved := swarm.get_hitbox_rect()
+	_check(absf((rect.position.x - moved.position.x) - 6.0) < 0.001, "the swarm slides 0.6x the runner's movement")
+	var fraction := swarm.swept_contact_fraction(start, start)
+	_check(fraction > 0.4 and fraction < 0.6, "a swarm sliding into a standing runner is caught by the sweep (%.2f)" % fraction)
+	var clear := Rect2(Vector2(rect.position.x - runner_size.x - 20.0, 416.0), runner_size)
+	_check(swarm.swept_contact_fraction(clear, clear) < 0.0, "a runner clear of the swarm's path is not hit")
+	var other_lane := Rect2(Vector2(rect.position.x, 80.0), runner_size)
+	_check(swarm.swept_contact_fraction(other_lane, other_lane) < 0.0, "a runner on the other surface is not hit")
+	swarm.free()
+
+func _check_darkness_lights() -> void:
+	var level := CampaignCatalog.get_level(&"2-5")
+	_check(CaveDarkness.FORWARD_VISIBLE >= 250.0, "the dark section always shows at least 250 px ahead of the runner")
+	var run := CampaignRunScript.new()
+	add_child(run)
+	run.setup(level)
+	_check(run.has_darkness(), "2-5 has a dark hall")
+	var section: Vector2 = run._darkness.sections[0]
+	_check(CaveDarkness.strength_for(section.x - 800.0, run._darkness.sections) == 0.0 and CaveDarkness.strength_for((section.x + section.y) * 0.5, run._darkness.sections) == 1.0, "the dark section fades in and out of full darkness")
+	var runner_x := 180.0 + section.x + 1000.0
+	var hazards: Array[Node2D] = []
+	for offset in [140.0, 260.0, 430.0, 700.0]:
+		var node := Node2D.new()
+		node.position = Vector2(runner_x + offset, 400.0)
+		add_child(node)
+		hazards.append(node)
+	var surface := func(_x: float, ceiling: bool) -> float: return 80.0 if ceiling else 460.0
+	run.update_darkness(runner_x - 180.0, 960.0, Vector2(runner_x, 438.0), hazards, surface)
+	var material: ShaderMaterial = run._darkness.material
+	var lights: PackedVector4Array = material.get_shader_parameter("lights")
+	var count := int(material.get_shader_parameter("light_count"))
+	var all_lit := true
+	for node in hazards:
+		var covered := false
+		for index in range(count):
+			var light := lights[index]
+			if Vector2(light.x, light.y).distance_to(node.position) <= light.z * 0.4:
+				covered = true
+		var inside_window := node.position.x - runner_x <= CaveDarkness.FORWARD_VISIBLE
+		all_lit = all_lit and (covered or inside_window)
+	_check(all_lit and count >= 3, "every hazard ahead of the runner is lit inside the dark hall (%d lights)" % count)
+	for node in hazards:
+		node.free()
+	run.free()
+
+func _check_mine_carts() -> void:
+	var cave_game: Node = null
+	Campaign.start_level(CampaignCatalog.get_level(&"2-3"))
+	cave_game = await _make_game()
+	cave_game.call("_spawn_obstacle_scene", preload("res://hazards/barrel.tscn"), 54.0, 54.0, false, 900.0)
+	var cart: Node2D = (cave_game.get("obstacles") as Array).back()
+	_check(str(cart.get("skin")) == "mine_cart", "barrels on a cave stage are mine carts")
+	_check(cart.is_in_group("barrels") and Vector2(cart.get("size")) == Vector2(54.0, 54.0), "the mine cart is still a barrel for collision")
+	cave_game.queue_free()
+	await get_tree().process_frame
+	Campaign.clear_active()
+	Campaign.start_level(CampaignCatalog.get_level(&"1-3"))
+	var meadow_game: Node = await _make_game()
+	meadow_game.call("_spawn_obstacle_scene", preload("res://hazards/barrel.tscn"), 54.0, 54.0, false, 900.0)
+	var barrel: Node2D = (meadow_game.get("obstacles") as Array).back()
+	_check(str(barrel.get("skin")).is_empty(), "barrels on other stages stay barrels")
+	meadow_game.queue_free()
+	await get_tree().process_frame
+	Campaign.clear_active()
+	var endless: Node = await _make_game()
+	endless.call("_spawn_obstacle_scene", preload("res://hazards/barrel.tscn"), 54.0, 54.0, false, 900.0)
+	var plain: Node2D = (endless.get("obstacles") as Array).back()
+	_check(str(plain.get("skin")).is_empty(), "endless barrels stay barrels")
+	endless.queue_free()
+	await get_tree().process_frame
+
+## A short stage with one hazardous feature and no generated events. A runner
+## in the wrong lane dies at the feature; one that follows the feature's safe
+## side reaches the flag. `follow` picks which runner this is.
+func _check_feature_stage(kind: String, side: String, follow: bool) -> void:
+	var feature := {"kind": kind, "at": 3600.0}
+	if kind == "bat_swarm":
+		feature["side"] = side
+	var level := CampaignLevel.new()
+	level.level_id = &"T-F"
+	level.world_id = &"test"
+	level.title = "Feature test"
+	level.seed_value = 4243
+	level.generator_version = CampaignCatalog.CAMPAIGN_GENERATOR_VERSION
+	level.ruleset = CampaignCatalog.make_ruleset(&"T-F", &"cave", ["ceiling_gap"], 0.6, 1.0)
+	level.length_px = 8000.0
+	level.features.append(feature)
+	Campaign.reset_progress()
+	Campaign.start_level(level)
+	var game: Node = await _make_game()
+	game.get("_campaign_run").set("generated_events_enabled", false)
+	var state := {"camp": not follow}
+	# "follow" takes the feature's safe side; otherwise the runner stays on the
+	# surface the feature hits (cave-in and floor swarm: the floor; ceiling
+	# swarm: the ceiling).
+	var wrong_side := -1 if (kind == "bat_swarm" and side == "ceiling") else 1
+	var bot := func(g: Node) -> void:
+		var player: Node = g.get_node("Player")
+		var course := float(player.get("world_x")) - 180.0
+		var required := CampaignFeatures.required_side_at(feature, course)
+		var target := wrong_side
+		if follow:
+			target = required if required != 0 else 1
+		if target != int(player.call("get_gravity_direction")) and bool(player.get("grounded")) and float(player.call("get_cooldown_left")) <= 0.0:
+			player.call("_try_flip", target)
+	var ticks := _step(game, 3600, bot)
+	var died := bool(game.get("game_over")) and not Campaign.is_completed(level)
+	var death_distance := float(game.get("course_distance"))
+	var label := "%s (%s) %s runner" % [kind, side if kind == "bat_swarm" else "rocks", "safe-side" if follow else "wrong-lane"]
+	if follow:
+		_check(Campaign.is_completed(level), "%s reaches the flag (%d ticks)" % [label, ticks])
+	else:
+		var span := CampaignFeatures.span_of(feature)
+		_check(died and death_distance >= span.x and death_distance <= span.y, "%s dies at the feature (course %.0f, span %.0f..%.0f, over %s, completed %s)" % [label, death_distance, span.x, span.y, str(game.get("game_over")), str(Campaign.is_completed(level))])
+	game.queue_free()
+	await get_tree().process_frame
+	Campaign.clear_active()
 
 func _make_game() -> Node:
 	var game := MainScene.instantiate() as Node

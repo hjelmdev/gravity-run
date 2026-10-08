@@ -1885,3 +1885,15 @@ msgstr "Var på dess sida och flippa bort strax före den"
 
 msgid "New runner unlocked: %s"
 msgstr "Ny löpare upplåst: %s"
+
+msgid "cave-in"
+msgstr "ras"
+
+msgid "bat swarm"
+msgstr "fladdermussvärm"
+
+msgid "Dust in the ceiling: the rocks come down, so run on the ceiling"
+msgstr "Damm i taket: stenarna rasar ner, så spring i taket"
+
+msgid "They sweep along one side: be on the other"
+msgstr "De sveper längs ena sidan: var på den andra"

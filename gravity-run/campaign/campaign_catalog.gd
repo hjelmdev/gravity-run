@@ -67,6 +67,9 @@ const MEADOW_STAGES := [
 ## around 1-4's level and teaches one new generated hazard (icicles); the rest
 ## of the cave's surprises are scripted features (see campaign_run.gd).
 ## "weights" multiplies a profile's weight on top of the new-hazard boost.
+## "features" are scripted extras (campaign_features.gd) frozen by
+## `campaign_level_tool.gd -- features`; "new_features" are the feature kinds a
+## stage introduces with a "New hazard" callout.
 const CAVE_STAGES := [
 	{
 		"id": &"2-1", "title": "Dripstones", "intro": "New: icicles",
@@ -83,6 +86,8 @@ const CAVE_STAGES := [
 		"density": 1.2, "margin": 1.2, "length": 18000.0,
 		"seed": 2254,
 		"stars": [Vector2(4881.66, 150.97), Vector2(10253.75, 254.00), Vector2(13663.87, 418.00)],
+		"features": [{"kind": "bat_swarm", "at": 2960.0, "side": "ceiling"}, {"kind": "bat_swarm", "at": 6630.0, "side": "ceiling"}, {"kind": "bat_swarm", "at": 13120.0, "side": "floor"}],
+		"new_features": ["bat_swarm"],
 	},
 	{
 		"id": &"2-3", "title": "Mine Run", "intro": "Mine carts roll through the tunnels",
@@ -91,6 +96,7 @@ const CAVE_STAGES := [
 		"density": 1.3, "margin": 1.15, "length": 19500.0,
 		"seed": 2377,
 		"stars": [Vector2(5403.52, 114.00), Vector2(10652.77, 114.00), Vector2(14306.41, 296.00)],
+		"features": [{"kind": "bat_swarm", "at": 4150.0, "side": "ceiling"}, {"kind": "bat_swarm", "at": 6990.0, "side": "floor"}],
 	},
 	{
 		"id": &"2-4", "title": "Cave-in", "intro": "Rocks and icicles fall together",
@@ -99,6 +105,8 @@ const CAVE_STAGES := [
 		"density": 1.4, "margin": 1.1, "length": 21000.0,
 		"seed": 2463,
 		"stars": [Vector2(5487.91, 114.00), Vector2(11542.10, 222.00), Vector2(15658.60, 150.00)],
+		"features": [{"kind": "cave_in", "at": 9630.0, "count": 3}, {"kind": "cave_in", "at": 13880.0, "count": 4}, {"kind": "cave_in", "at": 17350.0, "count": 3}],
+		"new_features": ["cave_in"],
 	},
 	{
 		"id": &"2-5", "title": "Crystal Hall", "intro": "A dark hall lit by crystals",
@@ -106,6 +114,7 @@ const CAVE_STAGES := [
 		"density": 1.45, "margin": 1.05, "length": 22500.0,
 		"seed": 2507,
 		"stars": [Vector2(5559.09, 114.00), Vector2(12068.22, 254.00), Vector2(18011.33, 106.00)],
+		"features": [{"kind": "darkness", "at": 5400.0, "length": 3600.0}, {"kind": "darkness", "at": 13950.0, "length": 4200.0}],
 	},
 	{
 		"id": &"2-6", "title": "Cave Exam", "intro": "Everything the cave has taught you",
@@ -113,6 +122,7 @@ const CAVE_STAGES := [
 		"density": 1.5, "margin": 1.0, "length": 24000.0,
 		"seed": 2601,
 		"stars": [Vector2(6048.69, 426.00), Vector2(12638.04, 114.00), Vector2(18938.52, 426.00)],
+		"features": [{"kind": "darkness", "at": 13920.0, "length": 3200.0}, {"kind": "cave_in", "at": 22010.0, "count": 3}],
 	},
 ]
 
@@ -292,6 +302,8 @@ static func _make_stage(world_id: StringName, biome_id: StringName, index: int, 
 	level.length_px = float(spec.length)
 	level.stars = PackedVector2Array(spec.stars)
 	level.new_hazards = PackedStringArray(spec.new)
+	level.new_features = PackedStringArray(spec.get("new_features", []))
+	level.features.assign(spec.get("features", []))
 	return level
 
 static func _make_boss(world_id: StringName, biome_id: StringName, index: int, level_id: StringName, title: String, intro: String, boss_id: StringName) -> CampaignLevel:

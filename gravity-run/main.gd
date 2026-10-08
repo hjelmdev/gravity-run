@@ -52,6 +52,8 @@ const CampaignRunScript := preload("res://campaign/campaign_run.gd")
 ## Per-world campaign music, tempo (the run cycle puts a footstep on every
 ## eighth note) and star sound, keyed by presentation biome.
 const CampaignAudio := preload("res://campaign/campaign_audio.gd")
+const CAMPAIGN_FEATURES_SCRIPT := preload("res://campaign/campaign_features.gd")
+const BAT_SWARM_SCRIPT := preload("res://hazards/bat_swarm.gd")
 const CampaignResultPanelScript := preload("res://campaign/campaign_result_panel.gd")
 const CampaignBannerScript := preload("res://campaign/campaign_banner.gd")
 ## Ticks the runner keeps running past the finish line before the result.
@@ -370,6 +372,7 @@ func _setup_campaign_run() -> void:
 	_campaign_run.connect("stars_changed", Callable(hud, "set_campaign_stars"))
 	_campaign_run.connect("stars_changed", _on_campaign_star_collected)
 	_campaign_run.connect("boss_changed", Callable(hud, "set_campaign_boss"))
+	_campaign_run.connect("feature_cue", Callable(self, "_on_campaign_feature_cue"))
 	if not _campaign_level.intro.is_empty():
 		_campaign_banner_node().show_banner("boss" if _campaign_level.is_boss() else "stage", str(_campaign_level.level_id), tr(_campaign_level.title), tr(_campaign_level.intro))
 	if _campaign_level.is_boss():
@@ -486,6 +489,12 @@ func _process(delta: float) -> void:
 	_sync_run_cycle_to_music()
 	if is_instance_valid(_campaign_run):
 		_campaign_run.call("update_presentation", float(camera.get("left")), screen_width, Callable(self, "_surface_y_at"))
+		if bool(_campaign_run.call("has_darkness")):
+			var lit_nodes: Array = []
+			lit_nodes.append_array(obstacles)
+			lit_nodes.append_array(gaps)
+			lit_nodes.append_array(slopes)
+			_campaign_run.call("update_darkness", float(camera.get("left")), screen_width, _render_player_position, lit_nodes, Callable(self, "_surface_y_at"))
 	_update_singleplayer_rock_warning_pulse(delta)
 	_ghost_warning_pulse.call("advance", delta)
 	_render_presentation_ready_usec = Time.get_ticks_usec()
@@ -746,6 +755,8 @@ func _physics_process(delta: float) -> void:
 				_spawn_obstacle_scene(BARREL_SCENE, HAZARD_RULES_SCRIPT.BARREL_WIDTH, float(landed_barrel.height), false, float(landed_barrel.x), float(landed_barrel.speed), bool(landed_barrel.spiked))
 				if not obstacles.is_empty():
 					obstacles[obstacles.size() - 1].set("roll_angle", float(landed_barrel.roll))
+			for feature_event in _campaign_run.call("pop_feature_events", course_distance, spawn_line):
+				_spawn_course_event(feature_event)
 		if RUN_LOOT_ENABLED:
 			for loot_event in loot_spawn_planner.pop_events_until(spawn_line):
 				_spawn_loot_pickup(loot_event)
@@ -1174,13 +1185,18 @@ func _spawn_course_event(event: Dictionary) -> void:
 		&"rock":
 			var is_icicle := _active_seed_version >= COURSE_GENERATOR_SCRIPT.GENERATOR_VERSION_17 and str(event.get("id", "")) == "cave_icicle"
 			var near_terrain := false
-			for planned in course_generator.get_planned_events():
+			# Feature rocks sit in a quiet stretch with no terrain events, checked
+			# by the level tool and the campaign runtime test.
+			for planned in ([] if bool(event.get("feature_event", false)) else course_generator.get_planned_events()):
 				var planned_kind := str(planned.get("kind", ""))
 				if planned_kind in ["step", "slope"] or (planned_kind == "gap" and not (is_icicle and not bool(planned.get("from_ceiling", false)))):
 					if absf(float(planned.get("course_distance", 0.0)) - float(event.get("course_distance", 0.0))) < 420.0:
 						near_terrain = true
 						break
-			if not near_terrain and _floor_surface_y(event_x) - _ceiling_surface_y(event_x) >= 260.0:
+			# Scripted feature rocks (cave-ins) are low and wide-spaced; they keep a
+			# route on the other surface at a smaller lane height than generated rocks.
+			var min_lane := CAMPAIGN_FEATURES_SCRIPT.ROCK_MIN_LANE if bool(event.get("feature_event", false)) else 260.0
+			if not near_terrain and _floor_surface_y(event_x) - _ceiling_surface_y(event_x) >= min_lane:
 				var rock := FALLING_ROCK_SCENE.instantiate() as Node2D
 				var rock_event_id := _singleplayer_rock_key(event)
 				rock.connect("impact_started", Callable(self, "_on_rock_impact_started"))
@@ -1198,6 +1214,8 @@ func _spawn_course_event(event: Dictionary) -> void:
 				rock.name = "FallingRock_%s" % rock_event_id
 				add_child(rock)
 				obstacles.append(rock)
+		&"bat_swarm":
+			_spawn_bat_swarm(event, event_x)
 		&"saw":
 			var saw_event := _resolve_singleplayer_saw_event(event)
 			if saw_event.is_empty():
@@ -1249,6 +1267,31 @@ func _spawn_course_event(event: Dictionary) -> void:
 			_spawn_singleplayer_lava_event(event, event_x)
 		_:
 			_spawn_custom_course_event(event, event_x)
+
+## Campaign cave feature: a flapping swarm in one lane (see hazards/bat_swarm.gd).
+func _spawn_bat_swarm(event: Dictionary, event_x: float) -> void:
+	var from_ceiling := bool(event.get("from_ceiling", false))
+	var lane_clearance := _floor_surface_y(event_x) - _ceiling_surface_y(event_x)
+	if lane_clearance < float(event.get("height", 84.0)) + 44.0 + 12.0:
+		return
+	var swarm := BAT_SWARM_SCRIPT.new() as Node2D
+	swarm.name = "BatSwarm_%.0f" % float(event.get("course_distance", 0.0))
+	swarm.call("configure_swarm", event, event_x, _ceiling_surface_y(event_x) if from_ceiling else _floor_surface_y(event_x))
+	swarm.connect("warning_started", Callable(self, "_on_bat_swarm_warning"))
+	add_child(swarm)
+	obstacles.append(swarm)
+
+func _on_bat_swarm_warning(swarm: Node2D) -> void:
+	_play_cave_sfx("cave_bat_screech", "%s|bat_swarm|%s" % [_singleplayer_audio_round_id, str(swarm.name)], _is_singleplayer_event_audible(swarm.global_position.x))
+
+func _on_campaign_feature_cue(sound: String, key: String) -> void:
+	_play_cave_sfx(sound, "%s|%s" % [_singleplayer_audio_round_id, key])
+
+## Cave sounds are added separately; until a sound exists this does nothing.
+func _play_cave_sfx(sound: String, event_key: String, audible: bool = true) -> bool:
+	if not SfxController.STREAMS.has(sound):
+		return false
+	return _play_singleplayer_sfx(sound, event_key, audible)
 
 func _spawn_singleplayer_lava_event(source_event: Dictionary, target_x: float) -> void:
 	var horizon := ceili(maxf(float(course_distance) + screen_width + 2400.0, float(source_event.get("course_distance", 0.0)) + 1.0))
@@ -1577,6 +1620,9 @@ func _spawn_obstacle_scene(scene: PackedScene, width: float, height: float, from
 	obstacle.connect("destroyed", Callable(self, "_on_obstacle_destroyed"))
 	if obstacle.is_in_group("barrels") and obstacle.has_signal("destruction_started"):
 		_connect_barrel_audio(obstacle)
+	# Campaign cave stages draw rolling barrels as mine carts (skin only).
+	if obstacle.is_in_group("barrels") and _campaign_level != null and _campaign_level.world_id == &"cave":
+		obstacle.set("skin", "mine_cart")
 	if obstacle.has_method("set_motion_speed_multiplier"):
 		obstacle.call("set_motion_speed_multiplier", motion_speed_multiplier)
 	if obstacle.has_method("set_spiked"):
@@ -1817,6 +1863,8 @@ func _earliest_lethal_contact_fraction(start_rect: Rect2, finish_rect: Rect2) ->
 				var candidate := HAZARD_RULES_SCRIPT.swept_rect_polygon_fraction(start_rect, displacement, triangle)
 				if candidate >= 0.0 and (fraction < 0.0 or candidate < fraction):
 					fraction = candidate
+		elif obstacle.is_in_group("bat_swarms"):
+			fraction = float(obstacle.call("swept_contact_fraction", start_rect, finish_rect))
 		elif obstacle.is_in_group("barrels"):
 			var barrel_size: Vector2 = obstacle.get("size")
 			var center := HAZARD_RULES_SCRIPT.barrel_center(obstacle.global_position, barrel_size.x, barrel_size.y, bool(obstacle.get("from_ceiling")))

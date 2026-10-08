@@ -32,6 +32,14 @@ const FINISH_CALM_DISTANCE := 1200.0
 ## Biome the stage is drawn with. Empty means the ruleset's locked biome. The
 ## meadow look is presentation only; its encounters are generated as classic.
 @export var presentation_biome: StringName = &""
+## Scripted features (see campaign_features.gd), frozen by the level tool:
+## [{"kind": "cave_in", "at": 8200.0}, {"kind": "bat_swarm", "at": 9100.0, "side": "ceiling"}, ...]
+## "at" is a course distance (0 at the start line). Generated encounters never
+## change; these are extra events the campaign run adds.
+@export var features: Array[Dictionary] = []
+## Scripted feature kinds this stage introduces; the first one spawned shows
+## the "New hazard" callout (hazard_display_name/hazard_tip in campaign_run.gd).
+@export var new_features := PackedStringArray()
 ## Non-empty for a scripted boss stage (no generated hazards).
 @export var boss_id: StringName = &""
 
@@ -68,4 +76,10 @@ func get_identity() -> String:
 	var star_parts: Array[String] = []
 	for star in stars:
 		star_parts.append("%.0f,%.0f" % [star.x, star.y])
-	return "%s|%s|%d|%s|%s" % [level_id, str(definition.call("get_course_identity")), int(length_px), ";".join(star_parts), String(boss_id)]
+	var identity := "%s|%s|%d|%s|%s" % [level_id, str(definition.call("get_course_identity")), int(length_px), ";".join(star_parts), String(boss_id)]
+	if not features.is_empty():
+		var feature_parts: Array[String] = []
+		for feature in features:
+			feature_parts.append("%s@%.0f%s" % [feature.get("kind", ""), float(feature.get("at", 0.0)), str(feature.get("side", ""))[0] if feature.has("side") else ""])
+		identity += "|" + ";".join(feature_parts)
+	return identity

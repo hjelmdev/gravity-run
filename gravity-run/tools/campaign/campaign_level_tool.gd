@@ -12,6 +12,16 @@ extends SceneTree
 ##   star 3: the middle coin of a "risk" row late in the stage when one exists
 ##           (a row that sits in front of a hazard and forces a late flip).
 ## The best seed is printed as catalog-ready data. Not part of the game.
+##
+## Scripted features (campaign_features.gd) are placed afterwards, on the frozen
+## seed and stars of each stage:
+##
+##   godot --headless --path . -s res://tools/campaign/campaign_level_tool.gd -- features [stage_id or prefix]
+##
+## For every stage in FEATURE_PLAN it plans the stage's course, finds the quiet
+## windows (no generated event, gap, slope/step or star within a safe margin of
+## the feature's whole span), puts each feature at the quiet position nearest its
+## target fraction of the stage and prints catalog-ready "features" data.
 
 const Gen := preload("res://systems/course_generator.gd")
 const Builder := preload("res://systems/course_manifest_builder.gd")
@@ -22,9 +32,27 @@ const FLOOR_Y := 460.0
 const CEILING_Y := 80.0
 const START_X := 180.0
 const STAR_WINDOWS := [Vector2(0.16, 0.34), Vector2(0.44, 0.62), Vector2(0.72, 0.90)]
+const WORLD_HEIGHT := 540.0
+## [kind, target fraction of the stage, extras]. Hazardous features snap to the
+## nearest quiet position; darkness is presentation only and stays where put.
+const FEATURE_PLAN := {
+	"2-2": [["bat_swarm", 0.28, {"side": "ceiling"}], ["bat_swarm", 0.52, {"side": "floor"}], ["bat_swarm", 0.78, {"side": "ceiling"}]],
+	"2-3": [["bat_swarm", 0.40, {"side": "floor"}], ["bat_swarm", 0.72, {"side": "ceiling"}]],
+	"2-4": [["cave_in", 0.30, {"count": 3}], ["cave_in", 0.58, {"count": 4}], ["cave_in", 0.80, {"count": 3}]],
+	"2-5": [["darkness", 0.24, {"length": 3600.0}], ["darkness", 0.62, {"length": 4200.0}]],
+	"2-6": [["cave_in", 0.93, {"count": 3}], ["darkness", 0.58, {"length": 3200.0}], ["bat_swarm", 0.30, {"side": "floor"}], ["bat_swarm", 0.84, {"side": "ceiling"}]],
+}
 
 func _initialize() -> void:
 	var args := OS.get_cmdline_user_args()
+	if args.size() > 0 and args[0] == "features":
+		var only := args[1] if args.size() > 1 else ""
+		for table in Catalog.stage_tables():
+			for spec in table[2]:
+				if FEATURE_PLAN.has(str(spec.id)) and (only.is_empty() or String(spec.id).begins_with(only)):
+					_print_features(spec, table[1])
+		quit(0)
+		return
 	var seeds_per_stage := int(args[0]) if args.size() > 0 else 12
 	var only_stage := args[1] if args.size() > 1 else ""
 	for table in Catalog.stage_tables():
@@ -181,3 +209,74 @@ static func gap_conflicts(resolved: Array, cutoff_x: float) -> int:
 			if a.x - GAP_CLEARANCE < b.y and b.x - GAP_CLEARANCE < a.y:
 				conflicts += 1
 	return conflicts
+
+## Plans a stage's course with its frozen seed and returns what feature
+## placement needs: the generated events, the surface index and the level.
+static func plan_course(spec: Dictionary, biome: StringName) -> Dictionary:
+	var level := CampaignLevel.new()
+	level.level_id = spec.id
+	level.seed_value = int(spec.seed)
+	level.generator_version = Catalog.CAMPAIGN_GENERATOR_VERSION
+	level.ruleset = Catalog.make_ruleset(spec.id, biome, spec.profiles, float(spec.density), float(spec.margin), Catalog.stage_weights(spec))
+	level.length_px = float(spec.length)
+	return plan_level(level)
+
+## Same for an already built level.
+static func plan_level(level: CampaignLevel) -> Dictionary:
+	BiomeRendererScript.set_locked_biome(level.get_locked_biome())
+	var gen = Gen.new()
+	gen.configure_run_definition(level.create_run_definition())
+	gen.ensure_horizon(level.length_px + 6000.0, 500.0, 900.0, Gen.EVENT_SPAWN_LEAD_DISTANCE)
+	var planned: Array[Dictionary] = gen.get_planned_events()
+	var builder = Builder.new()
+	var offset := BiomeRendererScript.start_biome_offset_for_seed(level.seed_value, level.generator_version)
+	var resolved: Array[Dictionary] = builder.resolve_runtime_events(planned, ceili(level.length_px + 4500.0), level.generator_version, offset)
+	var surface_index := CourseSurfaceIndex.new()
+	surface_index.configure(resolved, FLOOR_Y, CEILING_Y)
+	return {"level": level, "planned": planned, "surface": func(x: float, ceiling: bool) -> float: return float(surface_index.surface_at(x, ceiling).get("y", 0.0))}
+
+## Quiet position for every planned feature of a stage (stars and seed come
+## from the catalog spec and stay untouched).
+static func pick_features(spec: Dictionary, biome: StringName) -> Array[Dictionary]:
+	var course := plan_course(spec, biome)
+	var length := float(spec.length)
+	var stars := PackedVector2Array(spec.stars)
+	var chosen: Array[Dictionary] = []
+	for entry in FEATURE_PLAN.get(str(spec.id), []):
+		var kind := str(entry[0])
+		var extras: Dictionary = entry[2]
+		var target := length * float(entry[1])
+		var best: Dictionary = {}
+		var best_distance := INF
+		var at := CampaignFeatures.MIN_START
+		while at < length - 1200.0:
+			var feature := {"kind": kind, "at": at}
+			feature.merge(extras)
+			var distance := absf(at - target)
+			if distance < best_distance and CampaignFeatures.conflicts(feature, course.planned, stars, length, course.surface).is_empty():
+				var trial := chosen.duplicate()
+				trial.append(feature)
+				if CampaignFeatures.overlaps(trial).is_empty():
+					best = feature
+					best_distance = distance
+			at += 10.0
+		if best.is_empty():
+			push_warning("%s: no quiet position for %s near %.0f" % [spec.id, kind, target])
+			continue
+		chosen.append(best)
+	chosen.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.at) < float(b.at))
+	return chosen
+
+func _print_features(spec: Dictionary, biome: StringName) -> void:
+	var features := pick_features(spec, biome)
+	var parts: Array[String] = []
+	for feature in features:
+		var keys: Array[String] = []
+		for key in ["kind", "at", "side", "count", "length"]:
+			if feature.has(key):
+				var value: Variant = feature[key]
+				keys.append("\"%s\": %s" % [key, ("\"%s\"" % value) if value is String else ("%.1f" % float(value) if key in ["at", "length"] else str(value))])
+		parts.append("{%s}" % ", ".join(keys))
+		var span := CampaignFeatures.span_of(feature)
+		print("FEATURE %s %s at=%.0f span=%.0f..%.0f" % [spec.id, feature.kind, feature.at, span.x, span.y])
+	print("DATA %s \"features\": [%s]," % [spec.id, ", ".join(parts)])

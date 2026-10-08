@@ -8,6 +8,8 @@ extends Node2D
 signal callout(kind: String, heading: String, title: String, description: String)
 signal stars_changed(collected: int, total: int)
 signal boss_changed(hp: int, max_hp: int)
+## A scripted feature wants a sound (main.gd plays it when the sound exists).
+signal feature_cue(sound: String, key: String)
 
 const GravityStarScript := preload("res://campaign/gravity_star.gd")
 const FinishLineScript := preload("res://campaign/finish_line.gd")
@@ -19,6 +21,9 @@ const GiantIcicleScript := preload("res://campaign/giant_icicle.gd")
 const GhostKingViewScript := preload("res://campaign/ghost_king_view.gd")
 const BossLanternScript := preload("res://campaign/boss_lantern.gd")
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
+const CaveDarknessScript := preload("res://campaign/cave_darkness.gd")
+const CaveCrystalsScript := preload("res://campaign/cave_crystals.gd")
+const CaveInDustScript := preload("res://campaign/cave_in_dust.gd")
 const COURSE_START_X := 180.0
 ## Rullaren's thrown barrels: the throw covers this much course distance
 ## (about 0.3 s of running), then the barrel is an ordinary obstacle. Views
@@ -33,6 +38,8 @@ var level: CampaignLevel
 var boss
 var star_mask := 0
 var finished := false
+## Tests turn this off to run a stage with its scripted features alone.
+var generated_events_enabled := true
 var _stars: Array[Node2D] = []
 var _finish_line: Node2D
 var _confetti: Node2D
@@ -47,6 +54,13 @@ var _last_plate_distance := -INF
 var _last_course_distance := 0.0
 var _thrown_barrels: Array[Dictionary] = []
 var _throw_serial := 0
+## Feature events not yet handed to main, ordered by course distance.
+var _feature_events: Array[Dictionary] = []
+var _cued_features: Dictionary = {}
+var _dust_lines: Array[Node2D] = []
+var _darkness: CaveDarkness
+var _crystals: CaveCrystals
+var _runner_x := 0.0
 
 func setup(stage: CampaignLevel) -> void:
 	level = stage
@@ -82,6 +96,38 @@ func setup(stage: CampaignLevel) -> void:
 		_add_plate_for_current()
 	else:
 		_place_finish_line(level.get_finish_world_x())
+		_setup_features()
+
+func _setup_features() -> void:
+	_feature_events.clear()
+	_cued_features.clear()
+	var dark_sections: Array[Vector2] = []
+	for feature in level.features:
+		var kind := str(feature.get("kind", ""))
+		if not CampaignFeatures.is_known(kind):
+			continue
+		for event in CampaignFeatures.events_of(feature):
+			_feature_events.append(event)
+		if kind == "darkness":
+			dark_sections.append(Vector2(float(feature.at), float(feature.at) + CampaignFeatures.length_of(feature)))
+		elif kind == "cave_in":
+			var dust := CaveInDustScript.new() as Node2D
+			dust.name = "CaveInDust%d" % _dust_lines.size()
+			var first := COURSE_START_X + float(feature.at)
+			var last := first + float(CampaignFeatures.rock_count(feature) - 1) * CampaignFeatures.ROCK_SPACING
+			dust.call("configure", first - 50.0, last + 50.0)
+			add_child(dust)
+			_dust_lines.append(dust)
+	_feature_events.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.course_distance) < float(b.course_distance))
+	if not dark_sections.is_empty():
+		_crystals = CaveCrystalsScript.new() as CaveCrystals
+		_crystals.name = "CaveCrystals"
+		_crystals.call("setup", dark_sections, level.seed_value)
+		add_child(_crystals)
+		_darkness = CaveDarknessScript.new() as CaveDarkness
+		_darkness.name = "CaveDarkness"
+		_darkness.call("setup", dark_sections, _crystals)
+		add_child(_darkness)
 
 func _place_finish_line(world_x: float) -> void:
 	_finish_line = FinishLineScript.new() as Node2D
@@ -126,7 +172,7 @@ func get_progress(course_distance: float) -> float:
 func allows_event(event: Dictionary) -> bool:
 	if level == null:
 		return true
-	if boss != null:
+	if boss != null or not generated_events_enabled:
 		return false
 	return float(event.get("course_distance", 0.0)) <= level.get_hazard_cutoff_distance()
 
@@ -195,13 +241,33 @@ func update_thrown_barrels(course_distance: float) -> Array[Dictionary]:
 			waiting.append(spec)
 	_thrown_barrels = waiting
 	return landed
+## Scripted feature events whose time has come: either the spawn line reached
+## them, or they need to exist earlier ("early_lead", e.g. rocks that wake up
+## long before they land). Main spawns them like boss events.
+func pop_feature_events(course_distance: float, spawn_line_distance: float) -> Array[Dictionary]:
+	var ready: Array[Dictionary] = []
+	if _feature_events.is_empty():
+		return ready
+	var remaining: Array[Dictionary] = []
+	for event in _feature_events:
+		var at := float(event.course_distance)
+		if spawn_line_distance >= at or course_distance + float(event.get("early_lead", 0.0)) >= at:
+			ready.append(event)
+		else:
+			remaining.append(event)
+	_feature_events = remaining
+	return ready
 
 ## Called for every event main actually spawns.
 func on_event_spawned(event: Dictionary) -> void:
-	if level == null or level.new_hazards.is_empty():
+	if level == null:
 		return
-	var hazard_id := str(event.get("id", ""))
-	if hazard_id.is_empty() or _announced_hazards.has(hazard_id) or not level.new_hazards.has(hazard_id):
+	# Scripted features announce their kind (the first swarm, the first cave-in),
+	# generated events their profile id.
+	var hazard_id := str(event.get("feature", event.get("id", "")))
+	if hazard_id.is_empty() or _announced_hazards.has(hazard_id):
+		return
+	if not (level.new_hazards.has(hazard_id) or level.new_features.has(hazard_id)):
 		return
 	_announced_hazards[hazard_id] = true
 	callout.emit("hazard", tr("New hazard"), _sentence_case(tr(hazard_display_name(hazard_id))), tr(hazard_tip(hazard_id)))
@@ -221,6 +287,8 @@ static func hazard_tip(hazard_id: String) -> String:
 		"falling_rock": return "Watch the warning and leave the floor"
 		"saw_blade": return "It moves along the surface: time your flip"
 		"cave_icicle": return "It cracks loose and falls: leave the floor below it"
+		"cave_in": return "Dust in the ceiling: the rocks come down, so run on the ceiling"
+		"bat_swarm": return "They sweep along one side: be on the other"
 		"haunted_ghost": return "Ghosts float through one side: take the other"
 		"haunted_chaser": return "It hunts you from behind: keep switching sides"
 	return ""
@@ -237,6 +305,8 @@ static func hazard_display_name(hazard_id: String) -> String:
 		"falling_rock": return "falling rock"
 		"saw_blade": return "saw blade"
 		"cave_icicle": return "icicles"
+		"cave_in": return "cave-in"
+		"bat_swarm": return "bat swarm"
 		"haunted_ghost": return "floating ghosts"
 		"haunted_chaser": return "chasing ghost"
 	return hazard_id.replace("_", " ")
@@ -246,6 +316,8 @@ static func hazard_display_name(hazard_id: String) -> String:
 func physics_tick(previous_rect: Rect2, final_rect: Rect2, lethal_fraction: float, runner_world_x: float, gravity_direction: int, grounded: bool) -> String:
 	if level == null or finished:
 		return ""
+	_runner_x = runner_world_x
+	_cue_features(runner_world_x - COURSE_START_X)
 	var displacement := final_rect.position - previous_rect.position
 	for star in _stars:
 		if not is_instance_valid(star) or bool(star.call("is_collected")):
@@ -269,6 +341,17 @@ func physics_tick(previous_rect: Rect2, final_rect: Rect2, lethal_fraction: floa
 		finished = true
 		return "finished"
 	return ""
+
+## The rumble of a cave-in starts when its first rock wakes up.
+func _cue_features(course_distance: float) -> void:
+	for feature in level.features:
+		if str(feature.get("kind", "")) != "cave_in":
+			continue
+		var at := float(feature.at)
+		var key := "cave_in|%.0f" % at
+		if course_distance >= at - CampaignFeatures.ROCK_TRIGGER_LEAD and course_distance < at + 400.0 and not _cued_features.has(key):
+			_cued_features[key] = true
+			feature_cue.emit("cave_in_rumble", key)
 
 func _tick_boss(course_distance: float, gravity_direction: int, grounded: bool) -> void:
 	var rullaren := boss as RullarenBoss
@@ -403,6 +486,12 @@ func update_presentation(view_left: float, view_width: float, surface_y_at: Call
 	for plate in _plates:
 		if is_instance_valid(plate):
 			plate.set("surface_y", float(surface_y_at.call(plate.position.x, bool(plate.get("on_ceiling")))))
+	var runner_x := _runner_x
+	for dust in _dust_lines:
+		if is_instance_valid(dust):
+			dust.call("update_view", runner_x, float(surface_y_at.call(float(dust.get("x_from")), true)))
+	if is_instance_valid(_crystals):
+		_crystals.call("update_view", runner_x, surface_y_at)
 	for lantern in _lanterns:
 		if is_instance_valid(lantern):
 			lantern.call("set_surfaces", float(surface_y_at.call(lantern.position.x, false)), float(surface_y_at.call(lantern.position.x, true)))
@@ -419,6 +508,62 @@ func update_presentation(view_left: float, view_width: float, surface_y_at: Call
 		var right := view_left + view_width - 10.0
 		_boss_view.set("view_left", view_left)
 		_boss_view.call("place", right, float(surface_y_at.call(right - 70.0, false)))
+
+func has_darkness() -> bool:
+	return is_instance_valid(_darkness)
+
+## Darkness: the hazards that are coming up, the stars and the passed crystals
+## become lights, so nothing that can hurt is ever hidden. `hazards` is every
+## node that can hurt or block (obstacles, holes, steps and slopes).
+func update_darkness(view_left: float, view_width: float, runner_position: Vector2, hazards: Array, surface_y_at: Callable) -> void:
+	if not is_instance_valid(_darkness) or level == null:
+		return
+	var course_distance := runner_position.x - COURSE_START_X
+	if CaveDarkness.strength_for(course_distance, _darkness.sections) <= 0.001:
+		_darkness.call("update_view", view_left, view_width, runner_position, course_distance, PackedVector4Array())
+		return
+	var lights := PackedVector4Array()
+	var ahead := runner_position.x + HAZARD_LIGHT_AHEAD
+	for node in hazards:
+		if not is_instance_valid(node) or node.is_queued_for_deletion():
+			continue
+		var x: float = node.global_position.x
+		if x < runner_position.x - 120.0 or x > ahead:
+			continue
+		lights.append_array(_hazard_lights(node, surface_y_at))
+	for star in _stars:
+		if is_instance_valid(star) and not bool(star.call("is_collected")) and star.global_position.x > view_left - 100.0 and star.global_position.x < view_left + view_width + 100.0:
+			lights.append(Vector4(star.global_position.x, star.global_position.y, 110.0, 1.0))
+	if is_instance_valid(_crystals):
+		_crystals.call("collect_lights", view_left, view_width, lights)
+	_darkness.call("update_view", view_left, view_width, runner_position, course_distance, lights)
+
+const HAZARD_LIGHT_AHEAD := 950.0
+
+static func _hazard_lights(node: Node2D, surface_y_at: Callable) -> PackedVector4Array:
+	var result := PackedVector4Array()
+	var x := node.global_position.x
+	if node.has_method("get_hitbox_rect"):
+		var rect: Rect2 = node.call("get_hitbox_rect")
+		if rect.size != Vector2.ZERO:
+			result.append(Vector4(rect.get_center().x, rect.get_center().y, maxf(rect.size.x, rect.size.y) * 0.5 + 95.0, 1.0))
+			return result
+	if node.is_in_group("falling_rocks"):
+		var event: Dictionary = node.get("event")
+		var floor_y := float(event.get("floor_y", 460.0))
+		result.append(Vector4(x, node.global_position.y, 130.0, 1.0))
+		result.append(Vector4(x, floor_y - 60.0, 120.0, 1.0))
+		return result
+	if node.is_in_group("barrels"):
+		result.append(Vector4(x, node.global_position.y - 30.0, 120.0, 1.0))
+		return result
+	if node.is_in_group("saw_blades") or node.is_in_group("ghost_hazards"):
+		result.append(Vector4(x, node.global_position.y, 140.0, 1.0))
+		return result
+	# Holes, steps and slopes: light the whole lane height at their position.
+	result.append(Vector4(x, float(surface_y_at.call(x, false)) - 20.0, 170.0, 1.0))
+	result.append(Vector4(x, float(surface_y_at.call(x, true)) + 20.0, 170.0, 1.0))
+	return result
 
 class CampaignServiceMath:
 	static func count_bits(mask: int) -> int:
