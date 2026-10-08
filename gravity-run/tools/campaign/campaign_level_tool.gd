@@ -1,7 +1,7 @@
 extends SceneTree
 ## Picks a seed and three gravity-star positions for each campaign stage.
 ##
-##   godot --headless --path . -s res://tools/campaign/campaign_level_tool.gd -- [seeds_per_stage] [stage_id]
+##   godot --headless --path . -s res://tools/campaign/campaign_level_tool.gd -- [seeds_per_stage] [stage_id or prefix, e.g. 2-]
 ##
 ## For every candidate seed it generates the whole stage with the stage's own
 ## ruleset (biome locked), resolves it exactly as singleplayer does and plans
@@ -27,22 +27,27 @@ func _initialize() -> void:
 	var args := OS.get_cmdline_user_args()
 	var seeds_per_stage := int(args[0]) if args.size() > 0 else 12
 	var only_stage := args[1] if args.size() > 1 else ""
-	for spec in Catalog.MEADOW_STAGES:
-		if not only_stage.is_empty() and String(spec.id) != only_stage:
-			continue
-		var best: Dictionary = {}
-		var base_seed := int(spec.seed) - (int(spec.seed) % 100)
-		for offset in range(seeds_per_stage):
-			var result := evaluate(spec, &"classic", base_seed + 1 + offset)
-			print("CANDIDATE %s seed=%d score=%.1f events=%d intro=%s stars=%d risk=%s fallbacks=%d" % [spec.id, result.seed, result.score, result.events, str(result.intro), result.stars.size(), str(result.risk_star), result.fallbacks])
-			if best.is_empty() or float(result.score) > float(best.score):
-				best = result
-		print("BEST %s seed=%d score=%.1f events=%d counts=%s" % [spec.id, best.seed, best.score, best.events, str(best.counts)])
-		var star_text: Array[String] = []
-		for star in best.stars:
-			star_text.append("Vector2(%.2f, %.2f)" % [star.x, star.y])
-		print("DATA %s \"seed\": %d,\n\t\t\"stars\": [%s]," % [spec.id, best.seed, ", ".join(star_text)])
+	for table in Catalog.stage_tables():
+		var biome: StringName = table[1]
+		for spec in table[2]:
+			if not only_stage.is_empty() and not String(spec.id).begins_with(only_stage):
+				continue
+			_search(spec, biome, seeds_per_stage)
 	quit(0)
+
+func _search(spec: Dictionary, biome: StringName, seeds_per_stage: int) -> void:
+	var best: Dictionary = {}
+	var base_seed := int(spec.seed) - (int(spec.seed) % 100)
+	for offset in range(seeds_per_stage):
+		var result := evaluate(spec, biome, base_seed + 1 + offset)
+		print("CANDIDATE %s seed=%d score=%.1f events=%d intro=%s stars=%d risk=%s fallbacks=%d" % [spec.id, result.seed, result.score, result.events, str(result.intro), result.stars.size(), str(result.risk_star), result.fallbacks])
+		if best.is_empty() or float(result.score) > float(best.score):
+			best = result
+	print("BEST %s seed=%d score=%.1f events=%d counts=%s" % [spec.id, best.seed, best.score, best.events, str(best.counts)])
+	var star_text: Array[String] = []
+	for star in best.stars:
+		star_text.append("Vector2(%.2f, %.2f)" % [star.x, star.y])
+	print("DATA %s \"seed\": %d,\n\t\t\"stars\": [%s]," % [spec.id, best.seed, ", ".join(star_text)])
 
 static func evaluate(spec: Dictionary, biome: StringName, seed_value: int) -> Dictionary:
 	var ruleset := Catalog.make_ruleset(spec.id, biome, spec.profiles, float(spec.density), float(spec.margin), Catalog.stage_weights(spec))
@@ -52,9 +57,9 @@ static func evaluate(spec: Dictionary, biome: StringName, seed_value: int) -> Di
 	level.generator_version = Catalog.CAMPAIGN_GENERATOR_VERSION
 	level.ruleset = ruleset
 	level.length_px = float(spec.length)
-	return evaluate_level(level, spec.new)
+	return evaluate_level(level, spec.new, (spec.get("weights", {}) as Dictionary).keys())
 
-static func evaluate_level(level: CampaignLevel, new_hazards: Array) -> Dictionary:
+static func evaluate_level(level: CampaignLevel, new_hazards: Array, focus_hazards: Array = []) -> Dictionary:
 	BiomeRendererScript.set_locked_biome(level.get_locked_biome())
 	var gen = Gen.new()
 	if not gen.configure_run_definition(level.create_run_definition()):
@@ -92,6 +97,12 @@ static func evaluate_level(level: CampaignLevel, new_hazards: Array) -> Dictiona
 		var seen := int(counts.get(hazard, 0))
 		score += 8.0 if first <= level.length_px * 0.25 else (-4.0 if first == INF else 0.0)
 		score += minf(float(seen), 6.0)
+	# A stage about some hazards (its "weights") should show them often, and
+	# among otherwise equal seeds the fuller course reads better.
+	for hazard in focus_hazards:
+		score += minf(float(counts.get(hazard, 0)), 6.0)
+	score += float(in_course) * 0.2
+	score -= maxf(0.0, level.length_px / 1100.0 - float(in_course)) * 2.0
 	score -= float(fallbacks) * 20.0
 	var conflicts := gap_conflicts(resolved, START_X + cutoff)
 	score -= float(conflicts) * 100.0

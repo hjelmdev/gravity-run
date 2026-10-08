@@ -63,6 +63,110 @@ const MEADOW_STAGES := [
 	},
 ]
 
+## Grottan. The player already knows every general hazard, so the cave starts
+## around 1-4's level and teaches one new generated hazard (icicles); the rest
+## of the cave's surprises are scripted features (see campaign_run.gd).
+## "weights" multiplies a profile's weight on top of the new-hazard boost.
+const CAVE_STAGES := [
+	{
+		"id": &"2-1", "title": "Dripstones", "intro": "New: icicles",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "cave_icicle"], "new": ["cave_icicle"],
+		"weights": {"cave_icicle": 2.0},
+		"density": 1.15, "margin": 1.3, "length": 16500.0,
+		"seed": 2157,
+		"stars": [Vector2(4328.59, 426.00), Vector2(9565.05, 114.00), Vector2(12598.14, 114.00)],
+	},
+	{
+		"id": &"2-2", "title": "Tight Tunnels", "intro": "Steps and slopes come thick and fast",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "cave_icicle"], "new": [],
+		"weights": {"terrain_step": 2.0, "terrain_slope": 2.0},
+		"density": 1.2, "margin": 1.2, "length": 18000.0,
+		"seed": 2254,
+		"stars": [Vector2(4881.66, 150.97), Vector2(10253.75, 254.00), Vector2(13663.87, 418.00)],
+	},
+	{
+		"id": &"2-3", "title": "Mine Run", "intro": "Mine carts roll through the tunnels",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "cave_icicle"], "new": [],
+		"weights": {"barrel_chain": 2.0},
+		"density": 1.3, "margin": 1.15, "length": 19500.0,
+		"seed": 2377,
+		"stars": [Vector2(5403.52, 114.00), Vector2(10652.77, 114.00), Vector2(14306.41, 296.00)],
+	},
+	{
+		"id": &"2-4", "title": "Cave-in", "intro": "Rocks and icicles fall together",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "cave_icicle"], "new": [],
+		"weights": {"falling_rock": 1.6, "cave_icicle": 1.6},
+		"density": 1.4, "margin": 1.1, "length": 21000.0,
+		"seed": 2463,
+		"stars": [Vector2(5487.91, 114.00), Vector2(11542.10, 222.00), Vector2(15658.60, 150.00)],
+	},
+	{
+		"id": &"2-5", "title": "Crystal Hall", "intro": "A dark hall lit by crystals",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "cave_icicle"], "new": [],
+		"density": 1.45, "margin": 1.05, "length": 22500.0,
+		"seed": 2507,
+		"stars": [Vector2(5559.09, 114.00), Vector2(12068.22, 254.00), Vector2(18011.33, 106.00)],
+	},
+	{
+		"id": &"2-6", "title": "Cave Exam", "intro": "Everything the cave has taught you",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "cave_icicle"], "new": [],
+		"density": 1.5, "margin": 1.0, "length": 24000.0,
+		"seed": 2601,
+		"stars": [Vector2(6048.69, 426.00), Vector2(12638.04, 114.00), Vector2(18938.52, 426.00)],
+	},
+]
+
+## Spökskogen. Ghosts are the new generated hazards (flyby and pursuit); the
+## forest's other surprises are scripted features.
+const HAUNTED_STAGES := [
+	{
+		"id": &"3-1", "title": "Ghost Path", "intro": "New: floating ghosts",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "haunted_ghost"], "new": ["haunted_ghost"],
+		"density": 1.1, "margin": 1.2, "length": 16500.0,
+		"seed": 3178,
+		"stars": [Vector2(4408.56, 114.00), Vector2(9649.64, 114.00), Vector2(13719.91, 114.00)],
+	},
+	{
+		"id": &"3-2", "title": "Hunted", "intro": "New: a ghost that chases you",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "haunted_ghost", "haunted_chaser"], "new": ["haunted_chaser"],
+		"density": 1.2, "margin": 1.15, "length": 18000.0,
+		"seed": 3204,
+		"stars": [Vector2(4477.82, 426.00), Vector2(9682.19, 114.00), Vector2(13358.47, 296.00)],
+	},
+	{
+		"id": &"3-3", "title": "Graveyard", "intro": "Hands reach out of the ground",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "haunted_ghost", "haunted_chaser"], "new": [],
+		"density": 1.3, "margin": 1.1, "length": 19500.0,
+		"seed": 3355,
+		"stars": [Vector2(5131.34, 426.00), Vector2(10121.03, 114.00), Vector2(17541.81, 114.00)],
+	},
+	{
+		"id": &"3-4", "title": "The Fog", "intro": "Fog hides the way ahead",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "haunted_ghost", "haunted_chaser"], "new": [],
+		"density": 1.4, "margin": 1.05, "length": 21000.0,
+		"seed": 3458,
+		"stars": [Vector2(5581.50, 114.00), Vector2(11978.54, 222.00), Vector2(16104.22, 222.00)],
+	},
+	{
+		"id": &"3-5", "title": "Will-o'-the-Wisp", "intro": "A wisp copies your side",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "haunted_ghost", "haunted_chaser"], "new": [],
+		"density": 1.5, "margin": 1.0, "length": 22500.0,
+		"seed": 3575,
+		"stars": [Vector2(7339.76, 114.00), Vector2(12027.32, 114.00), Vector2(17186.89, 222.00)],
+	},
+	{
+		"id": &"3-6", "title": "Forest Exam", "intro": "Everything the forest has taught you",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "haunted_ghost", "haunted_chaser"], "new": [],
+		"density": 1.6, "margin": 0.95, "length": 25000.0,
+		"seed": 3640,
+		"stars": [Vector2(6454.64, 426.00), Vector2(13416.85, 254.00), Vector2(20476.66, 426.00)],
+	},
+]
+
+## Stage tables per world: [world_id, generation biome, stages].
+static func stage_tables() -> Array:
+	return [[&"meadow", &"classic", MEADOW_STAGES], [&"cave", &"cave", CAVE_STAGES], [&"haunted", &"haunted", HAUNTED_STAGES]]
+
 static var _worlds: Array[CampaignWorld] = []
 
 static func worlds() -> Array[CampaignWorld]:
@@ -106,11 +210,25 @@ static func _build_worlds() -> Array[CampaignWorld]:
 	for level in meadow.levels:
 		level.presentation_biome = &"meadow"
 	result.append(meadow)
+	var cave := _make_world(&"cave", 2, "The Cave", &"cave", "map_cave", CAVE_MAP_NODES, Color("8fb4ff"))
+	_add_stages(cave, CAVE_STAGES)
+	result.append(cave)
+	var haunted := _make_world(&"haunted", 3, "Haunted Woods", &"haunted", "map_haunted", HAUNTED_MAP_NODES, Color("b69cff"))
+	_add_stages(haunted, HAUNTED_STAGES)
+	result.append(haunted)
 	# Later worlds are on the map already; their stages arrive in later phases.
-	result.append(_make_world(&"cave", 2, "The Cave", &"cave", "map_cave", CAVE_MAP_NODES, Color("8fb4ff")))
-	result.append(_make_world(&"haunted", 3, "Haunted Woods", &"haunted", "map_haunted", HAUNTED_MAP_NODES, Color("b69cff")))
 	result.append(_make_world(&"volcano", 4, "The Volcano", &"lava", "map_volcano", LAVA_MAP_NODES, Color("ff814f")))
 	return result
+
+## Adds a world's stages. A stage only joins once the level tool has frozen
+## its stars, so a world can be filled in stage by stage.
+static func _add_stages(world: CampaignWorld, specs: Array) -> void:
+	var index := 1
+	for spec in specs:
+		if (spec.stars as Array).is_empty():
+			continue
+		world.levels.append(_make_stage(world.world_id, world.biome_id, index, spec))
+		index += 1
 
 static func _make_world(world_id: StringName, number: int, title: String, biome_id: StringName, map_name: String, nodes: Array, accent: Color) -> CampaignWorld:
 	var world := CampaignWorld.new()
@@ -135,6 +253,9 @@ static func stage_weights(spec: Dictionary) -> Dictionary:
 	for hazard in spec.get("new", []):
 		if hazard != "barrel_chain":
 			weights[hazard] = NEW_HAZARD_WEIGHT
+	var extra: Dictionary = spec.get("weights", {})
+	for hazard in extra:
+		weights[hazard] = float(weights.get(hazard, 1.0)) * float(extra[hazard])
 	return weights
 
 static func make_ruleset(stage_id: StringName, biome_id: StringName, profiles: Array, density: float, margin: float, weights: Dictionary = {}) -> Resource:

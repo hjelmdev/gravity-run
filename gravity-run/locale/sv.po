@@ -1744,3 +1744,93 @@ msgstr "Se varningen och lämna golvet"
 
 msgid "It moves along the surface: time your flip"
 msgstr "Den åker längs ytan: tajma din flip"
+
+msgid "Dripstones"
+msgstr "Droppstenar"
+
+msgid "New: icicles"
+msgstr "Nytt: istappar"
+
+msgid "Tight Tunnels"
+msgstr "Trånga gångar"
+
+msgid "Steps and slopes come thick and fast"
+msgstr "Trappsteg och backar kommer tätt"
+
+msgid "Mine Run"
+msgstr "Rullgruvan"
+
+msgid "Mine carts roll through the tunnels"
+msgstr "Gruvvagnar rullar genom gångarna"
+
+msgid "Cave-in"
+msgstr "Ras"
+
+msgid "Rocks and icicles fall together"
+msgstr "Stenar och istappar faller tillsammans"
+
+msgid "Crystal Hall"
+msgstr "Kristallsalen"
+
+msgid "A dark hall lit by crystals"
+msgstr "En mörk sal som lyses upp av kristaller"
+
+msgid "Cave Exam"
+msgstr "Grottprovet"
+
+msgid "Everything the cave has taught you"
+msgstr "Allt som grottan har lärt dig"
+
+msgid "Ghost Path"
+msgstr "Spökstigen"
+
+msgid "New: floating ghosts"
+msgstr "Nytt: svävande spöken"
+
+msgid "Hunted"
+msgstr "Jagad"
+
+msgid "New: a ghost that chases you"
+msgstr "Nytt: ett spöke som jagar dig"
+
+msgid "Graveyard"
+msgstr "Kyrkogården"
+
+msgid "Hands reach out of the ground"
+msgstr "Händer sträcker sig ur marken"
+
+msgid "The Fog"
+msgstr "Dimman"
+
+msgid "Fog hides the way ahead"
+msgstr "Dimman döljer vägen framåt"
+
+msgid "Will-o'-the-Wisp"
+msgstr "Irrbloss"
+
+msgid "A wisp copies your side"
+msgstr "Ett irrbloss härmar din sida"
+
+msgid "Forest Exam"
+msgstr "Skogsprovet"
+
+msgid "Everything the forest has taught you"
+msgstr "Allt som skogen har lärt dig"
+
+msgid "It cracks loose and falls: leave the floor below it"
+msgstr "Den lossnar och faller: lämna golvet under den"
+
+msgid "Ghosts float through one side: take the other"
+msgstr "Spöken svävar genom ena sidan: ta den andra"
+
+msgid "It hunts you from behind: keep switching sides"
+msgstr "Det jagar dig bakifrån: fortsätt byta sida"
+
+msgid "icicles"
+msgstr "istappar"
+
+msgid "floating ghosts"
+msgstr "svävande spöken"
+
+msgid "chasing ghost"
+msgstr "jagande spöke"

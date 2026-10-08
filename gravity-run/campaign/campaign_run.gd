@@ -127,6 +127,9 @@ static func hazard_tip(hazard_id: String) -> String:
 		"terrain_slope": return "The track tilts: keep your footing"
 		"falling_rock": return "Watch the warning and leave the floor"
 		"saw_blade": return "It moves along the surface: time your flip"
+		"cave_icicle": return "It cracks loose and falls: leave the floor below it"
+		"haunted_ghost": return "Ghosts float through one side: take the other"
+		"haunted_chaser": return "It hunts you from behind: keep switching sides"
 	return ""
 
 static func hazard_display_name(hazard_id: String) -> String:
@@ -140,6 +143,9 @@ static func hazard_display_name(hazard_id: String) -> String:
 		"terrain_slope": return "slopes"
 		"falling_rock": return "falling rock"
 		"saw_blade": return "saw blade"
+		"cave_icicle": return "icicles"
+		"haunted_ghost": return "floating ghosts"
+		"haunted_chaser": return "chasing ghost"
 	return hazard_id.replace("_", " ")
 
 ## One physics tick. Collects stars with the same swept test as coins, drives

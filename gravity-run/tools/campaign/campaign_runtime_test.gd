@@ -48,24 +48,35 @@ func _check_catalog() -> void:
 	_check(worlds.size() >= 4 and worlds[0].levels.size() == 7, "catalog has four worlds and the meadow has six stages plus a boss")
 	var generator := Gen.new()
 	var profiles := generator.get_profile_catalog(CampaignCatalog.CAMPAIGN_GENERATOR_VERSION)
+	_check(CampaignCatalog.get_world(&"cave").levels.size() >= 6 and CampaignCatalog.get_world(&"haunted").levels.size() >= 6, "the cave and the haunted woods have six stages each")
 	var identities: Dictionary = {}
-	for level in worlds[0].levels:
+	var all_levels: Array[CampaignLevel] = []
+	for world in worlds:
+		all_levels.append_array(world.levels)
+	for level in all_levels:
 		_check(str(level.ruleset.call("validate", profiles)).is_empty(), "%s ruleset validates" % level.level_id)
 		identities[level.get_identity()] = true
 		if level.is_boss():
 			continue
 		_check(level.stars.size() == 3, "%s has three gravity stars" % level.level_id)
-		_check(level.length_px >= 15000.0 and level.length_px <= 22500.0, "%s is 30-45 s long" % level.level_id)
+		_check(level.length_px >= 15000.0 and level.length_px <= 25000.0, "%s is 30-50 s long" % level.level_id)
 		BiomeRendererScript.set_locked_biome(level.get_locked_biome())
 		var gen := Gen.new()
 		_check(gen.configure_run_definition(level.create_run_definition()), "%s configures the generator" % level.level_id)
 		gen.ensure_horizon(level.length_px + 6000.0, 500.0, 900.0, Gen.EVENT_SPAWN_LEAD_DISTANCE)
 		var planned: Array[Dictionary] = gen.get_planned_events()
+		var foreign := _foreign_encounters(level.world_id)
 		var biome_ok := true
 		for event in planned:
-			if str(event.get("kind", "")) in ["ghost", "lava_crack", "volcano"] or str(event.get("id", "")) == "cave_icicle":
+			if str(event.get("kind", "")) in foreign or str(event.get("id", "")) in foreign:
 				biome_ok = false
-		_check(biome_ok, "%s only generates meadow encounters" % level.level_id)
+		_check(biome_ok, "%s only generates %s encounters" % [level.level_id, level.world_id])
+		for hazard in level.new_hazards:
+			var introduced := false
+			for event in planned:
+				if str(event.get("id", "")) == hazard and float(event.get("course_distance", INF)) <= level.get_hazard_cutoff_distance():
+					introduced = true
+			_check(introduced, "%s shows its new hazard %s" % [level.level_id, hazard])
 		var builder := Builder.new()
 		var resolved: Array[Dictionary] = builder.resolve_runtime_events(planned, ceili(level.length_px + 4500.0), level.generator_version, BiomeRendererScript.start_biome_offset_for_seed(level.seed_value, level.generator_version))
 		var safe := true
@@ -91,8 +102,17 @@ func _check_catalog() -> void:
 			on_coin = on_coin and found
 		_check(on_coin, "%s stars sit on the stage's planned coin positions" % level.level_id)
 		print("STAGE %s seed=%d events=%d" % [level.level_id, level.seed_value, planned.size()])
-	_check(identities.size() == worlds[0].levels.size(), "stage identities are unique")
+	_check(identities.size() == all_levels.size(), "stage identities are unique")
 	BiomeRendererScript.set_locked_biome(&"")
+
+## Encounter kinds or ids that belong to other biomes than the world's own.
+static func _foreign_encounters(world_id: StringName) -> Array:
+	match world_id:
+		&"cave":
+			return ["ghost", "lava_crack", "volcano", "haunted_ghost", "haunted_chaser", "lava_tidal_pool"]
+		&"haunted":
+			return ["lava_crack", "volcano", "cave_icicle", "lava_tidal_pool"]
+	return ["ghost", "lava_crack", "volcano", "cave_icicle"]
 
 func _make_game() -> Node:
 	var game := MainScene.instantiate() as Node
