@@ -32,6 +32,9 @@ const STREAMS: Dictionary = {
 	"lantern_chime": preload("res://assets/audio/sfx/lantern_chime.wav"),
 	"haunted_star": preload("res://assets/audio/sfx/haunted_star.wav"),
 	"ghost_king_laugh": preload("res://assets/audio/sfx/ghost_king_laugh.wav"),
+	# Campaign (tools/audio/generate_campaign_audio.py).
+	"campaign_goal": preload("res://assets/audio/sfx/campaign_goal.wav"),
+	"rullaren_throw": preload("res://assets/audio/sfx/rullaren_throw.wav"),
 }
 
 var _voices: Array[AudioStreamPlayer] = []

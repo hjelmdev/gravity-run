@@ -8,7 +8,7 @@
 script = ExtResource("1")
 id = &"nova"
 display_name = "Nova"
-description = "Astronaut runner, 32x32 pixel art."
+description = "Astronaut runner."
 trait_text = ""
 sprite_frames = ExtResource("2")
 pixel_scale = 2.0

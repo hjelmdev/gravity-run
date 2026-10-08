@@ -97,6 +97,14 @@ func _run() -> void:
 	await _save("05_stage_star_ahead")
 	await _step(game, 250)
 	await _save("06_finish_line")
+	for _i in range(400):
+		if int(game.get("_campaign_runout_ticks")) >= 0:
+			break
+		await _step(game, 1)
+	await _step(game, 14)
+	await _save("06b_confetti_early")
+	await _step(game, 22)
+	await _save("06c_confetti")
 	await _step(game, 200)
 	await _frames(30)
 	await _save("07_stage_clear")
@@ -111,6 +119,22 @@ func _run() -> void:
 	game.set_physics_process(false)
 	await _step(game, 120, true)
 	await _save("08_boss_intro")
+	var boss_run: Node = game.get("_campaign_run")
+	for _i in range(1200):
+		var started := false
+		for spec in boss_run.get("_thrown_barrels"):
+			started = started or bool(spec.thrown)
+		if started:
+			break
+		await _step(game, 1, true)
+	await _step(game, 3, true)
+	await _save("08b_barrel_throw_a")
+	await _step(game, 5, true)
+	await _save("08c_barrel_throw_b")
+	await _step(game, 5, true)
+	await _save("08d_barrel_throw_c")
+	await _step(game, 4, true)
+	await _save("08e_barrel_landed")
 	await _step(game, 160, true)
 	await _save("09_boss_barrels")
 	await _step_until_plate(game)

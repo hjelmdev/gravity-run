@@ -16,6 +16,11 @@ const BARREL_DARK := Color("7c4a26")
 const EYE := Color("ff5a46")
 const LAMP_ON := Color("ff647c")
 const LAMP_OFF := Color("3a3f4c")
+## Screen distance from the view's right edge to the barrel hatch (the drum).
+const HATCH_FROM_VIEW_RIGHT := 138.0
+const BARREL_RADIUS := 27.0
+const HATCH_PUFF_COUNT := 5
+const HATCH_PUFF_SECONDS := 0.55
 
 var hp := 3
 var max_hp := 3
@@ -24,6 +29,11 @@ var _hit_time := 10.0
 var _intro_time := 0.0
 var _defeat_time := -1.0
 var _fire_time := 10.0
+## Left edge of the camera in world x, set by campaign_run every frame.
+var view_left := 0.0
+## Barrels in flight out of the hatch, by id (see campaign_run.queue_thrown_barrel).
+var _throws: Dictionary = {}
+var _hatch_puffs: Array[Dictionary] = []
 
 func _ready() -> void:
 	z_index = 6
@@ -40,6 +50,27 @@ func notify_defeated() -> void:
 func notify_fired() -> void:
 	_fire_time = 0.0
 
+## A barrel leaves the hatch: the drum jerks, smoke puffs out and the barrel
+## flies in a short arc with one bounce (it is only a picture until it lands).
+func start_throw(spec: Dictionary) -> void:
+	_fire_time = 0.0
+	_throws[int(spec.id)] = spec
+	for i in range(HATCH_PUFF_COUNT):
+		_hatch_puffs.append({"age": -float(i) * 0.03, "velocity": Vector2(-90.0 - float(i) * 26.0, -30.0 - float((i * 37) % 50)), "size": 10.0 + float(i % 3) * 4.0})
+
+func end_throw(id: int) -> void:
+	_throws.erase(id)
+
+## Height of the barrel's centre above its resting height after fraction p of
+## the flight: out of the hatch (low), up and down to the floor, one small bounce.
+static func throw_lift(p: float) -> float:
+	var q := clampf(p, 0.0, 1.0)
+	if q < 0.55:
+		var u := q / 0.55
+		return 21.0 * (1.0 - u) + 152.0 * u * (1.0 - u)
+	var v := (q - 0.55) / 0.45
+	return 56.0 * v * (1.0 - v)
+
 func is_gone() -> bool:
 	return _defeat_time > 2.6
 
@@ -55,6 +86,9 @@ func _process(delta: float) -> void:
 	_fire_time += delta
 	if _defeat_time >= 0.0:
 		_defeat_time += delta
+	for puff in _hatch_puffs:
+		puff["age"] = float(puff["age"]) + delta
+	_hatch_puffs = _hatch_puffs.filter(func(puff: Dictionary) -> bool: return float(puff["age"]) < HATCH_PUFF_SECONDS)
 	queue_redraw()
 
 func _px(x: float, y: float, w: float, h: float, color: Color) -> void:
@@ -85,8 +119,12 @@ func _draw() -> void:
 	draw_set_transform(pivot + shake + Vector2(0.0, sink) - pivot.rotated(tilt), tilt, Vector2.ONE)
 	var flash := _hit_time < 0.12
 	modulate = Color(1, 1, 1, alpha)
+	draw_set_transform(Vector2.ZERO)
+	_draw_thrown_barrels()
+	draw_set_transform(pivot + shake + Vector2(0.0, sink) - pivot.rotated(tilt), tilt, Vector2.ONE)
 	_draw_machine(flash)
 	draw_set_transform(Vector2.ZERO)
+	_draw_hatch_puffs()
 	_draw_smoke()
 	_draw_hp_lamps()
 
@@ -141,6 +179,38 @@ func _draw_machine(flash: bool) -> void:
 		var by := 27.0 + float(i) * 3.0 + float(band) - 1.0
 		_px(drum_x - 4.0, by, 8, 1, BARREL_DARK)
 	_px(drum_x - 2.0, 23.0, 2, 1, Color("e2aa64"))
+
+func _draw_thrown_barrels() -> void:
+	var floor_local := float(HEIGHT_PX) * PIXEL
+	for id in _throws:
+		var spec: Dictionary = _throws[id]
+		var speed := float(spec.speed)
+		var progress := (view_left - float(spec.release)) / 150.0
+		var world_x := float(spec.x) - (speed - 1.0) * (view_left - float(spec.course_distance))
+		var center := Vector2(world_x - position.x, floor_local - BARREL_RADIUS - throw_lift(progress))
+		var roll := -(speed - 1.0) * (view_left - float(spec.course_distance)) / BARREL_RADIUS
+		draw_circle(center, BARREL_RADIUS, Color("d98245"))
+		draw_arc(center, BARREL_RADIUS - 8.0, 0.0, TAU, 24, Color("743e35"), 4.0)
+		draw_line(center + Vector2(-0.55, -0.45).rotated(roll) * BARREL_RADIUS, center + Vector2(0.55, 0.45).rotated(roll) * BARREL_RADIUS, Color("743e35"), 4.0)
+		draw_line(center + Vector2(0.55, -0.45).rotated(roll) * BARREL_RADIUS, center + Vector2(-0.55, 0.45).rotated(roll) * BARREL_RADIUS, Color("743e35"), 4.0)
+		if bool(spec.spiked):
+			for index in range(8):
+				var outward := Vector2.RIGHT.rotated(TAU * float(index) / 8.0 + roll)
+				draw_colored_polygon(PackedVector2Array([center + outward * (BARREL_RADIUS - 2.0), center + outward * (BARREL_RADIUS + 9.0) + outward.rotated(PI * 0.5) * 4.0, center + outward * (BARREL_RADIUS + 9.0) - outward.rotated(PI * 0.5) * 4.0]), Color("d8c6a2"))
+
+## Grey puffs that squirt out of the hatch when a barrel is thrown.
+func _draw_hatch_puffs() -> void:
+	var hatch := Vector2(4.0, 27.0) * PIXEL
+	for puff in _hatch_puffs:
+		var age := float(puff["age"])
+		if age < 0.0:
+			continue
+		var t := age / HATCH_PUFF_SECONDS
+		var at := hatch + Vector2(puff["velocity"]) * age + Vector2(0.0, -30.0 * t * t)
+		var size := float(puff["size"]) * (1.0 + t * 1.6)
+		var color := Color("d8dde6")
+		color.a = (1.0 - t) * 0.85
+		draw_rect(Rect2(at - Vector2(size, size) * 0.5, Vector2(size, size)), color)
 
 func _draw_smoke() -> void:
 	var base := Vector2(27.0, 0.0) * PIXEL

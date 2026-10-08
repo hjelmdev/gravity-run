@@ -11,6 +11,7 @@ signal boss_changed(hp: int, max_hp: int)
 
 const GravityStarScript := preload("res://campaign/gravity_star.gd")
 const FinishLineScript := preload("res://campaign/finish_line.gd")
+const FinishConfettiScript := preload("res://campaign/finish_confetti.gd")
 const PressurePlateScript := preload("res://campaign/pressure_plate.gd")
 const RullarenViewScript := preload("res://campaign/rullaren_view.gd")
 const StalactiteViewScript := preload("res://campaign/stalactite_view.gd")
@@ -19,6 +20,12 @@ const GhostKingViewScript := preload("res://campaign/ghost_king_view.gd")
 const BossLanternScript := preload("res://campaign/boss_lantern.gd")
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 const COURSE_START_X := 180.0
+## Rullaren's thrown barrels: the throw covers this much course distance
+## (about 0.3 s of running), then the barrel is an ordinary obstacle. Views
+## narrower than the minimum keep the old spawn so a barrel never appears near
+## the runner.
+const THROW_FLIGHT_DISTANCE := 150.0
+const THROW_MIN_VIEW_WIDTH := 700.0
 const STAR_COIN_CLEARANCE := 44.0
 
 var level: CampaignLevel
@@ -28,6 +35,9 @@ var star_mask := 0
 var finished := false
 var _stars: Array[Node2D] = []
 var _finish_line: Node2D
+var _confetti: Node2D
+var _view_left := 0.0
+var _view_size := Vector2(960.0, 540.0)
 var _boss_view: Node2D
 var _plates: Array[Node2D] = []
 var _icicles: Array[Node2D] = []
@@ -35,6 +45,8 @@ var _lanterns: Array[Node2D] = []
 var _announced_hazards: Dictionary = {}
 var _last_plate_distance := -INF
 var _last_course_distance := 0.0
+var _thrown_barrels: Array[Dictionary] = []
+var _throw_serial := 0
 
 func setup(stage: CampaignLevel) -> void:
 	level = stage
@@ -76,6 +88,16 @@ func _place_finish_line(world_x: float) -> void:
 	_finish_line.name = "FinishLine"
 	_finish_line.position = Vector2(world_x, 0.0)
 	add_child(_finish_line)
+
+## The runner crossed the line: confetti from the flag across the screen.
+func celebrate() -> void:
+	if not is_instance_valid(_confetti):
+		_confetti = FinishConfettiScript.new() as Node2D
+		_confetti.name = "FinishConfetti"
+		add_child(_confetti)
+	var line_x := _finish_line.position.x if is_instance_valid(_finish_line) else _view_left + _view_size.x * 0.3
+	_confetti.position = Vector2(_view_left, 0.0)
+	_confetti.call("burst", Vector2(line_x - _view_left, _view_size.y * 0.5), _view_size)
 
 func get_boss_max_hp() -> int:
 	return int(boss.call("get_max_hp")) if boss != null else 0
@@ -124,9 +146,55 @@ func pop_boss_events(spawn_line_distance: float) -> Array[Dictionary]:
 	if boss == null:
 		return []
 	var events: Array[Dictionary] = boss.pop_events_until(spawn_line_distance)
-	if not events.is_empty() and is_instance_valid(_boss_view):
-		_boss_view.call("notify_fired")
+	if is_instance_valid(_boss_view):
+		for event in events:
+			# Barrels make the drum jerk when they are thrown, not when planned.
+			if str(event.get("kind", "")) != "barrels" or not (boss is RullarenBoss) or _view_size.x < THROW_MIN_VIEW_WIDTH:
+				_boss_view.call("notify_fired")
+				break
 	return events
+
+## Rullaren only. Holds a barrel that main would have spawned at the screen
+## edge: spec has x (its spawn x), course_distance (when it would have spawned),
+## height, speed and spiked. Returns false when the barrel should spawn at once.
+func queue_thrown_barrel(spec: Dictionary) -> bool:
+	if not (boss is RullarenBoss) or not is_instance_valid(_boss_view) or _view_size.x < THROW_MIN_VIEW_WIDTH:
+		return false
+	var speed := maxf(float(spec.speed), 1.0)
+	var hatch_x := _view_size.x - RullarenViewScript.HATCH_FROM_VIEW_RIGHT
+	# Spawned at world x on course distance c0, the barrel would stand at world
+	# x - (speed - 1) * (c - c0) on course distance c, i.e. at screen x
+	# x - (speed - 1) * (c - c0) - c. It reaches the hatch at this c:
+	spec["release"] = (float(spec.x) + (speed - 1.0) * float(spec.course_distance) - hatch_x) / speed
+	spec["speed"] = speed
+	spec["thrown"] = false
+	_throw_serial += 1
+	spec["id"] = _throw_serial
+	_thrown_barrels.append(spec)
+	return true
+
+## Once per tick with the runner's course distance. Starts the throws of the
+## barrels that reached the hatch and returns the ones that landed, with x on
+## the path they would have rolled today, to be spawned as normal barrels.
+func update_thrown_barrels(course_distance: float) -> Array[Dictionary]:
+	var landed: Array[Dictionary] = []
+	var waiting: Array[Dictionary] = []
+	for spec in _thrown_barrels:
+		if not bool(spec.thrown) and course_distance >= float(spec.release):
+			spec["thrown"] = true
+			if is_instance_valid(_boss_view):
+				_boss_view.call("start_throw", spec)
+			SfxController.play_event("rullaren_throw", "campaign|rullaren_throw|%d" % int(spec.id), true)
+		if bool(spec.thrown) and course_distance >= float(spec.release) + THROW_FLIGHT_DISTANCE:
+			var travelled := course_distance - float(spec.course_distance)
+			var radius := HazardRules.barrel_radius(54.0, float(spec.height))
+			if is_instance_valid(_boss_view):
+				_boss_view.call("end_throw", int(spec.id))
+			landed.append({"x": float(spec.x) - (float(spec.speed) - 1.0) * travelled, "height": spec.height, "speed": spec.speed, "spiked": spec.spiked, "roll": -(float(spec.speed) - 1.0) * travelled / radius})
+		else:
+			waiting.append(spec)
+	_thrown_barrels = waiting
+	return landed
 
 ## Called for every event main actually spawns.
 func on_event_spawned(event: Dictionary) -> void:
@@ -325,6 +393,10 @@ func _add_plate_for_current() -> void:
 
 ## Keeps surface-attached art on the surfaces and the boss at the view edge.
 func update_presentation(view_left: float, view_width: float, surface_y_at: Callable) -> void:
+	_view_left = view_left
+	_view_size = Vector2(view_width, _view_size.y)
+	if is_instance_valid(_confetti):
+		_confetti.position = Vector2(view_left, 0.0)
 	if is_instance_valid(_finish_line):
 		var x := _finish_line.position.x
 		_finish_line.call("set_surfaces", float(surface_y_at.call(x, false)), float(surface_y_at.call(x, true)))
@@ -345,6 +417,7 @@ func update_presentation(view_left: float, view_width: float, surface_y_at: Call
 		_boss_view.call("place", edge, float(surface_y_at.call(edge - 90.0, true)), float(surface_y_at.call(edge - 90.0, false)), view_left)
 	elif is_instance_valid(_boss_view):
 		var right := view_left + view_width - 10.0
+		_boss_view.set("view_left", view_left)
 		_boss_view.call("place", right, float(surface_y_at.call(right - 70.0, false)))
 
 class CampaignServiceMath:

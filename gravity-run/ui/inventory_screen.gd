@@ -319,7 +319,8 @@ func _make_character_slot(slot: String, instance_id: String, owned: Dictionary) 
 	if slot == "helmet":
 		slot_column.position = Vector2(2.0, 5.0)
 	else:
-		slot_column.position = Vector2(108.0, 88.0)
+		# Left of the figure, under the helmet: the sprite occupies x 52..110.
+		slot_column.position = Vector2(2.0, 62.0)
 	return slot_column
 
 func _on_character_slot_pressed(slot: String, equipped_instance_id: String) -> void:

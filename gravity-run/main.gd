@@ -742,6 +742,10 @@ func _physics_process(delta: float) -> void:
 		if is_instance_valid(_campaign_run):
 			for boss_event in _campaign_run.call("pop_boss_events", spawn_line):
 				_spawn_course_event(boss_event)
+			for landed_barrel in _campaign_run.call("update_thrown_barrels", course_distance):
+				_spawn_obstacle_scene(BARREL_SCENE, HAZARD_RULES_SCRIPT.BARREL_WIDTH, float(landed_barrel.height), false, float(landed_barrel.x), float(landed_barrel.speed), bool(landed_barrel.spiked))
+				if not obstacles.is_empty():
+					obstacles[obstacles.size() - 1].set("roll_angle", float(landed_barrel.roll))
 		if RUN_LOOT_ENABLED:
 			for loot_event in loot_spawn_planner.pop_events_until(spawn_line):
 				_spawn_loot_pickup(loot_event)
@@ -884,7 +888,9 @@ func _end_run() -> void:
 func _begin_campaign_runout() -> void:
 	_campaign_runout_ticks = 0
 	player.set("input_enabled", false)
-	SfxController.play_event("coin", "%s|campaign_finish" % _singleplayer_audio_round_id, true)
+	SfxController.play_event("campaign_goal", "%s|campaign_finish" % _singleplayer_audio_round_id, true)
+	if is_instance_valid(_campaign_run):
+		_campaign_run.call("celebrate")
 
 func _complete_campaign_level() -> void:
 	if game_over:
@@ -1149,7 +1155,12 @@ func _spawn_course_event(event: Dictionary) -> void:
 				canonical_barrel_lead = maxf(event_spawn_lead - COURSE_GENERATOR_SCRIPT.EVENT_SPAWN_LEAD_DISTANCE, 0.0)
 			var early_spawn_offset := canonical_barrel_lead * (motion_speed_multiplier - 1.0)
 			for index in range(count):
-				_spawn_obstacle_scene(BARREL_SCENE, HAZARD_RULES_SCRIPT.BARREL_WIDTH, height, false, event_x + early_spawn_offset - chain_width * 0.5 + float(index) * HAZARD_RULES_SCRIPT.BARREL_CHAIN_SPACING, motion_speed_multiplier, bool(event.get("spiked", false)), int(event.get("barrel_variant", 0)) == 1, float(event.get("rubber_target_x", -1.0)))
+				var barrel_x := event_x + early_spawn_offset - chain_width * 0.5 + float(index) * HAZARD_RULES_SCRIPT.BARREL_CHAIN_SPACING
+				# Rullaren throws its barrels from the hatch instead of rolling them in
+				# from the screen edge; they join the course on the same path later.
+				if bool(event.get("boss_attack", false)) and is_instance_valid(_campaign_run) and bool(_campaign_run.call("queue_thrown_barrel", {"x": barrel_x, "course_distance": course_distance, "height": height, "speed": motion_speed_multiplier, "spiked": bool(event.get("spiked", false))})):
+					continue
+				_spawn_obstacle_scene(BARREL_SCENE, HAZARD_RULES_SCRIPT.BARREL_WIDTH, height, false, barrel_x, motion_speed_multiplier, bool(event.get("spiked", false)), int(event.get("barrel_variant", 0)) == 1, float(event.get("rubber_target_x", -1.0)))
 		&"gap":
 			var gap := TRACK_GAP_SCRIPT.new() as TrackGap
 			gap.position = Vector2(event_x, 0.0)

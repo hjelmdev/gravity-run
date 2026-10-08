@@ -5,6 +5,8 @@ const INVENTORY_SCREEN_SCENE := preload("res://ui/inventory_screen.tscn")
 const ActionIconScript := preload("res://ui/action_icon.gd")
 const MusicVolumeControlScript := preload("res://ui/music_volume_control.gd")
 
+const PANEL_WIDTH := 560.0
+
 var pause_button: Button
 var pause_overlay: Control
 var resume_button: Button
@@ -123,19 +125,15 @@ func _build_pause_overlay() -> void:
 
 	pause_panel = PanelContainer.new()
 	var pause_size := get_viewport().get_visible_rect().size
-	pause_panel.custom_minimum_size = Vector2(minf(360.0, pause_size.x - 24.0), minf(450.0, pause_size.y - 24.0))
+	# Every page fits in the 540 px tall view, so the panel never scrolls.
+	pause_panel.custom_minimum_size = Vector2(minf(PANEL_WIDTH, pause_size.x - 24.0), 0.0)
 	pause_panel.add_theme_stylebox_override("panel", _panel_style())
 	center.add_child(pause_panel)
 
-	var pause_scroll := ScrollContainer.new()
-	pause_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	pause_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	pause_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	pause_panel.add_child(pause_scroll)
 	menu_layout = VBoxContainer.new()
 	menu_layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	menu_layout.add_theme_constant_override("separation", 14)
-	pause_scroll.add_child(menu_layout)
+	menu_layout.add_theme_constant_override("separation", 10)
+	pause_panel.add_child(menu_layout)
 	_show_pause_actions()
 
 func _show_pause_actions() -> void:
@@ -144,50 +142,69 @@ func _show_pause_actions() -> void:
 	var title := Label.new()
 	title.text = tr("PAUSED")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 30)
+	title.add_theme_font_size_override("font_size", 28)
 	title.add_theme_color_override("font_color", Color("edf3ff"))
 	menu_layout.add_child(title)
 
-	var hint := Label.new()
-	hint.text = tr("Game paused")
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.add_theme_font_size_override("font_size", 15)
-	hint.add_theme_color_override("font_color", Color("b9c8dc"))
-	menu_layout.add_child(hint)
+	# The one primary action: big and filled.
 	resume_button = Button.new()
 	resume_button.text = tr("Resume")
-	resume_button.custom_minimum_size = Vector2(0.0, 44.0)
+	resume_button.custom_minimum_size = Vector2(0.0, 62.0)
+	resume_button.add_theme_font_size_override("font_size", 24)
+	_style_primary_button(resume_button)
 	resume_button.pressed.connect(_set_paused.bind(false))
 	menu_layout.add_child(resume_button)
-	var character_button := Button.new()
-	character_button.text = tr("Character / Inventory")
-	character_button.custom_minimum_size = Vector2(0.0, 40.0)
-	character_button.pressed.connect(_open_inventory.bind("character"))
-	menu_layout.add_child(character_button)
-	var shop_button := Button.new()
-	shop_button.text = tr("Shop")
-	shop_button.custom_minimum_size = Vector2(0.0, 40.0)
-	shop_button.pressed.connect(_open_inventory.bind("shop"))
-	menu_layout.add_child(shop_button)
 
-	var options_button := Button.new()
-	options_button.text = tr("Options")
-	options_button.custom_minimum_size = Vector2(0.0, 44.0)
-	options_button.pressed.connect(_show_control_options)
-	menu_layout.add_child(options_button)
-
+	# Everything else is secondary: smaller buttons in two rows.
+	var inventory_row := _add_button_row()
+	_add_secondary_button(inventory_row, tr("Character / Inventory"), _open_inventory.bind("character"))
+	_add_secondary_button(inventory_row, tr("Shop"), _open_inventory.bind("shop"))
+	var settings_row := _add_button_row()
+	_add_secondary_button(settings_row, tr("Options"), _show_control_options)
 	if get_parent().has_method("save_render_diagnostics"):
-		var diagnostics_button := Button.new()
-		diagnostics_button.text = tr("Smoothness diagnostics")
-		diagnostics_button.custom_minimum_size.y = 40
-		diagnostics_button.pressed.connect(_show_smoothness_diagnostics)
-		menu_layout.add_child(diagnostics_button)
+		_add_secondary_button(settings_row, tr("Smoothness diagnostics"), _show_smoothness_diagnostics)
 
+	menu_layout.add_child(HSeparator.new())
 	var menu_button := Button.new()
 	menu_button.text = tr("Return to game hub")
-	menu_button.custom_minimum_size = Vector2(0.0, 44.0)
+	menu_button.custom_minimum_size = Vector2(0.0, 40.0)
 	menu_button.pressed.connect(_quit_to_main_menu)
 	menu_layout.add_child(menu_button)
+
+## A row of buttons that share the width; on a very narrow view it stacks.
+func _add_button_row() -> BoxContainer:
+	var row: BoxContainer = HBoxContainer.new() if pause_panel.custom_minimum_size.x >= 420.0 else VBoxContainer.new()
+	row.add_theme_constant_override("separation", 10 if row is HBoxContainer else 8)
+	menu_layout.add_child(row)
+	return row
+
+func _add_secondary_button(parent: Container, text: String, callback: Callable) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.custom_minimum_size = Vector2(0.0, 42.0)
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.pressed.connect(callback)
+	parent.add_child(button)
+	return button
+
+func _style_primary_button(button: Button) -> void:
+	for state in ["normal", "hover", "pressed", "focus"]:
+		var style := StyleBoxFlat.new()
+		style.bg_color = Color("42d6c5")
+		if state == "hover":
+			style.bg_color = Color("6fe6d8")
+		elif state == "pressed":
+			style.bg_color = Color("2fb3a4")
+		style.set_corner_radius_all(10)
+		style.content_margin_left = 16.0
+		style.content_margin_right = 16.0
+		if state == "focus":
+			style.bg_color = Color("6fe6d8")
+			style.set_border_width_all(3)
+			style.border_color = Color("edf3ff")
+		button.add_theme_stylebox_override(state, style)
+	for color_name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		button.add_theme_color_override(color_name, Color("0c1a2a"))
 
 func _show_smoothness_diagnostics() -> void:
 	_clear_menu_layout()
@@ -208,16 +225,13 @@ func _show_smoothness_diagnostics() -> void:
 	save.pressed.connect(func() -> void: notice.text = str(get_parent().call("save_render_diagnostics")))
 	menu_layout.add_child(save)
 	menu_layout.add_child(notice)
-	var resume := Button.new()
-	resume.text = tr("Resume")
-	resume.custom_minimum_size.y = 44
-	resume.pressed.connect(_set_paused.bind(false))
-	menu_layout.add_child(resume)
-	var back := Button.new()
-	back.text = tr("Back")
-	back.custom_minimum_size.y = 44
-	back.pressed.connect(_show_pause_actions)
-	menu_layout.add_child(back)
+	var nav := HBoxContainer.new()
+	nav.add_theme_constant_override("separation", 10)
+	menu_layout.add_child(nav)
+	var back := _add_secondary_button(nav, tr("Back"), _show_pause_actions)
+	back.custom_minimum_size.y = 44.0
+	var resume := _add_secondary_button(nav, tr("Resume"), _set_paused.bind(false))
+	resume.custom_minimum_size.y = 44.0
 
 func _show_control_options() -> void:
 	_clear_menu_layout()
@@ -242,26 +256,23 @@ func _show_control_options() -> void:
 	else:
 		control_options.append({"mode": "keyboard", "label": tr("Swap with W / S")})
 		control_options.append({"mode": "mouse", "label": tr("Swap with mouse click")})
+	var control_row := HBoxContainer.new()
+	control_row.add_theme_constant_override("separation", 10)
+	menu_layout.add_child(control_row)
 	for option in control_options:
 		var mode := str(option["mode"])
-		var button := Button.new()
-		button.text = ("[x]  " if PlayerProfile.flip_control == mode else "") + str(option["label"])
-		button.custom_minimum_size = Vector2(0.0, 44.0)
-		button.pressed.connect(_select_control.bind(mode))
-		menu_layout.add_child(button)
+		var button := _add_secondary_button(control_row, ("[x]  " if PlayerProfile.flip_control == mode else "") + str(option["label"]), _select_control.bind(mode))
+		button.custom_minimum_size.y = 44.0
 	var music_volume_control: Control = MusicVolumeControlScript.new()
 	menu_layout.add_child(music_volume_control)
 
-	var back_button := Button.new()
-	var language_row := HBoxContainer.new()
-	language_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	var language_button := Button.new()
 	language_button.text = "‹   %s   ›" % ("Svenska" if PlayerProfile.language == "sv" else "English")
-	language_button.custom_minimum_size = Vector2(0.0, 44.0)
+	language_button.custom_minimum_size = Vector2(0.0, 42.0)
 	language_button.pressed.connect(_cycle_language)
-	language_row.add_child(language_button)
-	menu_layout.add_child(language_row)
+	menu_layout.add_child(language_button)
 
+	var back_button := Button.new()
 	back_button.text = tr("Back to pause menu")
 	back_button.custom_minimum_size = Vector2(0.0, 44.0)
 	back_button.pressed.connect(_show_pause_actions)
@@ -356,6 +367,6 @@ func _panel_style() -> StyleBoxFlat:
 	style.set_corner_radius_all(14)
 	style.content_margin_left = 24.0
 	style.content_margin_right = 24.0
-	style.content_margin_top = 22.0
-	style.content_margin_bottom = 22.0
+	style.content_margin_top = 18.0
+	style.content_margin_bottom = 18.0
 	return style
