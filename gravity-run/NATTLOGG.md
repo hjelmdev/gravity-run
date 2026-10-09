@@ -8,7 +8,7 @@ Förloppet för de schemalagda passen (se NATTPASS.md). Nyast överst.
   `campaign7-worlds23-20261009` är byggd och provstartad i Chromium.
 - Publiceringen är committad i Pages-klonen (de51838, som Adam Hjelm) men INTE pushad:
   pushen till GitHub stoppades av behörighetsspärren (räknas som produktionsdriftsättning).
-  Kvar: kör `git push` i `E:\Utveckling\gravity-run-pages`.
+  Uppdatering 08:05: Adam godkände, pushat till GitHub (main = de51838).
 - Pages-klonen: inget raderat. Git kunde inte ta bort sina egna lås- och tempfiler, så de
   ligger flyttade i `.git/_att_radera/` (HEAD.lock.1, index.lock.1, tmp_idx_Jloohe,
   tmp_pack_Pdtvq4) och kan tas bort. Åtta filer i `docs/` (index.js, refresh.html m.fl.)
