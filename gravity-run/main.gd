@@ -144,6 +144,8 @@ var _manifest_builder: RefCounted
 var _campaign_level: CampaignLevel
 ## The campaign stage the menu's demo run borrows (course and look), or null.
 var _demo_level: CampaignLevel = null
+## The biome whose music an endless run is playing (&"" before the first).
+var _music_biome: StringName = &""
 ## Which world the next demo run shows; the worlds take turns.
 static var _demo_world_index := -1
 var _campaign_run: Node2D
@@ -284,6 +286,7 @@ func _start_run() -> void:
 	# borrows one world's stage (its course and pixel look), not the campaign.
 	# A demo run on an active challenge (tests, previews) keeps that seed.
 	_demo_level = _next_demo_level() if demo_mode and not ChallengeService.active else null
+	_music_biome = &""
 	var look_level: CampaignLevel = _campaign_level if _campaign_level != null else _demo_level
 	# Campaign stages pin one biome; every other run uses the rotation.
 	BIOME_RENDERER_SCRIPT.set_locked_biome(look_level.get_presentation_biome() if look_level != null else &"")
@@ -375,6 +378,18 @@ var _hud_alpha := 1.0
 ## On campaign stages with their own track the runner's feet follow the music:
 ## two footsteps per run cycle, one per eighth note. Other runs keep the
 ## authored animation speed.
+## Endless runs and seeds play the music of the biome the runner is in (the
+## campaign worlds' tracks), changing with a short fade at each biome seam.
+func _update_biome_music() -> void:
+	if demo_mode or _campaign_level != null or game_over:
+		return
+	var biome := BIOME_RENDERER_SCRIPT.definition_at_world_x(float(player.get("world_x"))).biome_id
+	if biome == _music_biome:
+		return
+	var first := _music_biome.is_empty()
+	_music_biome = biome
+	MusicController.switch_track(CampaignAudio.track_for(biome), 0.3 if first else 1.4)
+
 func _sync_run_cycle_to_music() -> void:
 	var sprite := player.get_node("AnimatedSprite2D") as AnimatedSprite2D
 	if sprite == null:
@@ -384,6 +399,9 @@ func _sync_run_cycle_to_music() -> void:
 	if _campaign_level != null:
 		track = CampaignAudio.track_for(_campaign_level.get_presentation_biome())
 		bpm = CampaignAudio.bpm_for(_campaign_level.get_presentation_biome())
+	elif not _music_biome.is_empty():
+		track = CampaignAudio.track_for(_music_biome)
+		bpm = CampaignAudio.bpm_for(_music_biome)
 	var synced := track != null and bpm > 0.0
 	if not synced or sprite.animation != &"run" or sprite.sprite_frames == null:
 		sprite.speed_scale = 1.0
@@ -557,6 +575,7 @@ func _process(delta: float) -> void:
 	sprite.position = _render_player_position - player.position + Vector2(0.0, -float(player.call("get_gravity_direction")))
 	_update_camera()
 	_update_hud_fade(delta)
+	_update_biome_music()
 	_sync_run_cycle_to_music()
 	if is_instance_valid(_campaign_run):
 		_campaign_run.call("update_presentation", float(camera.get("left")), screen_width, Callable(self, "_surface_y_at"))

@@ -772,79 +772,125 @@ static func ghost_texture(size: Vector2, variant: int) -> Texture2D:
 		_default_palette = PixelPalette.new()
 	return _cached(_default_palette, "ghost|%d|%d|%d" % [int(size.x), int(size.y), variant], func() -> Image: return make_ghost(_art(size.x), _art(size.y), variant))
 
-const GHOST_OUTLINE := Color8(40, 30, 76)
-const GHOST_BODY := Color8(244, 246, 255)
-const GHOST_SHADE := Color8(196, 204, 244)
-const GHOST_EYE := Color8(36, 26, 70)
-const WISP_BODY := Color8(186, 255, 226)
-const WISP_SHADE := Color8(110, 220, 196)
-const GRIM_CLOAK := Color8(132, 116, 180)
-const GRIM_SHADE := Color8(98, 84, 142)
-const GRIM_EYE := Color8(150, 255, 210)
+## The three ghosts, in the shapes of the original vector ghosts (a 144 x 192
+## design grid): fill, rim (the vector stroke), dark outline, eye and mouth
+## colours, and the outline of the body.
+const GHOST_STYLES := [
+	{"fill": Color8(217, 229, 255), "rim": Color8(159, 184, 240), "dark": Color8(38, 54, 75), "mouth": Color8(113, 132, 177), "glint": Color.WHITE},
+	{"fill": Color8(220, 245, 242), "rim": Color8(104, 214, 207), "dark": Color8(22, 59, 72), "mouth": Color8(52, 124, 131), "glint": Color8(248, 255, 255)},
+	{"fill": Color8(108, 82, 108), "rim": Color8(216, 140, 157), "dark": Color8(35, 14, 32), "mouth": Color8(245, 201, 207), "glint": Color8(255, 176, 170)},
+]
 
+static func _bezier(points: PackedVector2Array, p0: Vector2, p1: Vector2, p2: Vector2, p3: Vector2, steps := 10) -> void:
+	for i in range(1, steps + 1):
+		var t := float(i) / float(steps)
+		var u := 1.0 - t
+		points.append(p0 * u * u * u + p1 * 3.0 * u * u * t + p2 * 3.0 * u * t * t + p3 * t * t * t)
+
+## The body outline on the design grid.
+static func _ghost_body(variant: int) -> PackedVector2Array:
+	var points := PackedVector2Array([Vector2(72, 8)])
+	_bezier(points, Vector2(72, 8), Vector2(34, 8), Vector2(12, 39), Vector2(12, 82))
+	points.append(Vector2(12, 139))
+	if variant == 2:
+		for corner in [Vector2(31, 132), Vector2(46, 151), Vector2(63, 137), Vector2(77, 153), Vector2(93, 135), Vector2(112, 149), Vector2(122, 133), Vector2(140, 141)]:
+			points.append(corner)
+	else:
+		_bezier(points, Vector2(12, 139), Vector2(25, 129), Vector2(35, 129), Vector2(48, 144), 6)
+		_bezier(points, Vector2(48, 144), Vector2(60, 130), Vector2(71, 130), Vector2(84, 145), 6)
+		_bezier(points, Vector2(84, 145), Vector2(98, 130), Vector2(109, 131), Vector2(121, 145), 6)
+		_bezier(points, Vector2(121, 145), Vector2(129, 136), Vector2(135, 135), Vector2(140, 138), 4)
+	points.append(Vector2(140, 82))
+	_bezier(points, Vector2(140, 82), Vector2(140, 39), Vector2(111, 8), Vector2(72, 8))
+	return points
+
+## A ghost in pixel art: the original ghost's shape and face drawn at the art
+## resolution, flat fill with a shaded right side and a lit top arc, the rim
+## colour round the edge and a dark outline outside it.
 static func make_ghost(w: int, h: int, variant: int) -> Image:
 	var image := _blank(w, h)
-	var cx := float(w) * 0.5
-	var head := float(w) * 0.5 - 0.5
-	var body := GHOST_BODY
-	var shade := GHOST_SHADE
-	if variant == 1:
-		body = WISP_BODY
-		shade = WISP_SHADE
-	elif variant == 2:
-		body = GRIM_CLOAK
-		shade = GRIM_SHADE
+	var style: Dictionary = GHOST_STYLES[clampi(variant, 0, GHOST_STYLES.size() - 1)]
+	var scale := Vector2(float(w) / 144.0, float(h) / 192.0)
+	var design := func(x: int, y: int) -> Vector2: return Vector2((float(x) + 0.5) / scale.x, (float(y) + 0.5) / scale.y)
+	var body := _ghost_body(variant)
+	var fill: Color = style.fill
+	var shade := fill.lerp(style.rim, 0.45)
 	for y in range(h):
 		for x in range(w):
-			var p := Vector2(float(x) + 0.5, float(y) + 0.5)
-			var inside := false
-			if variant == 1:
-				# A teardrop flame: round below, tapering to a curled tip on top.
-				var r := head * 0.85
-				var c := Vector2(cx, float(h) - r - 1.0)
-				var t := clampf((c.y - p.y) / maxf(c.y, 1.0), 0.0, 1.0)
-				var curl := sin(t * PI * 1.2) * float(w) * 0.12
-				inside = p.distance_to(c) <= r or (p.y < c.y and absf(p.x - cx - curl) <= r * (1.0 - t) * 0.95)
-			else:
-				# Dome head, straight sides, a wavy hem of three tails.
-				var top := head + 0.5
-				if p.y < top:
-					inside = Vector2(p.x - cx, p.y - top).length() <= head
-				else:
-					var hem := float(h) - 1.0 - (absf(sin(p.x / float(w) * PI * 3.0)) * float(h) * 0.12)
-					inside = p.y <= hem and absf(p.x - cx) <= head
-			if not inside:
+			var p: Vector2 = design.call(x, y)
+			if not Geometry2D.is_point_in_polygon(p, body):
 				continue
-			var color := body
-			if p.x > cx + head * 0.35:
-				color = shade
-			image.set_pixel(x, y, color)
-	# Face: eyes and a small mouth on the sheet and wisp; a dark hood with
-	# glowing eyes on the grim ghost.
-	var eye_y := int(float(h) * (0.36 if variant != 1 else 0.6))
-	var eye_dx := maxi(int(float(w) * 0.16), 2)
+			image.set_pixel(x, y, shade if p.x > 104.0 else fill)
+	# Rim: the edge of the body in the stroke colour.
+	var rim: Array[Vector2i] = []
+	for y in range(h):
+		for x in range(w):
+			if image.get_pixel(x, y).a < 0.5:
+				continue
+			for n in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var q: Vector2i = Vector2i(x, y) + n
+				if q.x < 0 or q.y < 0 or q.x >= w or q.y >= h or image.get_pixel(q.x, q.y).a < 0.5:
+					rim.append(Vector2i(x, y))
+					break
+	# A dark outline just outside the rim keeps the ghost readable on any sky.
+	var outside: Dictionary = {}
+	for p in rim:
+		for n in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var q: Vector2i = p + n
+			if q.x >= 0 and q.y >= 0 and q.x < w and q.y < h and image.get_pixel(q.x, q.y).a < 0.5:
+				outside[q] = true
+	for p in rim:
+		image.set_pixel(p.x, p.y, style.rim)
+	for q in outside:
+		image.set_pixel(q.x, q.y, Color(style.dark, 0.9))
+	# A lit arc across the top of the head (wisp and grim).
+	if variant != 0:
+		for i in range(24):
+			var t := float(i) / 23.0
+			var a := Vector2(27.0 if variant == 1 else 20.0, 42.0 if variant == 1 else 50.0)
+			var c := Vector2(117.0 if variant == 1 else 124.0, a.y)
+			var mid := Vector2(72.0, 18.0 if variant == 1 else 21.0)
+			var q := a.lerp(mid, t).lerp(mid.lerp(c, t), t)
+			var px := Vector2i(int(q.x * scale.x), int(q.y * scale.y))
+			if px.x >= 0 and px.y >= 0 and px.x < w and px.y < h and image.get_pixel(px.x, px.y).a > 0.5:
+				image.set_pixel(px.x, px.y, image.get_pixel(px.x, px.y).lerp(Color.WHITE, 0.5))
+	# Face: brows (grim), eyes with glints, mouth.
+	var eyes := [[Vector2(53, 77), Vector2(10, 14)], [Vector2(91, 77), Vector2(10, 14)]]
+	if variant == 1:
+		eyes = [[Vector2(50, 78), Vector2(11, 16)], [Vector2(94, 78), Vector2(11, 16)]]
+	elif variant == 2:
+		eyes = [[Vector2(49, 80), Vector2(7, 10)], [Vector2(95, 80), Vector2(7, 10)]]
+		for brow in [[Vector2(35, 71), Vector2(61, 78), Vector2(48, 94)], [Vector2(109, 71), Vector2(83, 78), Vector2(96, 94)]]:
+			for y in range(h):
+				for x in range(w):
+					if Geometry2D.point_is_inside_triangle(design.call(x, y), brow[0], brow[1], brow[2]):
+						image.set_pixel(x, y, style.glint)
+	for eye in eyes:
+		var center: Vector2 = eye[0]
+		var radius: Vector2 = eye[1]
+		for y in range(h):
+			for x in range(w):
+				var d: Vector2 = (design.call(x, y) - center) / radius
+				if d.length_squared() <= 1.0:
+					image.set_pixel(x, y, style.dark)
+		if variant != 2:
+			var glint := Vector2i(int((center.x + 3.0) * scale.x), int((center.y - 5.0) * scale.y))
+			_put(image, glint.x, glint.y, style.glint)
+	var mouth: Array = [Vector2(62, 107), Vector2(72, 114), Vector2(82, 107)]
+	if variant == 1:
+		mouth = [Vector2(61, 108), Vector2(72, 101), Vector2(83, 108)]
 	if variant == 2:
-		for y in range(int(float(h) * 0.2), int(float(h) * 0.5)):
-			for x in range(int(cx - head * 0.6), int(cx + head * 0.6) + 1):
-				if image.get_pixel(x, y).a > 0.5:
-					image.set_pixel(x, y, GHOST_OUTLINE)
-		for side in [-1, 1]:
-			var gx: int = int(cx) + side * eye_dx - (1 if side < 0 else 0)
-			_put(image, gx, eye_y, GRIM_EYE)
-			_put(image, gx + side, eye_y, GRIM_EYE)
-			_put(image, gx, eye_y + 1, GRIM_EYE)
+		var zig := [Vector2(56, 111), Vector2(64, 104), Vector2(72, 112), Vector2(80, 104), Vector2(88, 111)]
+		for i in range(zig.size() - 1):
+			for s in range(8):
+				var q: Vector2 = (zig[i] as Vector2).lerp(zig[i + 1], float(s) / 7.0)
+				_put(image, int(q.x * scale.x), int(q.y * scale.y), style.mouth)
 	else:
-		for side in [-1, 1]:
-			var ex: int = int(cx) + side * eye_dx - (1 if side < 0 else 0)
-			for dy in range(maxi(int(float(h) * 0.1), 3)):
-				_put(image, ex, eye_y + dy, GHOST_EYE)
-				_put(image, ex + side, eye_y + dy, GHOST_EYE)
-			_put(image, ex, eye_y, Color.WHITE)
-		_put(image, int(cx), eye_y + maxi(int(float(h) * 0.12), 3), GHOST_EYE)
-		_put(image, int(cx) - 1, eye_y + maxi(int(float(h) * 0.12), 3), GHOST_EYE)
-	var saved := pal
-	pal = PixelPalette.new()
-	pal.hazard_outline = GHOST_OUTLINE
-	_outline(image)
-	pal = saved
+		for i in range(16):
+			var t := float(i) / 15.0
+			var a: Vector2 = mouth[0]
+			var b: Vector2 = mouth[1]
+			var c: Vector2 = mouth[2]
+			var q := a.lerp(b, t).lerp(b.lerp(c, t), t)
+			_put(image, int(q.x * scale.x), int(q.y * scale.y), style.mouth)
 	return image

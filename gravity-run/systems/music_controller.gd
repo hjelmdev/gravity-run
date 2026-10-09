@@ -111,6 +111,21 @@ func start_round(round_id: String, track: AudioStream = null) -> void:
 		_autoplay_probe_position = _player.get_playback_position() if _menu_start_pending else -1.0
 		_set_context_gain(1.0, 0.10)
 
+## Endless runs change music with the biome: a short fade out, the new track
+## from the top, a fade back in. null is the default round music.
+func switch_track(track: AudioStream, fade_seconds := 0.8) -> void:
+	var target := track if track != null else MUSIC_STREAM
+	if not PlayerProfile.music_enabled or not is_instance_valid(_player) or _player.stream == target:
+		return
+	_cancel_context_fade()
+	_context_tween = create_tween()
+	_context_tween.tween_property(_player, "volume_db", -50.0, fade_seconds * 0.5)
+	_context_tween.tween_callback(func() -> void:
+		_use_track(track)
+		_player.stream_paused = false
+		_player.play(0.0))
+	_context_tween.tween_property(_player, "volume_db", 0.0, fade_seconds * 0.5)
+
 func set_stream_paused(paused: bool) -> void:
 	if not is_instance_valid(_player):
 		return
