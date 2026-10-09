@@ -2065,3 +2065,6 @@ msgstr "En träff av lava per bana biter inte"
 
 msgid "New key: %s. %s on this world's stages."
 msgstr "Ny nyckel: %s. %s på den här världens banor."
+
+msgid "The host's game is in the background. The round waits until they are back."
+msgstr "Värdens spel ligger i bakgrunden. Rundan väntar tills värden är tillbaka."

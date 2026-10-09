@@ -9,6 +9,7 @@ const IdentityAdapterScript := preload("res://systems/multiplayer_v2/v2_identity
 const CoinAwardProviderScript := preload("res://systems/multiplayer_v2/v2_coin_award_provider.gd")
 const SignalingTransportScript := preload("res://systems/supabase_signaling_transport.gd")
 const WebRTCTransportScript := preload("res://systems/multiplayer_v2/v2_webrtc_transport.gd")
+const TurnCredentialsScript := preload("res://systems/multiplayer_v2/v2_turn_credentials.gd")
 const CourseGeneratorScript := preload("res://systems/course_generator.gd")
 const RoomSettingsScript := preload("res://systems/multiplayer_v2/v2_room_settings.gd")
 const ValidationScript := preload("res://systems/multiplayer_v2/v2_validation.gd")
@@ -46,6 +47,9 @@ signal world_interaction_resolved(request_id: String, accepted: bool, message: S
 signal results_received(result: Dictionary)
 signal lobby_returned
 signal membership_removed(reason: String)
+## Guests: the host's browser tab went to the background (world events stop
+## until it comes back) or returned.
+signal host_away_changed(away: bool)
 
 const V2_GAME_VERSION := "2.1.20261008.17"
 const MAX_PLAYERS := 5
@@ -293,6 +297,10 @@ func _create_lobby_services() -> void:
 	_webrtc_transport.roster_refresh_requested.connect(_on_signal_roster_refresh_requested)
 	_webrtc_transport.signal_diagnostic.connect(_on_signal_diagnostic)
 	add_child(_webrtc_transport)
+	_watch_page_visibility()
+	var turn := TurnCredentialsScript.new(WebRTCTransportScript.ice_servers) as Node
+	turn.name = "TurnCredentials"
+	add_child(turn)
 	_round_coordinator.control_requested.connect(send_control)
 	_round_coordinator.round_started.connect(_on_round_started)
 	_round_coordinator.round_failed.connect(_on_coordinator_round_failed)
@@ -1486,6 +1494,10 @@ func _handle_host_control(sender_peer_id: int, kind: String, payload: Dictionary
 
 func _handle_guest_control(kind: String, payload: Dictionary) -> void:
 	match kind:
+		"HOST_AWAY":
+			host_away = bool(payload.get("away", false))
+			diagnostics.record_event("host_away", {"away": host_away, "round_id": _round_id})
+			host_away_changed.emit(host_away)
 		"RECONNECT_SYNC_ACK":
 			if str(payload.get("sync_request_id", "")) != str(_sync_request_ids.get(1, "")) or not _sync_request_ids.has(1):
 				return
@@ -1723,6 +1735,7 @@ func _on_round_started(round_id: String, descriptor: Dictionary) -> void:
 	_round_coordinator.clock.commit_start(Time.get_ticks_usec())
 	_set_backend_phase("RUNNING")
 	diagnostics.record_event("round_started", {"round_id": round_id, "tick": 0, "seed": int(descriptor.get("seed", room_state.get("seed", 1))), "manifest_hash": str(descriptor.get("manifest_hash", room_state.get("manifest_hash", "")))})
+	host_away = false
 	round_started.emit(round_id, descriptor.duplicate(true))
 	begin_round(round_id, _round_roster_revision)
 	if world_simulation != null and current_manifest != null:
@@ -2531,6 +2544,7 @@ func _complete_lobby_return() -> void:
 	world_simulation = null
 	diagnostics.session["round_id"] = ""
 	diagnostics.record_event("return_to_lobby_applied", {"generation": int(room_state.get("lobby_generation", -1)), "attempt_id": _start_attempt_id})
+	host_away = false
 	lobby_returned.emit()
 
 func _on_signal_roster_refresh_requested(reason: String) -> void:
@@ -3137,3 +3151,31 @@ func close_session(reason: String = "left_room") -> void:
 
 func set_session_as_active_for_testing(descriptor: Dictionary) -> void:
 	activate_client_session(descriptor)
+
+## Guests: true while the host has said its tab is in the background.
+var host_away := false
+var _visibility_callback: JavaScriptObject
+
+## Web only: listens for the page going to the background. A hidden tab is
+## frozen by the browser, so a host there stops the world for everyone; it
+## tells the guests right away (before the freeze) and again when it is back.
+func _watch_page_visibility() -> void:
+	if not OS.has_feature("web"):
+		return
+	_visibility_callback = JavaScriptBridge.create_callback(_on_page_visibility)
+	JavaScriptBridge.get_interface("document").addEventListener("visibilitychange", _visibility_callback)
+
+func _on_page_visibility(_args: Array) -> void:
+	var hidden := str(JavaScriptBridge.eval("document.visibilityState", true)) == "hidden"
+	notify_page_hidden(hidden)
+
+## Host: tells every connected guest that this tab went hidden or came back,
+## and flushes the packet at once, since a hidden tab may not run another frame.
+func notify_page_hidden(hidden: bool) -> void:
+	if str(session.get("role", "")) != "host" or not _active:
+		return
+	diagnostics.record_event("host_page_visibility", {"hidden": hidden, "round_id": _round_id})
+	for target in connected_peer_ids():
+		send_control(int(target), "HOST_AWAY", {"away": hidden, "round_id": _round_id})
+	if network_api != null and network_api.multiplayer_peer != null:
+		network_api.multiplayer_peer.poll()

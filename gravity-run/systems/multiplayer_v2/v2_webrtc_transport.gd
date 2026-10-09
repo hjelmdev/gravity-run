@@ -8,6 +8,8 @@ signal roster_refresh_requested(reason: String)
 signal signal_diagnostic(event_name: String, details: Dictionary)
 
 const STUN_SERVERS := [{"urls": ["stun:stun.l.google.com:19302"]}]
+## STUN plus the TURN servers v2_turn_credentials.gd adds (shared by every room).
+static var ice_servers: Array = STUN_SERVERS.duplicate(true)
 const MAX_PENDING_ICE := 64
 const MAX_UNKNOWN_MEMBER_SIGNALS := 32
 const UNKNOWN_MEMBER_TTL_MSEC := 4_000
@@ -264,7 +266,7 @@ func _drain_queued_ice(user_id: String, attempt_id: String, generation: int) -> 
 
 func _new_connection(user_id: String, attempt: String, peer_id: int, generation: int) -> WebRTCPeerConnection:
 	var connection := WebRTCPeerConnection.new()
-	if connection.initialize({"iceServers": STUN_SERVERS}) != OK:
+	if connection.initialize({"iceServers": ice_servers}) != OK:
 		_fail(user_id, "WebRTC is unavailable in this build.")
 		return null
 	if peer == null or peer.add_peer(connection, peer_id) != OK:

@@ -116,6 +116,8 @@ var _right_edge_save_button: Button
 var _right_edge_clear_button: Button
 var _right_edge_capture_status: Label
 var _right_edge_capture_toast: Label
+## Guests: shown while the host's tab is in the background.
+var _host_away_label: Label
 var _godot_frame_intervals_ms: Array[float] = []
 var _phase_profile: Dictionary = {}
 var _last_barrel_probe: Dictionary = {}
@@ -211,6 +213,7 @@ func _ready() -> void:
 	MultiplayerV2Service.results_received.connect(_on_results_received)
 	MultiplayerV2Service.round_failed.connect(_on_round_failed)
 	MultiplayerV2Service.round_started.connect(_on_round_started)
+	MultiplayerV2Service.host_away_changed.connect(_on_host_away_changed)
 	_round_id = str(MultiplayerV2Service.session.get("round_id", _round_id))
 	_runner.round_id = _round_id
 	MultiplayerV2Service.mark_local_prepared()
@@ -395,6 +398,18 @@ func _build_overlay() -> void:
 	_right_edge_capture_toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_right_edge_capture_toast.visible = false
 	_hud_root.add_child(_right_edge_capture_toast)
+	_host_away_label = Label.new()
+	_host_away_label.name = "HostAway"
+	_host_away_label.text = tr("The host's game is in the background. The round waits until they are back.")
+	_host_away_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_host_away_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_host_away_label.add_theme_font_size_override("font_size", 18)
+	_host_away_label.add_theme_color_override("font_color", Color("f5d45e"))
+	_host_away_label.add_theme_color_override("font_outline_color", Color("101827"))
+	_host_away_label.add_theme_constant_override("outline_size", 6)
+	_host_away_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_host_away_label.visible = MultiplayerV2Service.host_away
+	_hud_root.add_child(_host_away_label)
 	_right_edge_cancel_button.mouse_filter = Control.MOUSE_FILTER_STOP
 	_hud_root.add_child(_right_edge_cancel_button)
 	_result_panel = PanelContainer.new()
@@ -469,6 +484,9 @@ func _layout_hud() -> void:
 	_status_label.size = status_rect.size
 	_debug_panel.position = panel_rect.position
 	_debug_panel.size = panel_rect.size
+	if is_instance_valid(_host_away_label):
+		_host_away_label.size = Vector2(minf(520.0, maxf(size.x - margin * 2.0, 0.0)), 60.0)
+		_host_away_label.position = Vector2((size.x - _host_away_label.size.x) * 0.5, size.y * 0.32)
 	if is_instance_valid(_right_edge_capture_toast):
 		_right_edge_capture_toast.position = Vector2(margin, margin + 70.0)
 		_right_edge_capture_toast.size = Vector2(minf(360.0, maxf(size.x - margin * 2.0, 0.0)), 28.0)
@@ -2223,3 +2241,7 @@ func _play_local_death_sfx(source: String) -> void:
 	_local_death_sfx_diagnostic_recorded = true
 	var started_usec := Time.get_ticks_usec()
 	MultiplayerV2Service.diagnostics.record_event("local_death_sfx_started", {"round_id": _round_id, "entity_id": _pending_barrel_contact_entity_id, "source": source, "local_sfx_usec": started_usec, "contact_to_sfx_usec": maxi(started_usec - _pending_barrel_contact_usec, 0) if _pending_barrel_contact_usec >= 0 else -1})
+
+func _on_host_away_changed(away: bool) -> void:
+	if is_instance_valid(_host_away_label):
+		_host_away_label.visible = away
