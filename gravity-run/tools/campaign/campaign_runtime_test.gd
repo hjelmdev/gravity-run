@@ -138,6 +138,8 @@ static func _foreign_encounters(world_id: StringName) -> Array:
 			return ["ghost", "lava_crack", "volcano", "haunted_ghost", "haunted_chaser", "lava_tidal_pool"]
 		&"haunted":
 			return ["lava_crack", "volcano", "cave_icicle", "lava_tidal_pool"]
+		&"volcano":
+			return ["ghost", "haunted_ghost", "haunted_chaser", "cave_icicle"]
 	return ["ghost", "lava_crack", "volcano", "cave_icicle"]
 
 ## Frozen feature positions per cave stage: [kind, at]. A change here is a

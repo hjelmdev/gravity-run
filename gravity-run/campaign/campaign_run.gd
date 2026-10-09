@@ -316,6 +316,10 @@ static func hazard_tip(hazard_id: String) -> String:
 		"bat_swarm": return "They sweep along one side: be on the other"
 		"haunted_ghost": return "Ghosts float through one side: take the other"
 		"haunted_chaser": return "It hunts you from behind: keep switching sides"
+		"lava_crack": return "Glowing cracks burn: run on the other side"
+		"lava_volcano": return "It erupts from the floor: be on the ceiling"
+		"lava_tidal_pool": return "The lava rises: get off the floor in time"
+		"ember_bomb": return "A red ring in one lane: an ember bomb lands there, so take the other"
 	return ""
 
 static func hazard_display_name(hazard_id: String) -> String:
@@ -335,6 +339,10 @@ static func hazard_display_name(hazard_id: String) -> String:
 		"bat_swarm": return "bat swarm"
 		"haunted_ghost": return "floating ghosts"
 		"haunted_chaser": return "chasing ghost"
+		"lava_crack": return "lava cracks"
+		"lava_volcano": return "volcanoes"
+		"lava_tidal_pool": return "lava pools"
+		"ember_bomb": return "ember bombs"
 	return hazard_id.replace("_", " ")
 
 ## One physics tick. Collects stars with the same swept test as coins, drives

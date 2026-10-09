@@ -178,9 +178,56 @@ const HAUNTED_STAGES := [
 	},
 ]
 
+## Vulkanen. Lava is the new generated hazard family (cracks, volcanoes and
+## tidal pools); ash and ember bombs are scripted features.
+const LAVA_STAGES := [
+	{
+		"id": &"4-1", "title": "Glowing Path", "intro": "New: lava cracks",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "lava_crack"], "new": ["lava_crack"],
+		"density": 1.2, "margin": 1.15, "length": 17500.0,
+		"seed": 4101,
+		"stars": [Vector2(4477.53, 426.00), Vector2(9245.25, 114.00), Vector2(13581.01, 114.00)],
+	},
+	{
+		"id": &"4-2", "title": "Ash Rain", "intro": "Ash falls from the sky",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "lava_crack"], "new": [],
+		"density": 1.3, "margin": 1.1, "length": 19000.0,
+		"seed": 4203,
+		"stars": [Vector2(4793.76, 426.00), Vector2(10125.44, 250.00), Vector2(14279.96, 250.00)],
+	},
+	{
+		"id": &"4-3", "title": "Eruption", "intro": "New: volcanoes",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "lava_crack", "lava_volcano"], "new": ["lava_volcano"],
+		"density": 1.4, "margin": 1.05, "length": 20500.0,
+		"seed": 4311,
+		"stars": [Vector2(5372.43, 114.00), Vector2(10943.24, 74.00), Vector2(16407.16, 74.00)],
+	},
+	{
+		"id": &"4-4", "title": "Tide of Fire", "intro": "New: rising lava pools",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "lava_crack", "lava_volcano", "lava_tidal_pool"], "new": ["lava_tidal_pool"],
+		"density": 1.5, "margin": 1.0, "length": 22000.0,
+		"seed": 4415,
+		"stars": [Vector2(5602.36, 114.00), Vector2(11811.91, 114.00), Vector2(18515.43, 114.00)],
+	},
+	{
+		"id": &"4-5", "title": "Ember Storm", "intro": "Ember bombs rain down",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "lava_crack", "lava_volcano", "lava_tidal_pool"], "new": [],
+		"density": 1.6, "margin": 0.95, "length": 23500.0,
+		"seed": 4515,
+		"stars": [Vector2(5970.42, 426.00), Vector2(12583.10, 151.00), Vector2(18518.54, 151.00)],
+	},
+	{
+		"id": &"4-6", "title": "Volcano Exam", "intro": "Everything the volcano has taught you",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "lava_crack", "lava_volcano", "lava_tidal_pool"], "new": [],
+		"density": 1.8, "margin": 0.85, "length": 25000.0,
+		"seed": 4615,
+		"stars": [Vector2(6235.64, 426.00), Vector2(13959.76, 74.00), Vector2(21040.71, 74.00)],
+	},
+]
+
 ## Stage tables per world: [world_id, generation biome, stages].
 static func stage_tables() -> Array:
-	return [[&"meadow", &"classic", MEADOW_STAGES], [&"cave", &"cave", CAVE_STAGES], [&"haunted", &"haunted", HAUNTED_STAGES]]
+	return [[&"meadow", &"classic", MEADOW_STAGES], [&"cave", &"cave", CAVE_STAGES], [&"haunted", &"haunted", HAUNTED_STAGES], [&"volcano", &"lava", LAVA_STAGES]]
 
 static var _worlds: Array[CampaignWorld] = []
 
@@ -239,8 +286,9 @@ static func _build_worlds() -> Array[CampaignWorld]:
 	for level in haunted.levels:
 		level.presentation_biome = &"haunted_campaign"
 	result.append(haunted)
-	# Later worlds are on the map already; their stages arrive in later phases.
-	result.append(_make_world(&"volcano", 4, "The Volcano", &"lava", "map_volcano", LAVA_MAP_NODES, Color("ff814f")))
+	var volcano := _make_world(&"volcano", 4, "The Volcano", &"lava", "map_volcano", LAVA_MAP_NODES, Color("ff814f"))
+	_add_stages(volcano, LAVA_STAGES)
+	result.append(volcano)
 	return result
 
 ## Adds a world's stages. A stage only joins once the level tool has frozen

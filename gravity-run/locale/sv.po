@@ -1972,3 +1972,63 @@ msgstr "Utrustning är PÅ: allas utrustade prylar gäller i loppet."
 
 msgid "Equipment is OFF: everyone races without items."
 msgstr "Utrustning är AV: alla kör utan prylar."
+
+msgid "Glowing Path"
+msgstr "Glödande stig"
+
+msgid "New: lava cracks"
+msgstr "Nytt: lavasprickor"
+
+msgid "Ash Rain"
+msgstr "Askregn"
+
+msgid "Ash falls from the sky"
+msgstr "Aska faller från himlen"
+
+msgid "Eruption"
+msgstr "Utbrottet"
+
+msgid "New: volcanoes"
+msgstr "Nytt: vulkaner"
+
+msgid "Tide of Fire"
+msgstr "Tidvatten"
+
+msgid "New: rising lava pools"
+msgstr "Nytt: stigande lavapooler"
+
+msgid "Ember Storm"
+msgstr "Eldregn"
+
+msgid "Ember bombs rain down"
+msgstr "Glödbomber regnar ner"
+
+msgid "Volcano Exam"
+msgstr "Vulkanprovet"
+
+msgid "Everything the volcano has taught you"
+msgstr "Allt som vulkanen har lärt dig"
+
+msgid "Glowing cracks burn: run on the other side"
+msgstr "Glödande sprickor bränns: spring på andra sidan"
+
+msgid "It erupts from the floor: be on the ceiling"
+msgstr "Den får utbrott från golvet: var i taket"
+
+msgid "The lava rises: get off the floor in time"
+msgstr "Lavan stiger: lämna golvet i tid"
+
+msgid "A red ring in one lane: an ember bomb lands there, so take the other"
+msgstr "En röd ring i ena filen: en glödbomb slår ner där, så ta den andra"
+
+msgid "lava cracks"
+msgstr "lavasprickor"
+
+msgid "volcanoes"
+msgstr "vulkaner"
+
+msgid "lava pools"
+msgstr "lavapooler"
+
+msgid "ember bombs"
+msgstr "glödbomber"
