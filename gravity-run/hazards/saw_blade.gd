@@ -90,6 +90,9 @@ func _draw() -> void:
 	if not visible:
 		return
 	var radius := Model.radius_for_state(state)
+	if BiomeRenderer.locked_biome_id() == &"meadow":
+		_draw_pixel_saw(radius)
+		return
 	if Model.is_embedded_variant(event):
 		if bool(state.get("falling", false)):
 			_draw_full_silhouette(radius, _render_roll_angle)
@@ -211,3 +214,25 @@ func _surface_clip_distance(local_point: Vector2, visible_below_surface: bool) -
 	var surface_y := float(support.get("y", global_position.y))
 	var point_y := global_position.y + local_point.y
 	return point_y - surface_y if visible_below_surface else surface_y - point_y
+
+## The meadow's pixel-art saw (MeadowPixelArt): a textured square that turns
+## with the roll, clipped at the support line like the vector embedded saw.
+func _draw_pixel_saw(radius: float) -> void:
+	var embedded := Model.is_embedded_variant(event) and not bool(state.get("falling", false))
+	var angle := _render_roll_angle if Model.is_embedded_variant(event) else 0.0
+	var art_radius := int(round(radius / MeadowPixelArt.ART_SCALE))
+	var texture := MeadowPixelArt.saw_texture(radius)
+	var size := float(MeadowPixelArt.saw_side(art_radius)) * MeadowPixelArt.ART_SCALE
+	var half := size * 0.5
+	var square := PackedVector2Array([Vector2(-half, -half), Vector2(half, -half), Vector2(half, half), Vector2(-half, half)])
+	if embedded:
+		square = _clip_at_surface(square, bool(state.get("ceiling_lane", false)))
+		if square.size() < 3:
+			return
+	var uvs := PackedVector2Array()
+	for point in square:
+		uvs.append(point.rotated(-angle) / size + Vector2(0.5, 0.5))
+	var colors := PackedColorArray()
+	colors.resize(square.size())
+	colors.fill(Color.WHITE)
+	draw_polygon(square, colors, uvs, texture)

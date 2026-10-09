@@ -433,54 +433,130 @@ static func _draw_atlas_decorations(canvas: CanvasItem, biome: BiomeDefinition, 
 			continue
 		canvas.draw_texture_rect_region(source.texture, destination, atlas_region, biome.surface_tint)
 
-## Daylight meadow for the campaign: sky band, sun, drifting clouds and two
-## parallax ranges of rolling hills. Every shape is a function of course
-## position, so fragments at theme boundaries join without seams.
+## Daylight meadow for the campaign in the runners' pixel style (shapes snap to
+## a 4 px grid): a banded sky with dithered seams, a block sun, outlined
+## clouds, a pale far ridge, two parallax ranges of stepped hills with a lit
+## crest, and round pixel trees on the near hills. Every shape is a function
+## of course position, so fragments at theme boundaries join without seams.
+const MEADOW_SKY := [Color(0.42, 0.68, 0.92), Color(0.47, 0.72, 0.93), Color(0.53, 0.77, 0.94), Color(0.6, 0.82, 0.95)]
+const MEADOW_PX := 4.0
+
 static func _draw_meadow_backdrop(canvas: CanvasItem, left: float, size: Vector2, view_left: float, camera_course_distance: float, time_seconds: float) -> void:
 	var right := left + size.x
-	canvas.draw_rect(Rect2(Vector2(left, 0.0), Vector2(size.x, size.y * 0.30)), Color(0.47, 0.72, 0.92))
-	canvas.draw_rect(Rect2(Vector2(left, size.y * 0.30), Vector2(size.x, size.y * 0.12)), Color(0.52, 0.76, 0.93))
-	# The sun keeps its place on screen.
+	var px := MEADOW_PX
+	# Sky bands, each seam dithered with a checker row.
+	var band_h := roundf(size.y * 0.12 / px) * px
+	for index in range(MEADOW_SKY.size()):
+		var y := float(index) * band_h
+		var h := band_h if index < MEADOW_SKY.size() - 1 else size.y * 0.5
+		canvas.draw_rect(Rect2(Vector2(left, y), Vector2(size.x, h)), MEADOW_SKY[index])
+		if index > 0:
+			var x := floorf(left / (px * 2.0)) * px * 2.0
+			while x < right:
+				var cell := Rect2(Vector2(x, y), Vector2(px, px)).intersection(Rect2(left, 0.0, size.x, size.y))
+				if cell.size.x > 0.0:
+					canvas.draw_rect(cell, MEADOW_SKY[index - 1])
+				x += px * 2.0
+	# The sun keeps its place on screen: blocks, with a soft block halo.
 	var sun := Vector2(view_left + 760.0, size.y * 0.27)
-	if sun.x - 30.0 >= left and sun.x + 30.0 <= right:
-		canvas.draw_circle(sun, 30.0, Color(1.0, 0.95, 0.7, 0.35))
-		canvas.draw_circle(sun, 21.0, Color(1.0, 0.92, 0.58))
-	# Clouds: chunky rounded rows, slow parallax plus a little wind drift.
+	if sun.x - 40.0 >= left and sun.x + 40.0 <= right:
+		_pixel_disc(canvas, sun, 34.0, px, Color(1.0, 0.95, 0.7, 0.3))
+		_pixel_disc(canvas, sun, 22.0, px, Color(1.0, 0.86, 0.45))
+		_pixel_disc(canvas, sun + Vector2(-4.0, -4.0), 14.0, px, Color(1.0, 0.95, 0.66))
+	# Clouds: stacked block rows with a shaded underside, slow parallax plus wind.
 	var cloud_parallax := camera_course_distance * 0.06 + time_seconds * 6.0
 	var period := 420.0
 	var first := floori((cloud_parallax + (left - view_left) - 120.0) / period)
 	var last := ceili((cloud_parallax + (right - view_left) + 120.0) / period)
+	var view := Rect2(left, 0.0, size.x, size.y)
 	for cell in range(first, last + 1):
 		var landmark := _landmark_for_cell(cell, period, 4211)
-		var cx := view_left + landmark.x - cloud_parallax
-		var cy := size.y * (0.20 + landmark.y * 0.16)
-		var w := 60.0 + landmark.y * 50.0
-		if cx + w * 0.6 < left or cx - w * 0.6 > right:
+		var cx := roundf((view_left + landmark.x - cloud_parallax) / px) * px
+		var cy := roundf(size.y * (0.20 + landmark.y * 0.16) / px) * px
+		var w := roundf((60.0 + landmark.y * 50.0) / px) * px
+		if cx + w < left or cx - w > right:
 			continue
-		var cloud := Color(1.0, 1.0, 1.0, 0.85)
-		# Clip to the fragment instead of skipping, so clouds slide in and out
-		# of view rather than popping at the edges.
-		for part in [Rect2(cx - w * 0.5, cy - 8.0, w, 16.0), Rect2(cx - w * 0.3, cy - 18.0, w * 0.45, 12.0), Rect2(cx - w * 0.05, cy - 24.0, w * 0.3, 10.0)]:
-			var clipped: Rect2 = part.intersection(Rect2(left, 0.0, size.x, size.y))
+		var parts := [
+			[Rect2(cx - w * 0.5, cy - 8.0, w, 12.0), Color(1.0, 1.0, 1.0, 0.92)],
+			[Rect2(cx - w * 0.5 + px, cy + 4.0, w - px * 2.0, 4.0), Color(0.82, 0.9, 0.97, 0.92)],
+			[Rect2(cx - w * 0.3, cy - 20.0, roundf(w * 0.45 / px) * px, 12.0), Color(1.0, 1.0, 1.0, 0.92)],
+			[Rect2(cx - w * 0.05, cy - 28.0, roundf(w * 0.3 / px) * px, 8.0), Color(1.0, 1.0, 1.0, 0.92)],
+		]
+		for part in parts:
+			var clipped: Rect2 = (part[0] as Rect2).intersection(view)
 			if clipped.size.x > 0.0:
-				canvas.draw_rect(clipped, cloud)
-	_draw_meadow_hills(canvas, left, size, view_left, camera_course_distance * 0.10, size.y * 0.52, 34.0, 0.011, Color(0.55, 0.77, 0.6))
-	_draw_meadow_hills(canvas, left, size, view_left, camera_course_distance * 0.22, size.y * 0.64, 28.0, 0.017, Color(0.4, 0.66, 0.42))
+				canvas.draw_rect(clipped, part[1])
+	# Far ridge, then two hill ranges; trees stand on the near range.
+	_draw_meadow_hills(canvas, left, size, view_left, camera_course_distance * 0.05, size.y * 0.46, 40.0, 0.006, Color(0.66, 0.82, 0.82), Color(0.74, 0.88, 0.86))
+	_draw_meadow_hills(canvas, left, size, view_left, camera_course_distance * 0.10, size.y * 0.54, 34.0, 0.011, Color(0.55, 0.77, 0.6), Color(0.64, 0.84, 0.64))
+	var near_offset := camera_course_distance * 0.22
+	var near_base := size.y * 0.66
+	_draw_meadow_trees(canvas, left, size, view_left, near_offset, near_base, 28.0, 0.017)
+	_draw_meadow_hills(canvas, left, size, view_left, near_offset, near_base, 28.0, 0.017, Color(0.4, 0.66, 0.42), Color(0.5, 0.75, 0.46))
 
-static func _draw_meadow_hills(canvas: CanvasItem, left: float, size: Vector2, view_left: float, parallax_offset: float, base_y: float, amplitude: float, frequency: float, color: Color) -> void:
-	var points := PackedVector2Array()
-	var x := left
+static func _meadow_hill_y(u: float, base_y: float, amplitude: float, frequency: float) -> float:
+	return base_y - amplitude * (0.6 * sin(u * frequency) + 0.4 * sin(u * frequency * 2.3 + 1.7))
+
+## A hill range as stepped columns (4 px wide, heights snapped to 4 px) with a
+## lighter crest row.
+static func _draw_meadow_hills(canvas: CanvasItem, left: float, size: Vector2, view_left: float, parallax_offset: float, base_y: float, amplitude: float, frequency: float, color: Color, crest := Color.TRANSPARENT) -> void:
+	var px := MEADOW_PX
+	# Columns as rects (cheap to batch; no polygon triangulation per frame).
+	var x := floorf(left / px) * px
 	var right := left + size.x
-	while true:
+	while x < right:
 		var u := parallax_offset + (x - view_left)
-		var y := base_y - amplitude * (0.6 * sin(u * frequency) + 0.4 * sin(u * frequency * 2.3 + 1.7))
-		points.append(Vector2(x, roundf(y / 3.0) * 3.0))
-		if x >= right:
-			break
-		x = minf(x + 12.0, right)
-	points.append(Vector2(right, size.y))
-	points.append(Vector2(left, size.y))
-	canvas.draw_colored_polygon(points, color)
+		var y := roundf(_meadow_hill_y(u, base_y, amplitude, frequency) / px) * px
+		var x0 := maxf(x, left)
+		var w := minf(x + px, right) - x0
+		if w > 0.0:
+			canvas.draw_rect(Rect2(Vector2(x0, y), Vector2(w, size.y - y)), color)
+			if crest.a > 0.0:
+				canvas.draw_rect(Rect2(Vector2(x0, y), Vector2(w, px)), crest)
+		x += px
+
+## Round pixel trees on the near hills: a trunk and a canopy of 4 px blocks
+## with a dark rim and a lit top-left, rooted on the hill line behind them.
+static func _draw_meadow_trees(canvas: CanvasItem, left: float, size: Vector2, view_left: float, parallax_offset: float, base_y: float, amplitude: float, frequency: float) -> void:
+	var px := MEADOW_PX
+	var period := 260.0
+	var first := floori((parallax_offset + (left - view_left) - 60.0) / period)
+	var last := ceili((parallax_offset + (left + size.x - view_left) + 60.0) / period)
+	for cell in range(first, last + 1):
+		var landmark := _landmark_for_cell(cell, period, 9157)
+		if landmark.y < 0.35:
+			continue
+		var u := landmark.x
+		var x := roundf((view_left + u - parallax_offset) / px) * px
+		if x + 24.0 < left or x - 24.0 > left + size.x:
+			continue
+		var ground := roundf(_meadow_hill_y(u, base_y, amplitude, frequency) / px) * px + px * 2.0
+		var radius := 12.0 + roundf(landmark.y * 3.0) * px
+		var crown := Vector2(x, ground - 16.0 - radius)
+		var view := Rect2(left, 0.0, size.x, size.y)
+		var trunk := Rect2(Vector2(x - px * 0.5, crown.y), Vector2(px, ground - crown.y)).intersection(view)
+		if trunk.size.x > 0.0:
+			canvas.draw_rect(trunk, Color(0.36, 0.25, 0.18))
+		_pixel_disc(canvas, crown, radius + px, px, Color(0.2, 0.42, 0.26), view)
+		_pixel_disc(canvas, crown, radius, px, Color(0.3, 0.56, 0.32), view)
+		_pixel_disc(canvas, crown + Vector2(-px, -px), radius * 0.55, px, Color(0.42, 0.68, 0.38), view)
+
+## A filled circle drawn as px-sized blocks, optionally clipped to `clip`.
+static func _pixel_disc(canvas: CanvasItem, center: Vector2, radius: float, px: float, color: Color, clip := Rect2()) -> void:
+	var snapped := (center / px).round() * px
+	var cells := int(ceil(radius / px))
+	for gy in range(-cells, cells + 1):
+		var row_y := float(gy) * px
+		var half := sqrt(maxf(radius * radius - row_y * row_y, 0.0))
+		var span := roundf(half / px) * px
+		if span <= 0.0:
+			continue
+		var rect := Rect2(snapped + Vector2(-span, row_y - px * 0.5), Vector2(span * 2.0, px))
+		if clip.size != Vector2.ZERO:
+			rect = rect.intersection(clip)
+			if rect.size.x <= 0.0:
+				continue
+		canvas.draw_rect(rect, color)
 
 static func _draw_classic_backdrop(canvas: CanvasItem, left: float, size: Vector2, parallax_left: float, biome: BiomeDefinition) -> void:
 	for point in _landmarks_in_course(parallax_left, parallax_left + size.x, 82.0, 13):

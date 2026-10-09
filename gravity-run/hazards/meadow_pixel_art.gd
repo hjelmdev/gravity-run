@@ -38,6 +38,10 @@ static var _cache: Dictionary = {}
 static func block_texture(size: Vector2, ceiling: bool, variant: int) -> Texture2D:
 	return _cached("block|%d|%d|%s|%d" % [int(size.x), int(size.y), str(ceiling), variant], func() -> Image: return make_block(_art(size.x), _art(size.y), ceiling, variant))
 
+## A saw blade of `radius` world pixels (teeth reach past it), square texture.
+static func saw_texture(radius: float) -> Texture2D:
+	return _cached("saw|%d" % int(radius), func() -> Image: return make_saw(_art(radius)))
+
 ## A boulder filling w x h world pixels.
 static func boulder_texture(size: Vector2) -> Texture2D:
 	return _cached("boulder|%d|%d" % [int(size.x), int(size.y)], func() -> Image: return make_boulder(_art(size.x), _art(size.y)))
@@ -290,5 +294,51 @@ static func make_boulder(w: int, h: int) -> Image:
 		var y := rng.randi_range(int(h * 0.3), int(h * 0.5))
 		for step in range(maxi(3, h / 5)):
 			_put(image, x + (step % 2), y + step, STONE_DARK)
+	_outline(image)
+	return image
+
+## Side of the saw texture in art pixels for a blade of radius r (teeth reach
+## SAW_TOOTH_REACH past r).
+const SAW_TOOTH_REACH := 1.14
+static func saw_side(r: int) -> int:
+	return int(ceil(float(r) * SAW_TOOTH_REACH)) * 2 + 2
+
+## A circular saw: ten raked teeth, a bright rim, a darker inner disc with
+## three lightening holes, a hub with an axle bolt; lit from the top left,
+## outlined.
+static func make_saw(r: int) -> Image:
+	var side := saw_side(r)
+	var image := _blank(side, side)
+	var c := float(side) * 0.5
+	var rf := float(r)
+	var teeth := 10
+	for y in range(side):
+		for x in range(side):
+			var p := Vector2(float(x) + 0.5 - c, float(y) + 0.5 - c)
+			var d := p.length()
+			var angle := fposmod(atan2(p.y, p.x), TAU)
+			var tooth := fposmod(angle * float(teeth) / TAU, 1.0)
+			# Raked tooth: the edge climbs slowly and drops sharply.
+			var edge := rf * (0.9 + (SAW_TOOTH_REACH - 0.9) * tooth)
+			if d > edge:
+				continue
+			var light := (-p.x - p.y) / (rf * 1.4)
+			var color := STEEL
+			if d > rf * 0.84:
+				color = STEEL_LIGHT if light > -0.2 else STEEL
+			elif d > rf * 0.78:
+				color = STEEL_DARK
+			elif d > rf * 0.3:
+				color = STEEL.darkened(0.12) if light < 0.25 else STEEL
+				# Lightening holes.
+				for hole in range(3):
+					var at := Vector2.from_angle(TAU * float(hole) / 3.0 + 0.5) * rf * 0.54
+					if p.distance_to(at) < rf * 0.13:
+						color = Color(0, 0, 0, 0)
+			elif d > rf * 0.16:
+				color = IRON
+			else:
+				color = Color8(255, 178, 83)
+			image.set_pixel(x, y, color)
 	_outline(image)
 	return image
