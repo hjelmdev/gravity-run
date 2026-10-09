@@ -300,8 +300,9 @@ static func make_boulder(w: int, h: int) -> Image:
 					tone = 3 if facing > 0.45 else (2 if facing > -0.1 else (1 if facing > -0.6 else 0))
 					break
 			image.set_pixel(x, y, tones[tone])
-	# Ridge lines from the ridge point to every corner, one tone darker.
-	for corner in outline:
+	# Ridge lines to a few corners only (all of them read as an umbrella).
+	for index in [1, 4, 6]:
+		var corner := outline[index]
 		var steps := int(ridge.distance_to(corner))
 		for s in range(steps):
 			var q := ridge.lerp(corner, float(s) / float(maxi(steps, 1)))
@@ -312,14 +313,13 @@ static func make_boulder(w: int, h: int) -> Image:
 	var crack := ridge + Vector2(c.x * 0.25, -c.y * 0.1)
 	for s in range(maxi(3, h / 4)):
 		_put(image, int(crack.x) + (s / 2) % 2, int(crack.y) + s, STONE_DARK.darkened(0.2))
-	# A small moss clump near the top left.
-	var moss_at := c + Vector2(-0.45 * c.x, -0.6 * c.y)
-	for y in range(-2, 3):
-		for x in range(-4, 5):
-			if absi(x) + absi(y) * 2 <= 4:
-				var q := Vector2i(int(moss_at.x) + x, int(moss_at.y) + y)
-				if q.x >= 0 and q.y >= 0 and q.x < w and q.y < h and image.get_pixel(q.x, q.y).a > 0.5:
-					image.set_pixel(q.x, q.y, MOSS if y < 1 else MOSS_DARK)
+	# A moss cap over the top quarter, hanging down in uneven drips, with a lit
+	# upper rim: the side that was stuck in the ceiling grass.
+	for x in range(w):
+		var drip := int(float(h) * 0.24) + (2 if (x / 3) % 2 == 0 else 0) + rng.randi_range(-1, 1)
+		for y in range(drip):
+			if image.get_pixel(x, y).a > 0.5:
+				image.set_pixel(x, y, MOSS_DARK if y >= drip - 1 else (GRASS_HI if y < int(float(h) * 0.08) else MOSS))
 	_outline(image)
 	return image
 

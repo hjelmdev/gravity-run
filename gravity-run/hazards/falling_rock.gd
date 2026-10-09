@@ -110,7 +110,9 @@ func _draw() -> void:
 	if _render_phase in ["dormant", "warning"]:
 		var hanging := Rect2(Vector2(-width * 0.5 + _shake, -height * 0.5), Vector2(width, height))
 		if skin == "meadow":
-			_draw_meadow_roots(hanging)
+			# Tucked up into the ceiling's grass while it hangs.
+			var ceiling_local := float(event.get("ceiling_y", 80.0)) - position.y
+			hanging.position.y = ceiling_local - 4.0 - height * 0.1
 		_draw_stone_silhouette(hanging)
 		if _render_phase == "warning":
 			var floor_y := float(event.get("floor_y", 460.0))
@@ -238,24 +240,3 @@ func _draw_meadow_dirt(mask: Rect2, surface_y: float) -> void:
 		draw_texture_rect_region(grass, Rect2(Vector2(x, surface_y - float(meadow.tile_rise)), Vector2(piece, tile.y)), src)
 		x += piece
 
-## A hanging meadow rock is held by roots and clods of dirt: strands from the
-## ceiling down to the rock's top, so it reads as tearing loose, not floating.
-func _draw_meadow_roots(hanging: Rect2) -> void:
-	var ceiling_local := float(event.get("ceiling_y", 80.0)) - position.y
-	var top := hanging.position.y + 6.0
-	if ceiling_local >= top:
-		return
-	var root := Color(0.36, 0.24, 0.16)
-	var dirt := Color(0.48, 0.32, 0.21)
-	var outline := MeadowPixelArt.OUTLINE
-	for index in range(3):
-		var x := roundf((hanging.position.x + hanging.size.x * (0.3 + 0.2 * float(index))) / 2.0) * 2.0
-		var y := ceiling_local
-		while y < top:
-			var wiggle := 2.0 if int((y + float(index) * 6.0) / 6.0) % 2 == 0 else 0.0
-			draw_rect(Rect2(Vector2(x + wiggle - 2.0, y), Vector2(6.0, 4.0)), outline)
-			draw_rect(Rect2(Vector2(x + wiggle, y), Vector2(2.0, 4.0)), root)
-			y += 4.0
-		# A clod of dirt where the root leaves the ceiling.
-		draw_rect(Rect2(Vector2(x - 6.0, ceiling_local - 2.0), Vector2(14.0, 8.0)), outline)
-		draw_rect(Rect2(Vector2(x - 4.0, ceiling_local), Vector2(10.0, 4.0)), dirt)
