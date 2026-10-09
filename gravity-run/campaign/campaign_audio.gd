@@ -11,21 +11,21 @@ const WORLD_AUDIO := {
 		"star_sfx": "gravity_star",
 	},
 	&"cave_campaign": {
-		"track": preload("res://assets/audio/music/cave_echoes.ogg"),
-		## tools/audio/generate_cave_audio.py
-		"bpm": 150.0,
+		"track": preload("res://assets/audio/music/cave_depths.wav"),
+		## tools/audio/generate_world_music.gd
+		"bpm": 128.0,
 		"star_sfx": "crystal_chime",
 	},
 	&"haunted_campaign": {
-		"track": preload("res://assets/audio/music/haunted_hollow.ogg"),
-		## tools/audio/generate_haunted_audio.py
-		"bpm": 132.0,
+		"track": preload("res://assets/audio/music/haunted_waltz.wav"),
+		## tools/audio/generate_world_music.gd (3/4)
+		"bpm": 120.0,
 		"star_sfx": "haunted_star",
 	},
 	&"volcano_campaign": {
 		"track": preload("res://assets/audio/music/volcano_forge.wav"),
-		## tools/audio/generate_volcano_audio.gd
-		"bpm": 156.0,
+		## tools/audio/generate_world_music.gd
+		"bpm": 160.0,
 		"star_sfx": "ember_star",
 	},
 }

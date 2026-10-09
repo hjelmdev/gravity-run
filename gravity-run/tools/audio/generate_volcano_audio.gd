@@ -16,7 +16,10 @@ const RATE := 22050
 const BPM := 156.0
 const BARS := 24
 const STEPS_PER_BAR := 16
-const MUSIC_PATH := "res://assets/audio/music/volcano_forge.wav"
+## The old music loop goes here, not over the current volcano_forge.wav, which
+## tools/audio/generate_world_music.gd writes now (this file still makes the
+## volcano sound effects).
+const MUSIC_PATH := "res://assets/audio/music/volcano_forge_v1.wav"
 const SFX_DIR := "res://assets/audio/sfx/"
 
 ## Chord tones in semitones above E (octave arbitrary).
