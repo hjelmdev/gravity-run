@@ -8,6 +8,12 @@ extends Node
 ##   wood   wooden frames around parchment, warmer, matches the meadow
 
 const MainScene := preload("res://main.tscn")
+const FONTS := {
+	"pixelify": "res://assets/fonts/pixelify_sans/PixelifySans.ttf",
+	"silkscreen": "res://assets/fonts/silkscreen/Silkscreen-Regular.ttf",
+}
+var _font: Font
+var _font_name := "default"
 const TICK := 1.0 / 60.0
 const S := 2.0
 
@@ -44,6 +50,10 @@ func _ready() -> void:
 func _run() -> void:
 	var args := OS.get_cmdline_user_args()
 	var out_dir := args[0] if not args.is_empty() else "user://ui_mockups"
+	# Optional: only these styles, and a font per run ("default", "pixelify", "silkscreen").
+	var only_style := args[1] if args.size() > 1 else ""
+	_font_name = args[2] if args.size() > 2 else "default"
+	_font = _load_font(_font_name)
 	DirAccess.make_dir_recursive_absolute(out_dir)
 	Campaign.persist = false
 	Campaign.start_level(CampaignCatalog.get_level(&"1-5"))
@@ -63,6 +73,8 @@ func _run() -> void:
 	if banner is CanvasItem and is_instance_valid(banner):
 		(banner as CanvasItem).visible = false
 	for style in STYLES:
+		if not only_style.is_empty() and style != only_style:
+			continue
 		for scene in ["hud", "menu"]:
 			var layer := CanvasLayer.new()
 			layer.layer = 50
@@ -77,7 +89,7 @@ func _run() -> void:
 				_menu(root, STYLES[style])
 			await get_tree().process_frame
 			await RenderingServer.frame_post_draw
-			var path := out_dir.path_join("ui_%s_%s.png" % [style, scene])
+			var path := out_dir.path_join("ui_%s_%s_%s.png" % [style, _font_name, scene])
 			get_viewport().get_texture().get_image().save_png(path)
 			print("CAPTURED ", path)
 			layer.queue_free()
@@ -236,6 +248,26 @@ func _label(root: Control, text: String, at: Vector2, size: int, color: Color, w
 	if width > 0.0:
 		label.size = Vector2(width, size + 8)
 		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	if _font != null:
+		label.add_theme_font_override("font", _font)
+		size = _pixel_size(size)
 	label.add_theme_font_size_override("font_size", size)
 	label.add_theme_color_override("font_color", color)
 	root.add_child(label)
+
+## A pixel font loaded without smoothing, or null for the theme's font.
+func _load_font(name: String) -> Font:
+	if not FONTS.has(name):
+		return null
+	var font := FontFile.new()
+	font.load_dynamic_font(FONTS[name])
+	font.antialiasing = TextServer.FONT_ANTIALIASING_NONE
+	font.hinting = TextServer.HINTING_NONE
+	font.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_DISABLED
+	return font
+
+## Pixel fonts stay crisp only at multiples of their pixel size.
+func _pixel_size(size: int) -> int:
+	if _font_name == "silkscreen":
+		return 16 if size <= 20 else 24
+	return 16 if size <= 14 else (24 if size <= 22 else 32)
