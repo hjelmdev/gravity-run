@@ -55,6 +55,7 @@ func _run() -> void:
 	await _check_feature_stage("ember_bomb", "ceiling", false)
 	await _check_feature_stage("ember_bomb", "ceiling", true)
 	_check_ash()
+	await _check_biome_keys()
 	_check_hand_sweep()
 	await _check_fog_lights()
 	await _check_wisp(true)
@@ -778,3 +779,45 @@ func _check_ash() -> void:
 	var sections: Array[Vector2] = [Vector2(4000.0, 7000.0)]
 	_check(AshRain.strength_for(2000.0, sections) == 0.0 and AshRain.strength_for(5500.0, sections) == 1.0 and AshRain.strength_for(7400.0, sections) == 0.0, "ash fades in and out over its section")
 	_check(not CampaignFeatures.is_hazardous("ash") and CampaignFeatures.events_of({"kind": "ash", "at": 4000.0}).is_empty(), "ash spawns nothing that can hurt")
+
+## Biome keys: won by beating a world's boss, active on that world's stages
+## only (not on the boss stage), and a guarding key saves one hit per stage.
+func _check_biome_keys() -> void:
+	Campaign.reset_progress()
+	var stage := CampaignCatalog.get_level(&"4-1")
+	var volcano := CampaignCatalog.get_world(&"volcano")
+	_check(BiomeKeys.active_key_for(stage) == "", "no heat shield before the Magmaormen is beaten")
+	Campaign.start_level(volcano.get_boss())
+	Campaign.record_completion(0, 0)
+	_check(BiomeKeys.active_key_for(stage) == "heat_shield" and BiomeKeys.active_key_for(volcano.get_boss()) == "" and BiomeKeys.active_key_for(CampaignCatalog.get_level(&"3-1")) == "", "beating the Magmaormen gives the heat shield on volcano stages only")
+	var effects := RunEffects.new()
+	effects.configure(null)
+	effects.configure_key("heat_shield")
+	_check(not effects.on_lethal_contact(false), "the heat shield ignores hazards it does not guard against")
+	_check(effects.on_lethal_contact(true), "the heat shield saves one lava hit")
+	for _i in range(RunEffects.BUBBLE_INVULNERABLE_TICKS + 1):
+		effects.tick()
+	_check(not effects.on_lethal_contact(true) and not effects.key_guard_ready(), "the heat shield saves only one hit per stage")
+	effects.reset()
+	_check(effects.key_guard_ready(), "a new attempt gets the heat shield back")
+	effects.configure(null)
+	_check(effects.get_key_id() == "" and effects.get_key_hud_entry().is_empty(), "configuring a run clears the key")
+	# A runner on the bomb's lane survives the first ember bomb with the key.
+	var level := CampaignLevel.new()
+	level.level_id = &"T-K"
+	level.world_id = &"volcano"
+	level.title = "Key test"
+	level.seed_value = 4243
+	level.generator_version = CampaignCatalog.CAMPAIGN_GENERATOR_VERSION
+	level.ruleset = CampaignCatalog.make_ruleset(&"T-K", &"lava", ["ceiling_gap"], 0.6, 1.0)
+	level.length_px = 8000.0
+	level.features.append({"kind": "ember_bomb", "at": 3600.0, "side": "floor"})
+	Campaign.start_level(level)
+	var game: Node = await _make_game()
+	game.get("_campaign_run").set("generated_events_enabled", false)
+	var ticks := _step(game, 3600)
+	_check(Campaign.is_completed(level), "a floor runner with the heat shield gets past an ember bomb (%d ticks)" % ticks)
+	game.queue_free()
+	await get_tree().process_frame
+	Campaign.clear_active()
+	Campaign.reset_progress()

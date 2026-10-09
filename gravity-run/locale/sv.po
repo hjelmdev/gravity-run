@@ -2044,3 +2044,24 @@ msgstr "Ormen blir argare"
 
 msgid "Magmaormen is beaten!"
 msgstr "Magmaormen är besegrad!"
+
+msgid "Ice picks"
+msgstr "Isdubbar"
+
+msgid "Lantern"
+msgstr "Lykta"
+
+msgid "Heat shield"
+msgstr "Värmesköld"
+
+msgid "One hit from a falling rock or icicle per stage is shrugged off"
+msgstr "En träff av en fallande sten eller istapp per bana biter inte"
+
+msgid "Fog and darkness clear further ahead of you"
+msgstr "Dimma och mörker lättar längre framför dig"
+
+msgid "One hit from lava per stage is shrugged off"
+msgstr "En träff av lava per bana biter inte"
+
+msgid "New key: %s. %s on this world's stages."
+msgstr "Ny nyckel: %s. %s på den här världens banor."

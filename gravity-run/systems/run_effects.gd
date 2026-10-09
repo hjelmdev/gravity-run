@@ -42,10 +42,15 @@ var _regret_flash_left := 0
 var _anchor_level := 0
 var _anchor_glide_left := 0
 var _anchor_recharge_left := 0
+## Biome key of a campaign stage (BiomeKeys), "" off. A guarding key absorbs
+## one hit from its hazard family per stage.
+var _key_id := ""
+var _key_used := false
 
 ## Reads the effect entries of a RunLoadoutSnapshot. Null or invalid snapshots
 ## leave every effect off.
 func configure(snapshot: Resource) -> void:
+	_key_id = ""
 	_bubble_level = 0
 	_spike_plate_level = 0
 	_magnet_level = 0
@@ -69,6 +74,7 @@ func configure(snapshot: Resource) -> void:
 
 ## Starts a fresh run: the bubble is ready, timers are cleared.
 func reset() -> void:
+	_key_used = false
 	_bubble_recharge_left = 0
 	_invulnerable_left = 0
 	_pop_ticks_left = 0
@@ -80,7 +86,7 @@ func reset() -> void:
 	_anchor_recharge_left = 0
 
 func has_any() -> bool:
-	return _bubble_level > 0 or _spike_plate_level > 0 or _magnet_level > 0 or _regret_level > 0 or _anchor_level > 0
+	return _bubble_level > 0 or _spike_plate_level > 0 or _magnet_level > 0 or _regret_level > 0 or _anchor_level > 0 or not _key_id.is_empty()
 
 ## Advances every timer by one physics tick. Call once per tick after hazards
 ## were resolved, so a window lasts exactly its configured number of ticks.
@@ -159,8 +165,13 @@ func is_anchor_gliding() -> bool:
 ## (the run continues). The bubble shield consumes itself, then keeps the
 ## runner invulnerable for a moment so the same hazard cannot kill it on the
 ## next tick.
-func on_lethal_contact() -> bool:
+func on_lethal_contact(guarded_by_key: bool = false) -> bool:
 	if _invulnerable_left > 0:
+		return true
+	if guarded_by_key and key_guard_ready():
+		_key_used = true
+		_invulnerable_left = BUBBLE_INVULNERABLE_TICKS
+		_pop_ticks_left = BUBBLE_POP_TICKS
 		return true
 	if _bubble_level > 0 and _bubble_recharge_left == 0:
 		_bubble_recharge_left = BUBBLE_RECHARGE_TICKS[_bubble_level - 1]
@@ -236,4 +247,28 @@ func get_hud_entries() -> Array[Dictionary]:
 			"ready": anchor_ready(),
 			"active": _anchor_glide_left > 0,
 		})
+	var key_entry := get_key_hud_entry()
+	if not key_entry.is_empty():
+		entries.append(key_entry)
 	return entries
+
+## Sets the stage's biome key (call after configure). "" turns it off.
+func configure_key(key_id: String) -> void:
+	_key_id = key_id
+	_key_used = false
+
+func get_key_id() -> String:
+	return _key_id
+
+## True while a guarding key (ice picks, heat shield) still has its one save.
+func key_guard_ready() -> bool:
+	return _key_id in ["ice_picks", "heat_shield"] and not _key_used
+
+## HUD row for the key, or an empty Dictionary without one. The lantern works
+## all the time; the guarding keys empty once their save is used.
+func get_key_hud_entry() -> Dictionary:
+	if _key_id.is_empty():
+		return {}
+	if _key_id == "lantern":
+		return {"effect_id": _key_id, "level": 1, "charge": 1.0, "ready": true, "active": true}
+	return {"effect_id": _key_id, "level": 1, "charge": 0.0 if _key_used else 1.0, "ready": not _key_used, "active": _invulnerable_left > 0 and _key_used}

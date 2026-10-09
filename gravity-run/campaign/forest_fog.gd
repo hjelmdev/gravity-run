@@ -9,6 +9,8 @@ class_name ForestFog
 
 const MAX_LIGHTS := 28
 const FORWARD_CLEAR := 320.0
+## Scales FORWARD_CLEAR (the lantern biome key, set by main per run).
+static var clear_scale := 1.0
 const RAMP := 380.0
 const MAX_ALPHA := 0.72
 const SHADER_CODE := """
@@ -80,7 +82,7 @@ func update_view(view_left: float, view_width: float, runner_position: Vector2, 
 		return
 	_material.set_shader_parameter("strength", _strength)
 	_material.set_shader_parameter("runner_pos", runner_position)
-	_material.set_shader_parameter("forward_clear", FORWARD_CLEAR)
+	_material.set_shader_parameter("forward_clear", FORWARD_CLEAR * clear_scale)
 	_material.set_shader_parameter("max_alpha", MAX_ALPHA)
 	_material.set_shader_parameter("time", _time)
 	var count := mini(lights.size(), MAX_LIGHTS)

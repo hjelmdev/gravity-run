@@ -12,6 +12,8 @@ const MAX_LIGHTS := 28
 const RUNNER_RADIUS := 150.0
 ## How far ahead of the runner everything stays fully visible.
 const FORWARD_VISIBLE := 320.0
+## Scales FORWARD_VISIBLE (the lantern biome key, set by main per run).
+static var clear_scale := 1.0
 const RAMP := 380.0
 const AMBIENT_ALPHA := 0.9
 const SHADER_CODE := """
@@ -85,7 +87,7 @@ func update_view(view_left: float, view_width: float, runner_position: Vector2, 
 	_material.set_shader_parameter("strength", _strength)
 	_material.set_shader_parameter("runner_pos", runner_position)
 	_material.set_shader_parameter("runner_radius", RUNNER_RADIUS)
-	_material.set_shader_parameter("forward_visible", FORWARD_VISIBLE)
+	_material.set_shader_parameter("forward_visible", FORWARD_VISIBLE * clear_scale)
 	_material.set_shader_parameter("ambient_alpha", AMBIENT_ALPHA)
 	var count := mini(lights.size(), MAX_LIGHTS)
 	var padded := PackedVector4Array()

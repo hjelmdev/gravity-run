@@ -238,6 +238,11 @@ func _start_run() -> void:
 	player.call("set_loadout_snapshot", loadout_snapshot)
 	var effects_enabled := not demo_mode and Campaign.active_level == null
 	_run_effects.call("configure", loadout_snapshot if effects_enabled else null)
+	# Campaign stages run without effect items, but a won biome key works in its world.
+	var biome_key := "" if demo_mode else BiomeKeys.active_key_for(Campaign.active_level)
+	_run_effects.call("configure_key", biome_key)
+	CaveDarkness.clear_scale = BiomeKeys.LANTERN_CLEAR_SCALE if biome_key == "lantern" else 1.0
+	ForestFog.clear_scale = CaveDarkness.clear_scale
 	player.call("set_run_effects", _run_effects)
 	run_state.set("modified", effects_enabled and loadout_snapshot != null and bool(loadout_snapshot.call("has_effects")))
 	_publish_effect_entries()
@@ -856,7 +861,7 @@ func _physics_process(delta: float) -> void:
 	if lethal_fraction >= 0.0 and lethal_fraction <= 1.0:
 		run_end_requested = true
 	var left_the_world := player.position.y < -64.0 or player.position.y > WORLD_HEIGHT + 64.0
-	if run_end_requested and not left_the_world and _campaign_runout_ticks < 0 and bool(_run_effects.call("on_lethal_contact")):
+	if run_end_requested and not left_the_world and _campaign_runout_ticks < 0 and bool(_run_effects.call("on_lethal_contact", _key_guards_contact(final_player_rect))):
 		# A bubble absorbed the hit. Forget the contact so coins past it still count.
 		run_end_requested = false
 		lethal_fraction = -1.0
@@ -1929,6 +1934,24 @@ func _player_hits_obstacle(obstacle: Node2D) -> bool:
 		return bool(obstacle.call("intersects_rect", player_rect))
 	var obstacle_rect: Rect2 = obstacle.call("get_hitbox_rect")
 	return player_rect.intersects(obstacle_rect)
+
+## True when the stage's biome key guards against a hazard touching the runner
+## (a falling rock for the ice picks, lava for the heat shield).
+func _key_guards_contact(player_rect: Rect2) -> bool:
+	if not bool(_run_effects.call("key_guard_ready")):
+		return false
+	var key_id := str(_run_effects.call("get_key_id"))
+	var reach := player_rect.grow(28.0)
+	for obstacle in obstacles:
+		if not is_instance_valid(obstacle) or not BiomeKeys.guards_against(key_id, obstacle):
+			continue
+		if obstacle.has_method("get_hitbox_rect"):
+			var rect: Rect2 = obstacle.call("get_hitbox_rect")
+			if rect.size != Vector2.ZERO and reach.intersects(rect):
+				return true
+		elif absf(obstacle.global_position.x - player_rect.get_center().x) < 140.0:
+			return true
+	return false
 
 func _earliest_lethal_contact_fraction(start_rect: Rect2, finish_rect: Rect2) -> float:
 	var displacement := finish_rect.position - start_rect.position

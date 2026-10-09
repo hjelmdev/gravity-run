@@ -72,6 +72,22 @@ static func draw_glyph(canvas: CanvasItem, effect_id: String, center: Vector2, s
 			canvas.draw_line(center + Vector2(0.0, -6.0) * unit, center + Vector2(0.0, 9.0) * unit, ink, anchor_width)
 			canvas.draw_line(center + Vector2(-5.0, -2.0) * unit, center + Vector2(5.0, -2.0) * unit, ink, anchor_width)
 			canvas.draw_arc(center + Vector2(0.0, 3.0) * unit, 9.0 * unit, 0.1 * PI, 0.9 * PI, 14, ink, anchor_width, true)
+		"ice_picks":
+			# Two crossed picks.
+			var pick_width := maxf(2.0, 3.0 * unit)
+			canvas.draw_line(center + Vector2(-9.0, 9.0) * unit, center + Vector2(7.0, -7.0) * unit, ink, pick_width)
+			canvas.draw_line(center + Vector2(9.0, 9.0) * unit, center + Vector2(-7.0, -7.0) * unit, ink, pick_width)
+			canvas.draw_line(center + Vector2(3.0, -10.0) * unit, center + Vector2(11.0, -4.0) * unit, Color("8fb4ff"), pick_width)
+			canvas.draw_line(center + Vector2(-3.0, -10.0) * unit, center + Vector2(-11.0, -4.0) * unit, Color("8fb4ff"), pick_width)
+		"lantern":
+			# A lantern with a warm flame.
+			canvas.draw_arc(center + Vector2(0.0, -10.0) * unit, 3.0 * unit, PI, TAU, 10, ink, maxf(1.5, 2.0 * unit), true)
+			canvas.draw_rect(Rect2(center + Vector2(-6.0, -7.0) * unit, Vector2(12.0, 16.0) * unit), ink, false, maxf(1.5, 2.0 * unit))
+			canvas.draw_circle(center + Vector2(0.0, 1.0) * unit, 3.5 * unit, Color("ffd46a"))
+		"heat_shield":
+			# A shield with a flame on it.
+			canvas.draw_colored_polygon(PackedVector2Array([center + Vector2(-9.0, -9.0) * unit, center + Vector2(9.0, -9.0) * unit, center + Vector2(8.0, 3.0) * unit, center + Vector2(0.0, 11.0) * unit, center + Vector2(-8.0, 3.0) * unit]), ink)
+			canvas.draw_colored_polygon(PackedVector2Array([center + Vector2(0.0, -6.0) * unit, center + Vector2(4.0, 2.0) * unit, center + Vector2(0.0, 6.0) * unit, center + Vector2(-4.0, 2.0) * unit]), Color("ff814f"))
 		_:
 			canvas.draw_rect(Rect2(center - Vector2(8.0, 8.0) * unit * unit, Vector2(16.0, 16.0) * unit), Color("8292aa"), false, 2.0)
 

@@ -73,9 +73,11 @@ En nyckel per värld, och den verkar bara i sin egen värld:
 - **Värmesköld (Vulkanen):** en träff från lava (spricka, pool eller glödbomb) per bana tas
   utan att dö.
 
-Nycklarna är ryggsäcksprylar med effekt-id `biome_key_cave`, `biome_key_haunted` och
-`biome_key_volcano`. De vinns genom att besegra världens boss (inte köpbara) och kräver en
-migration som utökar `item_definition_effect_valid`.
+**Byggt 2026-10-09:** nycklarna är kampanjbelöningar i den lokala kampanjprogressen
+(`systems/biome_keys.gd`), inte inventarieprylar, eftersom effektprylar är avstängda i
+kampanjbanor. Nyckeln vinns när världens boss besegras och verkar på världens vanliga
+banor (inte bossbanan). Isdubbarna räddar en träff av sten eller istapp per bana i stället
+för tidigare varning, eftersom varningstiden styr när stenen faller. Ingen migration behövs.
 
 ## 8. Arbetsordning
 
