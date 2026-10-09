@@ -104,9 +104,19 @@ func _build() -> void:
 	_start_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_start_button.pressed.connect(_start_run)
 	play_row.add_child(_start_button)
+	var challenge_row := HBoxContainer.new()
+	challenge_row.add_theme_constant_override("separation", 8)
+	layout.add_child(challenge_row)
 	var challenge_button := _make_button(tr("Challenges"), 38.0)
+	challenge_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	challenge_button.pressed.connect(challenges_requested.emit)
-	layout.add_child(challenge_button)
+	challenge_row.add_child(challenge_button)
+	var daily_button := _make_button(tr("Daily stage"), 38.0)
+	daily_button.name = "DailyButton"
+	daily_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	daily_button.tooltip_text = tr("The same course for everyone today, with its own leaderboard")
+	daily_button.pressed.connect(_start_daily)
+	challenge_row.add_child(daily_button)
 	var progression_row := HBoxContainer.new()
 	progression_row.add_theme_constant_override("separation", 8)
 	layout.add_child(progression_row)
@@ -265,6 +275,7 @@ func _on_visibility_changed() -> void:
 	_update_account_summary()
 
 func _start_run() -> void:
+	ChallengeService.stop_daily()
 	var seed_input := _seed_edit.text.strip_edges() if is_instance_valid(_seed_edit) and not ChallengeService.active else ""
 	if not seed_input.is_empty() and not bool(ChallengeService.call("start_singleplayer_seed_input", seed_input)):
 		_status_label.text = tr(str(ChallengeService.get("last_error")))
@@ -312,3 +323,9 @@ func _panel_style() -> StyleBoxFlat:
 	style.content_margin_top = 12.0
 	style.content_margin_bottom = 12.0
 	return style
+
+func _start_daily() -> void:
+	ChallengeService.start_daily()
+	_status_label.text = ""
+	_status_label.visible = false
+	start_run_requested.emit()

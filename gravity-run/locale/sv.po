@@ -2068,3 +2068,9 @@ msgstr "Ny nyckel: %s. %s på den här världens banor."
 
 msgid "The host's game is in the background. The round waits until they are back."
 msgstr "Värdens spel ligger i bakgrunden. Rundan väntar tills värden är tillbaka."
+
+msgid "Daily stage"
+msgstr "Dagens bana"
+
+msgid "The same course for everyone today, with its own leaderboard"
+msgstr "Samma bana för alla i dag, med egen topplista"

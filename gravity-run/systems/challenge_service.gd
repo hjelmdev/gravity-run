@@ -32,6 +32,11 @@ var _pending_challenge_name := ""
 ## True when the current run's seed was chosen (a challenge, a typed seed or the
 ## daily stage), so the same course can come again; false for a random seed.
 var repeatable_seed := false
+## The daily stage: the same seed for everyone on a UTC day, so its seed
+## scoreboard is the day's own leaderboard. Stays on for retries until a normal
+## run, a challenge or a typed seed replaces it.
+var daily_active := false
+const DAILY_SALT := "gravity-run-daily"
 
 func _ready() -> void:
 	_score_provider = SeedScoreProvider.new()
@@ -46,6 +51,9 @@ func _ready() -> void:
 
 func begin_run() -> int:
 	repeatable_seed = true
+	if daily_active:
+		seed_value = daily_seed()
+		return seed_value
 	if active and seed_value > 0:
 		return seed_value
 	if _ordinary_seed_run_pending and seed_value > 0:
@@ -65,6 +73,7 @@ func begin_run() -> int:
 	return seed_value
 
 func start_challenge_from_code(raw_code: String) -> bool:
+	daily_active = false
 	last_error = ""
 	var parts := raw_code.strip_edges().to_upper().split("-", false)
 	if parts.size() != 2 or not parts[0].begins_with("GR") or not parts[0].substr(2).is_valid_int() or not parts[1].is_valid_int():
@@ -90,6 +99,7 @@ func start_challenge_from_code(raw_code: String) -> bool:
 ## Ordinary single-player seed selection shares the established numeric/GR parser
 ## but does not turn the run into a saved/community challenge.
 func start_singleplayer_seed_input(raw_input: String) -> bool:
+	daily_active = false
 	var input := raw_input.strip_edges().to_upper()
 	last_error = ""
 	if input.is_empty():
@@ -413,6 +423,7 @@ func _remember_challenge(code: String, challenge_name: String, creator_name: Str
 
 func clear_challenge() -> void:
 	active = false
+	daily_active = false
 	seed_value = 0
 	generation_version = GENERATOR_VERSION
 	active_challenge_code = ""
@@ -420,3 +431,26 @@ func clear_challenge() -> void:
 	_ordinary_seed_run_pending = false
 	ruleset = _new_default_ruleset(GENERATOR_VERSION)
 	last_error = ""
+
+## Today's daily seed (UTC date), always inside the challenge seed range.
+static func daily_seed(date: String = "") -> int:
+	var day := date if not date.is_empty() else Time.get_date_string_from_system(true)
+	var digest := ("%s|%s" % [DAILY_SALT, day]).sha256_buffer()
+	var value := 0
+	for index in range(4):
+		value = (value << 8) | int(digest[index])
+	return MIN_CHALLENGE_SEED + posmod(value, MAX_CHALLENGE_SEED - MIN_CHALLENGE_SEED)
+
+## Starts the daily stage: today's seed on the current generator and rules.
+func start_daily() -> void:
+	clear_challenge()
+	daily_active = true
+	_ordinary_seed_run_pending = false
+	_custom_challenge_mode = false
+	generation_version = GENERATOR_VERSION
+	ruleset = _new_default_ruleset(GENERATOR_VERSION)
+	seed_value = daily_seed()
+	last_error = ""
+
+func stop_daily() -> void:
+	daily_active = false
