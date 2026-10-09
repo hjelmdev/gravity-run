@@ -2,6 +2,24 @@
 
 Förloppet för de schemalagda passen (se NATTPASS.md). Nyast överst.
 
+## 2026-10-09 04:10 – pass 1 och 2 (samma session)
+- Klart sedan förra posten:
+  - Spökskogens skriptade inslag: spökhänder, gravstenar, irrbloss, dimma (978c040).
+  - Utrustning steg 2: ångerskor och gravitationsankare (1146d48). Ångerskor: en vändning
+    per flip inom 10/13/16 tick (nivå 1–3). Ankaret: tangent E eller Shift, eller
+    pekknappen nere till höger; håller mitten i 1 s, laddar om på 15/12/9 s.
+  - Utrustning steg 3: utrustningsval i multiplayer-lobbyn (2089684, af35ac5). Valet syns
+    först när servern skickar fältet `equipment_enabled`. Migrationerna
+    `202610080003_effect_items_regret_anchor.sql` och
+    `202610080004_multiplayer_equipment_toggle.sql` är INTE körda.
+    I racet fungerar bubbelhjälm och spikplåt; myntmagneten är av i multiplayer (värden
+    validerar mynt) och det finns ingen multiplayer-topplista att märka `modified`.
+  - Regression mot gamla bygget: två nya fel rättade. Väskans figurväljare hoppar nu över
+    låsta figurer (testet uppdaterat). Ljuddiagnostikens timer kunde ta slut direkt efter
+    en lång första bildruta (rättat i `sfx_audio_diagnostic_capture.gd`).
+- Pågår: sista regressionskörningen på allt, sedan webbexport och Pages.
+- Val: effektprylarna är av i kampanjbanor (som i steg 1).
+
 ## 2026-10-08 23:40 – pass 1 pågår
 - Klart sedan förra posten:
   - Spökkungen 3-B med testbot (d46fb3f), Spökskogens utseende/musik/ljud (494c5af).
