@@ -753,6 +753,11 @@ func _check_unlocks() -> void:
 	Campaign.start_level(CampaignCatalog.get_world(&"haunted").get_boss())
 	Campaign.record_completion(0, 0)
 	_check(CharacterCatalog.is_unlocked(misse), "beating the Ghost King unlocks Misse")
+	var bit := CharacterCatalog.get_definition(&"robot")
+	_check(not CharacterCatalog.is_unlocked(bit), "Bit is locked before the Magmaormen")
+	Campaign.start_level(CampaignCatalog.get_world(&"volcano").get_boss())
+	Campaign.record_completion(0, 0)
+	_check(CharacterCatalog.is_unlocked(bit), "beating the Magmaormen unlocks Bit")
 	Campaign.clear_active()
 	Campaign.reset_progress()
 

@@ -496,6 +496,9 @@ func _draw_mini_boss(origin: Vector2) -> void:
 	if boss != null and boss.boss_id == &"ghost_king":
 		_draw_mini_ghost_king(origin)
 		return
+	if boss != null and boss.boss_id == &"magma_worm":
+		_draw_mini_magma_worm(origin)
+		return
 	# A tiny Rullaren on its stone: body, stack, eyes and a barrel.
 	var body := Color("8c5a46")
 	_px(origin, -6, -8, 13, 9, OUTLINE)
@@ -536,3 +539,19 @@ func _draw_mini_ghost_king(origin: Vector2) -> void:
 	_px(at, -3, -12, 1, 1, Color("ffd23f"))
 	_px(at, 0, -12, 1, 1, Color("ffd23f"))
 	_px(at, 3, -12, 1, 1, Color("ffd23f"))
+
+## A tiny Magmaormen rising from a lava puddle by its stone, swaying.
+func _draw_mini_magma_worm(origin: Vector2) -> void:
+	var sway := 1 if fmod(_time, 0.8) < 0.4 else 0
+	var crust := Color("3a1a14")
+	var magma := Color("ff7a2a")
+	_px(origin, -6, 0, 13, 2, Color("ff8a2a"))
+	_px(origin, -3 + sway, -4, 4, 4, OUTLINE)
+	_px(origin, -2 + sway, -3, 2, 3, crust)
+	_px(origin, -2 + sway * 2, -8, 4, 4, OUTLINE)
+	_px(origin, -1 + sway * 2, -7, 2, 3, crust)
+	_px(origin, -1 + sway * 2, -6, 1, 1, magma)
+	_px(origin, -1 + sway * 2, -13, 6, 5, OUTLINE)
+	_px(origin, 0 + sway * 2, -12, 4, 3, crust)
+	_px(origin, 2 + sway * 2, -11, 1, 1, Color("fff3b0"))
+	_px(origin, 4 + sway * 2, -10, 2, 1, magma)
