@@ -37,27 +37,27 @@ func _ready() -> void:
 func _build() -> void:
 	_title = _label("GRAVITY RUN", 17, Color("f4f7ff"))
 	_title.name = "RunTitle"
-	_title.position = Vector2(20, 5)
+	_title.position = Vector2(20, 13)
 	_title.size = Vector2(135, 24)
 	add_child(_title)
 	_player = _label("", 11, Color("42d6c5"))
 	_player.name = "PlayerName"
-	_player.position = Vector2(160, 5)
+	_player.position = Vector2(160, 13)
 	_player.size = Vector2(138, 24)
 	add_child(_player)
 	_coin_icon = Control.new()
 	_coin_icon.name = "CoinIcon"
 	_coin_icon.set_script(IconScript)
 	_coin_icon.set("icon_name", "coin")
-	_coin_icon.position = Vector2(304, 5)
+	_coin_icon.position = Vector2(304, 14)
 	_coin_icon.size = Vector2(20, 20)
 	_coin_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_coin_icon.tooltip_text = tr("My coins")
 	_coin_icon.accessibility_name = tr("My coins")
 	add_child(_coin_icon)
-	_coin_value = _label("00", 11, Color("f5d45e"))
+	_coin_value = _label("00", 16, Color("f5d45e"))
 	_coin_value.name = "CoinCount"
-	_coin_value.position = Vector2(328, 5)
+	_coin_value.position = Vector2(328, 13)
 	_coin_value.size = Vector2(52, 22)
 	_coin_value.tooltip_text = tr("My coins")
 	_coin_value.accessibility_name = tr("My coins")
@@ -68,8 +68,8 @@ func _build() -> void:
 	_distance.anchor_right = 1.0
 	_distance.offset_left = -445.0
 	_distance.offset_right = -240.0
-	_distance.offset_top = 5.0
-	_distance.offset_bottom = 28.0
+	_distance.offset_top = 13.0
+	_distance.offset_bottom = 36.0
 	_distance.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_distance.visible = _show_distance
 	add_child(_distance)
@@ -78,6 +78,10 @@ func _build() -> void:
 	_music.set_script(MusicControlScript)
 	_music.set("right_offset", _music_right_offset)
 	add_child(_music)
+
+## A pixel HUD plate behind the title, player name and coin counter.
+func _draw() -> void:
+	draw_style_box(PixelUi.panel_box("hud", Vector2(8, 4)), Rect2(Vector2(8, 4), Vector2(358, 40)))
 
 func _label(value: String, font_size: int, color: Color) -> Label:
 	var label := Label.new()

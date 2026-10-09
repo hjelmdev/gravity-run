@@ -579,23 +579,11 @@ func _achievement_category_key(achievement_id: String, definitions: Array) -> St
 			"total_distance_m": return "distance_total"
 	return "unknown"
 
-func _achievement_menu_card_style(is_unlocked: bool) -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color("101827")
-	style.border_color = Color("42d6c5", 0.65) if is_unlocked else Color("53647d", 0.65)
-	style.set_border_width_all(1)
-	style.set_corner_radius_all(8)
-	style.content_margin_left = 6
-	style.content_margin_right = 6
-	style.content_margin_top = 4
-	style.content_margin_bottom = 4
-	return style
+func _achievement_menu_card_style(is_unlocked: bool) -> StyleBox:
+	return PixelUi.panel_box("panel" if is_unlocked else "inset", Vector2(6, 4))
 
-func _achievement_menu_stack_back_style() -> StyleBoxFlat:
-	var style := _achievement_menu_card_style(false)
-	style.bg_color = Color("101827")
-	style.border_color = Color("287f7c", 0.85)
-	return style
+func _achievement_menu_stack_back_style() -> StyleBox:
+	return PixelUi.panel_box("inset", Vector2(6, 4))
 
 func _show_challenge_menu(launch_code: String = "") -> void:
 	_menu_view = "challenge"
@@ -1588,6 +1576,25 @@ func _show_options_menu() -> void:
 	language_row.add_child(language_label)
 	language_row.add_child(_make_language_button("›", 1))
 	layout.add_child(language_row)
+	# Look of menus and HUD: wood (default) or slate.
+	var style_row := HBoxContainer.new()
+	style_row.add_theme_constant_override("separation", 8)
+	style_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	var style_back := _make_button("‹")
+	style_back.custom_minimum_size = Vector2(54.0, 48.0)
+	style_back.pressed.connect(_cycle_ui_style)
+	style_row.add_child(style_back)
+	var style_label := Label.new()
+	style_label.text = tr("Look: %s") % (tr("Wood") if PixelUi.style == "wood" else tr("Slate"))
+	style_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	style_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	style_label.custom_minimum_size.x = 130.0
+	style_row.add_child(style_label)
+	var style_next := _make_button("›")
+	style_next.custom_minimum_size = Vector2(54.0, 48.0)
+	style_next.pressed.connect(_cycle_ui_style)
+	style_row.add_child(style_next)
+	layout.add_child(style_row)
 
 	var back_button := _make_button(tr("Back"))
 	back_button.pressed.connect(_show_main_menu)
@@ -1600,6 +1607,10 @@ func _make_language_button(symbol: String, direction: int) -> Button:
 	button.custom_minimum_size = Vector2(54.0, 48.0)
 	button.pressed.connect(_cycle_language.bind(direction))
 	return button
+
+func _cycle_ui_style() -> void:
+	PixelUi.set_style("slate" if PixelUi.style == "wood" else "wood")
+	_show_options_menu()
 
 func _cycle_language(direction: int) -> void:
 	var next_language := "en" if PlayerProfile.language == "sv" else "sv"
@@ -1689,14 +1700,5 @@ func _make_button(label: String) -> Button:
 	button.add_theme_font_size_override("font_size", 20)
 	return button
 
-func _panel_style() -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.07, 0.105, 0.17, 0.82)
-	style.border_color = Color("42d6c5")
-	style.set_border_width_all(2)
-	style.set_corner_radius_all(16)
-	style.content_margin_left = 22.0
-	style.content_margin_right = 22.0
-	style.content_margin_top = 26.0
-	style.content_margin_bottom = 26.0
-	return style
+func _panel_style() -> StyleBox:
+	return PixelUi.panel_box("panel", Vector2(22, 26))

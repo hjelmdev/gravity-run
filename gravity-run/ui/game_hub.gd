@@ -312,17 +312,8 @@ func _on_progress_changed(_coins: int, _distance: int, _best: int) -> void:
 func _on_profile_changed(_nickname: String, _has_profile: bool) -> void:
 	_update_account_summary()
 
-func _panel_style() -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color("18243a")
-	style.border_color = Color("42d6c5")
-	style.set_border_width_all(2)
-	style.set_corner_radius_all(14)
-	style.content_margin_left = 18.0
-	style.content_margin_right = 18.0
-	style.content_margin_top = 12.0
-	style.content_margin_bottom = 12.0
-	return style
+func _panel_style() -> StyleBox:
+	return PixelUi.panel_box("panel", Vector2(18, 12))
 
 func _start_daily() -> void:
 	ChallengeService.start_daily()

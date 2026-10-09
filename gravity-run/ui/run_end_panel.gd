@@ -500,17 +500,8 @@ func _achievement_category_key(achievement_id: String, metric: String) -> String
 		return "distance_total"
 	return "unknown"
 
-func _achievement_card_style() -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color("101827", 0.62)
-	style.border_color = Color("f5d45e", 0.8)
-	style.set_border_width_all(1)
-	style.set_corner_radius_all(8)
-	style.content_margin_left = 8
-	style.content_margin_right = 8
-	style.content_margin_top = 6
-	style.content_margin_bottom = 6
-	return style
+func _achievement_card_style() -> StyleBox:
+	return PixelUi.panel_box("inset", Vector2(8, 6))
 
 func _on_account_profile_changed(_nickname: String, _has_profile: bool) -> void:
 	if not is_instance_valid(_name_edit):
@@ -541,14 +532,5 @@ func _make_button(text: String) -> Button:
 	button.focus_mode = Control.FOCUS_ALL
 	return button
 
-func _panel_style() -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color("18243a")
-	style.border_color = Color("42d6c5")
-	style.set_border_width_all(2)
-	style.set_corner_radius_all(16)
-	style.content_margin_left = 24.0
-	style.content_margin_right = 24.0
-	style.content_margin_top = 22.0
-	style.content_margin_bottom = 22.0
-	return style
+func _panel_style() -> StyleBox:
+	return PixelUi.panel_box("panel", Vector2(24, 22))

@@ -42,16 +42,7 @@ func _build() -> void:
 	_root.add_child(center)
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = Vector2(420.0, 0.0)
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color("18243a")
-	style.border_color = Color("42d6c5")
-	style.set_border_width_all(2)
-	style.set_corner_radius_all(16)
-	style.content_margin_left = 26.0
-	style.content_margin_right = 26.0
-	style.content_margin_top = 20.0
-	style.content_margin_bottom = 20.0
-	panel.add_theme_stylebox_override("panel", style)
+	panel.add_theme_stylebox_override("panel", PixelUi.panel_box("panel", Vector2(26, 20)))
 	center.add_child(panel)
 	var layout := VBoxContainer.new()
 	layout.add_theme_constant_override("separation", 10)

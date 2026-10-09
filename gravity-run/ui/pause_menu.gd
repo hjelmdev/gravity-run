@@ -189,22 +189,9 @@ func _add_secondary_button(parent: Container, text: String, callback: Callable) 
 
 func _style_primary_button(button: Button) -> void:
 	for state in ["normal", "hover", "pressed", "focus"]:
-		var style := StyleBoxFlat.new()
-		style.bg_color = Color("42d6c5")
-		if state == "hover":
-			style.bg_color = Color("6fe6d8")
-		elif state == "pressed":
-			style.bg_color = Color("2fb3a4")
-		style.set_corner_radius_all(10)
-		style.content_margin_left = 16.0
-		style.content_margin_right = 16.0
-		if state == "focus":
-			style.bg_color = Color("6fe6d8")
-			style.set_border_width_all(3)
-			style.border_color = Color("edf3ff")
-		button.add_theme_stylebox_override(state, style)
+		button.add_theme_stylebox_override(state, PixelUi.panel_box("primary", Vector2(16, 6)))
 	for color_name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
-		button.add_theme_color_override(color_name, Color("0c1a2a"))
+		button.add_theme_color_override(color_name, PixelUi.color("text_on_frame"))
 
 func _show_smoothness_diagnostics() -> void:
 	_clear_menu_layout()
@@ -359,14 +346,5 @@ func _quit_to_main_menu() -> void:
 		AppNavigation.request_game_hub()
 	get_tree().change_scene_to_file(MAIN_MENU_SCENE)
 
-func _panel_style() -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color("18243a")
-	style.border_color = Color("42d6c5")
-	style.set_border_width_all(1)
-	style.set_corner_radius_all(14)
-	style.content_margin_left = 24.0
-	style.content_margin_right = 24.0
-	style.content_margin_top = 18.0
-	style.content_margin_bottom = 18.0
-	return style
+func _panel_style() -> StyleBox:
+	return PixelUi.panel_box("panel", Vector2(24, 18))

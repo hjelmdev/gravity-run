@@ -2216,7 +2216,7 @@ func _draw_seed_finish_markers() -> void:
 		var label := "%s · %dm" % [nickname.left(8), record_distance_m]
 		var label_center_y := 148.0 + float(index % 3) * 64.0
 		draw_set_transform(Vector2(marker_x + 5.0, label_center_y), PI / 2.0)
-		draw_string(ThemeDB.fallback_font, Vector2.ZERO, label, HORIZONTAL_ALIGNMENT_LEFT, 180.0, 9, marker_color)
+		draw_string(PixelUi.font(), Vector2.ZERO, label, HORIZONTAL_ALIGNMENT_LEFT, 180.0, 9, marker_color)
 		draw_set_transform(Vector2.ZERO)
 
 func _draw_background() -> void:

@@ -151,16 +151,7 @@ func _build() -> void:
 func _card(offset: Vector2, min_size: Vector2, preset: int) -> PanelContainer:
 	var card := PanelContainer.new()
 	card.custom_minimum_size = min_size
-	var style := StyleBoxFlat.new()
-	style.bg_color = CARD
-	style.border_color = Color("42d6c5")
-	style.set_border_width_all(2)
-	style.set_corner_radius_all(12)
-	style.content_margin_left = 16.0
-	style.content_margin_right = 16.0
-	style.content_margin_top = 10.0
-	style.content_margin_bottom = 10.0
-	card.add_theme_stylebox_override("panel", style)
+	card.add_theme_stylebox_override("panel", PixelUi.panel_box("panel", Vector2(16, 10)))
 	card.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(card)
 	card.set_anchors_and_offsets_preset(preset)
@@ -454,7 +445,7 @@ func _draw_node(index: int, level: CampaignLevel, world_unlocked: bool) -> void:
 	_pixel_disc(center, radius, OUTLINE)
 	_pixel_disc(center - Vector2(0, 3), radius - 1.0, top)
 	_pixel_disc(center - Vector2(6, 9), 2.0, top.lightened(0.35))
-	var font := ThemeDB.fallback_font
+	var font := PixelUi.font()
 	if is_boss:
 		if open and not done:
 			_draw_mini_boss(center + Vector2(0, -30))

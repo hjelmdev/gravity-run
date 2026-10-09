@@ -684,26 +684,8 @@ func _exit_tree() -> void:
 	if _mobile_text_entry:
 		MobileTextEntry.cancel()
 
-func _panel_style() -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color("18243a")
-	style.border_color = Color("42d6c5")
-	style.set_border_width_all(2)
-	style.set_corner_radius_all(14)
-	style.content_margin_left = 18
-	style.content_margin_right = 18
-	style.content_margin_top = 16
-	style.content_margin_bottom = 16
-	return style
+func _panel_style() -> StyleBox:
+	return PixelUi.panel_box("panel", Vector2(18, 16))
 
-func _inner_style() -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color("111b2c")
-	style.border_color = Color("364861")
-	style.set_border_width_all(1)
-	style.set_corner_radius_all(8)
-	style.content_margin_left = 12
-	style.content_margin_right = 12
-	style.content_margin_top = 10
-	style.content_margin_bottom = 10
-	return style
+func _inner_style() -> StyleBox:
+	return PixelUi.panel_box("inset", Vector2(12, 8))

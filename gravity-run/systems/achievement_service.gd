@@ -260,15 +260,15 @@ func _build_toast() -> void:
 	_toast_heading = Label.new()
 	_toast_heading.text = tr("ACHIEVEMENT UNLOCKED")
 	_toast_heading.add_theme_font_size_override("font_size", 11)
-	_toast_heading.add_theme_color_override("font_color", Color("42d6c5"))
+	_toast_heading.add_theme_color_override("font_color", PixelUi.color("accent"))
 	text_column.add_child(_toast_heading)
 	_toast_title = Label.new()
 	_toast_title.add_theme_font_size_override("font_size", 15)
-	_toast_title.add_theme_color_override("font_color", Color("edf3ff"))
+	_toast_title.add_theme_color_override("font_color", PixelUi.color("text"))
 	text_column.add_child(_toast_title)
 	_toast_description = Label.new()
 	_toast_description.add_theme_font_size_override("font_size", 11)
-	_toast_description.add_theme_color_override("font_color", Color("b8c7dc"))
+	_toast_description.add_theme_color_override("font_color", PixelUi.color("muted"))
 	_toast_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	text_column.add_child(_toast_description)
 	_toast_card.gui_input.connect(_on_toast_input)
@@ -302,14 +302,5 @@ func _hide_toast() -> void:
 	if is_instance_valid(_toast_timer):
 		_toast_timer.stop()
 
-func _toast_style() -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color("18243a", 0.98)
-	style.border_color = Color("42d6c5")
-	style.set_border_width_all(2)
-	style.set_corner_radius_all(10)
-	style.content_margin_left = 10
-	style.content_margin_right = 10
-	style.content_margin_top = 8
-	style.content_margin_bottom = 8
-	return style
+func _toast_style() -> StyleBox:
+	return PixelUi.panel_box("panel", Vector2(10, 8))

@@ -729,37 +729,14 @@ func _card() -> PanelContainer:
 	card.add_theme_stylebox_override("panel", _card_style())
 	return card
 
-func _panel_style() -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color("18243a")
-	style.border_color = Color("42d6c5")
-	style.set_border_width_all(2)
-	style.set_corner_radius_all(14)
-	style.content_margin_left = 12.0
-	style.content_margin_right = 12.0
-	style.content_margin_top = 10.0
-	style.content_margin_bottom = 10.0
-	return style
+func _panel_style() -> StyleBox:
+	return PixelUi.panel_box("panel", Vector2(12, 10))
 
-func _card_style() -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color("111b2b")
-	style.border_color = Color("35455f")
-	style.set_border_width_all(1)
-	style.set_corner_radius_all(8)
-	style.content_margin_left = 8.0
-	style.content_margin_right = 8.0
-	style.content_margin_top = 6.0
-	style.content_margin_bottom = 6.0
-	return style
+func _card_style() -> StyleBox:
+	return PixelUi.panel_box("inset", Vector2(8, 6))
 
-func _empty_cell_style() -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color("111b2b", 0.5)
-	style.border_color = Color("35455f", 0.5)
-	style.set_border_width_all(1)
-	style.set_corner_radius_all(4)
-	return style
+func _empty_cell_style() -> StyleBox:
+	return PixelUi.panel_box("inset", Vector2(4, 4))
 
 func stats_label_add(label: Label, parent: Control) -> void:
 	label.add_theme_font_size_override("font_size", 11)

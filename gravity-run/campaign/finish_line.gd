@@ -75,4 +75,4 @@ func _draw() -> void:
 	draw_rect(Rect2(board.position, Vector2(board.size.x, 2.0)), SIGN.lightened(0.2))
 	for nail in [Vector2(-42.0, label_y - 10.0), Vector2(40.0, label_y - 10.0)]:
 		draw_rect(Rect2(nail, Vector2(2.0, 2.0)), OUTLINE)
-	draw_string(ThemeDB.fallback_font, Vector2(-48.0, label_y + 4.0), tr("FINISH"), HORIZONTAL_ALIGNMENT_CENTER, 96.0, 15, OUTLINE)
+	draw_string(PixelUi.font(), Vector2(-48.0, label_y + 4.0), tr("FINISH"), HORIZONTAL_ALIGNMENT_CENTER, 96.0, 15, OUTLINE)

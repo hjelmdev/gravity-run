@@ -32,6 +32,7 @@ MusicController="*res://systems/music_controller.gd"
 SfxController="*res://systems/sfx_controller.gd"
 MultiplayerV2Service="*res://systems/multiplayer_v2/multiplayer_v2_service.gd"
 MobileTextEntry="*res://systems/mobile_text_entry.gd"
+PixelUi="*res://ui/pixel_ui.gd"
 
 [gui]
 

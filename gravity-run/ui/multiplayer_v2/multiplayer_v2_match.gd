@@ -419,16 +419,7 @@ func _build_overlay() -> void:
 	_result_panel.anchor_top = 0.08
 	_result_panel.anchor_bottom = 0.92
 	_result_panel.visible = false
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color("18243a")
-	style.border_color = Color("42d6c5")
-	style.set_border_width_all(2)
-	style.set_corner_radius_all(12)
-	style.content_margin_left = 18
-	style.content_margin_right = 18
-	style.content_margin_top = 16
-	style.content_margin_bottom = 16
-	_result_panel.add_theme_stylebox_override("panel", style)
+	_result_panel.add_theme_stylebox_override("panel", PixelUi.panel_box("panel", Vector2(18, 16)))
 	overlay.add_child(_result_panel)
 	var result_layout := VBoxContainer.new()
 	_result_panel.add_child(result_layout)
@@ -1783,7 +1774,7 @@ func _draw_players() -> void:
 		var pose := _player_render_pose(member)
 		var screen_position: Vector2 = pose.position
 		var label_text := str(member.get("display_name", "Runner"))
-		var font := ThemeDB.fallback_font
+		var font := PixelUi.font()
 		var font_size := 10
 		var text_width := font.get_string_size(label_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
 		var font_height := font.get_height(font_size)

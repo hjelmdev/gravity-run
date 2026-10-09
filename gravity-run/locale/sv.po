@@ -2086,3 +2086,12 @@ msgstr "Precis!"
 
 msgid "Whoa!"
 msgstr "Oj!"
+
+msgid "Look: %s"
+msgstr "Utseende: %s"
+
+msgid "Wood"
+msgstr "Trä"
+
+msgid "Slate"
+msgstr "Skiffer"

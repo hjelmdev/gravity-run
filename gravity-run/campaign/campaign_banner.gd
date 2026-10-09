@@ -19,7 +19,7 @@ const KIND_COLORS := {
 
 var _root: Control
 var _card: PanelContainer
-var _style: StyleBoxFlat
+var _style: StyleBox
 var _icon: Control
 var _heading: Label
 var _title: Label
@@ -36,17 +36,7 @@ func _ready() -> void:
 	add_child(_root)
 	_card = PanelContainer.new()
 	_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_style = StyleBoxFlat.new()
-	_style.bg_color = Color("18243a", 0.97)
-	_style.set_border_width_all(2)
-	_style.border_width_top = 5
-	_style.set_corner_radius_all(12)
-	_style.content_margin_left = 14
-	_style.content_margin_right = 18
-	_style.content_margin_top = 10
-	_style.content_margin_bottom = 10
-	_style.shadow_color = Color(0, 0, 0, 0.35)
-	_style.shadow_size = 8
+	_style = PixelUi.panel_box("panel", Vector2(16, 10))
 	_card.add_theme_stylebox_override("panel", _style)
 	_root.add_child(_card)
 	var row := HBoxContainer.new()
@@ -65,10 +55,10 @@ func _ready() -> void:
 	_heading = _label(11)
 	column.add_child(_heading)
 	_title = _label(20)
-	_title.add_theme_color_override("font_color", Color("edf3ff"))
+	_title.add_theme_color_override("font_color", PixelUi.color("text"))
 	column.add_child(_title)
 	_description = _label(12)
-	_description.add_theme_color_override("font_color", Color("b8c7dc"))
+	_description.add_theme_color_override("font_color", PixelUi.color("muted"))
 	column.add_child(_description)
 	_card.visible = false
 	set_process(false)
@@ -99,7 +89,6 @@ func clear() -> void:
 
 func _present(entry: Dictionary) -> void:
 	var accent: Color = KIND_COLORS.get(str(entry.kind), KIND_COLORS.hazard)
-	_style.border_color = accent
 	_icon.set("kind", str(entry.kind))
 	_icon.set("accent", accent)
 	_icon.queue_redraw()
