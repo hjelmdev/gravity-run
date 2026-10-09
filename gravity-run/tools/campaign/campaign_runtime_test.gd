@@ -50,6 +50,11 @@ func _run() -> void:
 	await _check_feature_stage("ghost_hand", "floor", true)
 	await _check_feature_stage("ghost_hand", "ceiling", false)
 	await _check_feature_stage("ghost_hand", "ceiling", true)
+	await _check_feature_stage("ember_bomb", "floor", false)
+	await _check_feature_stage("ember_bomb", "floor", true)
+	await _check_feature_stage("ember_bomb", "ceiling", false)
+	await _check_feature_stage("ember_bomb", "ceiling", true)
+	_check_ash()
 	_check_hand_sweep()
 	await _check_fog_lights()
 	await _check_wisp(true)
@@ -59,6 +64,8 @@ func _run() -> void:
 	await _check_failed_attempt()
 	await _check_boss(false)
 	await _check_boss(true)
+	await _check_boss(false, &"4-B")
+	await _check_boss(true, &"4-B")
 	await _check_stalactite("hit")
 	await _check_stalactite("early")
 	await _check_stalactite("stay")
@@ -157,10 +164,16 @@ const FROZEN_FEATURES := {
 	"3-4": [["fog", 6300.0], ["fog", 8760.0]],
 	"3-5": [["wisp", 4950.0], ["wisp", 11250.0], ["wisp", 17550.0]],
 	"3-6": [["ghost_hand", 8230.0], ["fog", 11390.0], ["ghost_hand", 18110.0]],
+	"4-1": [],
+	"4-2": [["ash", 4560.0], ["ash", 11780.0]],
+	"4-3": [],
+	"4-4": [],
+	"4-5": [["ember_bomb", 13960.0], ["ember_bomb", 14910.0], ["ember_bomb", 17190.0], ["ember_bomb", 19240.0]],
+	"4-6": [["ember_bomb", 5210.0], ["ash", 12000.0], ["ember_bomb", 18000.0]],
 }
 
 func _check_features_frozen() -> void:
-	for spec in CampaignCatalog.CAVE_STAGES + CampaignCatalog.HAUNTED_STAGES:
+	for spec in CampaignCatalog.CAVE_STAGES + CampaignCatalog.HAUNTED_STAGES + CampaignCatalog.LAVA_STAGES:
 		var level := CampaignCatalog.get_level(spec.id)
 		var frozen: Array = FROZEN_FEATURES.get(str(spec.id), [])
 		var actual: Array = []
@@ -191,8 +204,9 @@ func _check_features_frozen() -> void:
 	_check(CampaignCatalog.get_level(&"2-2").new_features.has("bat_swarm") and CampaignCatalog.get_level(&"2-4").new_features.has("cave_in") and CampaignCatalog.get_level(&"3-3").new_features.has("ghost_hand"), "2-2 introduces the bat swarm, 2-4 the cave-in and 3-3 the ghost hands")
 	_check(CampaignRunScript.hazard_display_name("ghost_hand") == "ghost hands" and not CampaignRunScript.hazard_tip("ghost_hand").is_empty(), "the ghost hand has a name and a tip")
 	_check(CampaignRunScript.hazard_display_name("bat_swarm") == "bat swarm" and not CampaignRunScript.hazard_tip("cave_in").is_empty() and not CampaignRunScript.hazard_tip("bat_swarm").is_empty(), "the new hazards have a name and a tip")
+	_check(CampaignCatalog.get_level(&"4-5").new_features.has("ember_bomb") and CampaignRunScript.hazard_display_name("ember_bomb") == "ember bombs" and not CampaignRunScript.hazard_tip("ember_bomb").is_empty(), "4-5 introduces the ember bombs, with a name and a tip")
 	TranslationServer.set_locale("sv")
-	_check(tr(CampaignRunScript.hazard_tip("bat_swarm")) != CampaignRunScript.hazard_tip("bat_swarm") and tr("cave-in") == "ras" and tr("bat swarm") == "fladdermussvärm" and tr("ghost hands") == "spökhänder" and tr("Wisp caught") == "Irrbloss fångat", "the new hazard callouts are translated to Swedish")
+	_check(tr(CampaignRunScript.hazard_tip("bat_swarm")) != CampaignRunScript.hazard_tip("bat_swarm") and tr("cave-in") == "ras" and tr("bat swarm") == "fladdermussvärm" and tr("ghost hands") == "spökhänder" and tr("Wisp caught") == "Irrbloss fångat" and tr("ember bombs") == "glödbomber", "the new hazard callouts are translated to Swedish")
 	TranslationServer.set_locale("en")
 
 ## The channel pops events by spawn line or early lead and announces new kinds.
@@ -420,7 +434,7 @@ func _check_mine_carts() -> void:
 ## side reaches the flag. `follow` picks which runner this is.
 func _check_feature_stage(kind: String, side: String, follow: bool) -> void:
 	var feature := {"kind": kind, "at": 3600.0}
-	var has_side := kind == "bat_swarm" or kind == "ghost_hand"
+	var has_side := kind in ["bat_swarm", "ghost_hand", "ember_bomb"]
 	if has_side:
 		feature["side"] = side
 	var level := CampaignLevel.new()
@@ -574,8 +588,8 @@ func _boss_bot(game: Node, state: Dictionary) -> void:
 	if target != 0 and target != current and bool(player.get("grounded")) and float(player.call("get_cooldown_left")) <= 0.0:
 		player.call("_try_flip", target)
 
-func _check_boss(skip_first_plate: bool) -> void:
-	var boss_level := CampaignCatalog.get_level(&"1-B")
+func _check_boss(skip_first_plate: bool, level_id: StringName = &"1-B") -> void:
+	var boss_level := CampaignCatalog.get_level(level_id)
 	Campaign.start_level(boss_level)
 	var game: Node = await _make_game()
 	var state := {"skip_first_plate": skip_first_plate}
@@ -584,16 +598,16 @@ func _check_boss(skip_first_plate: bool) -> void:
 	var run: Node = game.get("_campaign_run")
 	var boss: RullarenBoss = run.get("boss") if is_instance_valid(run) else null
 	var label := " after a missed plate" if skip_first_plate else ""
-	_check(boss != null and boss.is_defeated(), "Rullaren is beaten by following its schedule%s (%d ticks, hp %d)" % [label, ticks, boss.hp if boss != null else -1])
+	_check(boss != null and boss.is_defeated(), "%s is beaten by following its schedule%s (%d ticks, hp %d)" % [boss_level.title, label, ticks, boss.hp if boss != null else -1])
 	var panel: Node = game.get("_campaign_result_panel")
-	_check(bool(game.get("game_over")) and is_instance_valid(panel) and bool(panel.get("visible")) and Campaign.is_completed(boss_level), "the boss stage ends at its flag and is recorded%s" % label)
+	_check(bool(game.get("game_over")) and is_instance_valid(panel) and bool(panel.get("visible")) and Campaign.is_completed(boss_level), "the %s boss stage ends at its flag and is recorded%s" % [boss_level.level_id, label])
 	var spawned_boss_attacks := 0
 	for obstacle in game.get("obstacles"):
 		if is_instance_valid(obstacle):
 			spawned_boss_attacks += 1
 	if skip_first_plate:
 		var scheduled := boss.get_scheduled_events().size() if boss != null else 0
-		_check(scheduled > 12, "a missed plate repeats the phase (%d attacks scheduled)" % scheduled)
+		_check(scheduled > 12, "a missed plate repeats the %s phase (%d attacks scheduled)" % [boss_level.level_id, scheduled])
 	game.queue_free()
 	await get_tree().process_frame
 	Campaign.clear_active()
@@ -752,3 +766,10 @@ func _untracked_coins(game: Node) -> int:
 		if child.get_script() != null and str(child.get_script().resource_path).ends_with("coin.gd") and not child.is_queued_for_deletion() and not bool(child.call("is_collected")) and not tracked.has(child.get_instance_id()):
 			count += 1
 	return count
+
+## Ash is presentation only: it fades in and out over its section and is never
+## drawn right in front of the runner.
+func _check_ash() -> void:
+	var sections: Array[Vector2] = [Vector2(4000.0, 7000.0)]
+	_check(AshRain.strength_for(2000.0, sections) == 0.0 and AshRain.strength_for(5500.0, sections) == 1.0 and AshRain.strength_for(7400.0, sections) == 0.0, "ash fades in and out over its section")
+	_check(not CampaignFeatures.is_hazardous("ash") and CampaignFeatures.events_of({"kind": "ash", "at": 4000.0}).is_empty(), "ash spawns nothing that can hurt")

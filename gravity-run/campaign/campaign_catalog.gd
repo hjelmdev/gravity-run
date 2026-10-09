@@ -194,6 +194,7 @@ const LAVA_STAGES := [
 		"density": 1.3, "margin": 1.1, "length": 19000.0,
 		"seed": 4203,
 		"stars": [Vector2(4793.76, 426.00), Vector2(10125.44, 250.00), Vector2(14279.96, 250.00)],
+		"features": [{"kind": "ash", "at": 4560.0, "length": 3400.0}, {"kind": "ash", "at": 11780.0, "length": 3800.0}],
 	},
 	{
 		"id": &"4-3", "title": "Eruption", "intro": "New: volcanoes",
@@ -215,6 +216,8 @@ const LAVA_STAGES := [
 		"density": 1.6, "margin": 0.95, "length": 23500.0,
 		"seed": 4515,
 		"stars": [Vector2(5970.42, 426.00), Vector2(12583.10, 151.00), Vector2(18518.54, 151.00)],
+		"features": [{"kind": "ember_bomb", "at": 13960.0, "side": "floor"}, {"kind": "ember_bomb", "at": 14910.0, "side": "ceiling"}, {"kind": "ember_bomb", "at": 17190.0, "side": "floor"}, {"kind": "ember_bomb", "at": 19240.0, "side": "ceiling"}],
+		"new_features": ["ember_bomb"],
 	},
 	{
 		"id": &"4-6", "title": "Volcano Exam", "intro": "Everything the volcano has taught you",
@@ -222,6 +225,7 @@ const LAVA_STAGES := [
 		"density": 1.8, "margin": 0.85, "length": 25000.0,
 		"seed": 4615,
 		"stars": [Vector2(6235.64, 426.00), Vector2(13959.76, 74.00), Vector2(21040.71, 74.00)],
+		"features": [{"kind": "ember_bomb", "at": 5210.0, "side": "ceiling"}, {"kind": "ash", "at": 12000.0, "length": 3000.0}, {"kind": "ember_bomb", "at": 18000.0, "side": "floor"}],
 	},
 ]
 
@@ -288,6 +292,10 @@ static func _build_worlds() -> Array[CampaignWorld]:
 	result.append(haunted)
 	var volcano := _make_world(&"volcano", 4, "The Volcano", &"lava", "map_volcano", LAVA_MAP_NODES, Color("ff814f"))
 	_add_stages(volcano, LAVA_STAGES)
+	volcano.levels.append(_make_boss(&"volcano", &"lava", volcano.levels.size() + 1, &"4-B", "Magmaormen", "Boss: the magma worm", &"magma_worm"))
+	# Presentation only; encounters use the lava mix.
+	for level in volcano.levels:
+		level.presentation_biome = &"volcano_campaign"
 	result.append(volcano)
 	return result
 

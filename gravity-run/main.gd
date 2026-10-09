@@ -57,6 +57,7 @@ const CampaignAudio := preload("res://campaign/campaign_audio.gd")
 const CAMPAIGN_FEATURES_SCRIPT := preload("res://campaign/campaign_features.gd")
 const BAT_SWARM_SCRIPT := preload("res://hazards/bat_swarm.gd")
 const GHOST_HAND_SCRIPT := preload("res://hazards/ghost_hand.gd")
+const EMBER_BOMB_SCRIPT := preload("res://hazards/ember_bomb.gd")
 const CampaignResultPanelScript := preload("res://campaign/campaign_result_panel.gd")
 const CampaignBannerScript := preload("res://campaign/campaign_banner.gd")
 ## Ticks the runner keeps running past the finish line before the result.
@@ -1275,6 +1276,8 @@ func _spawn_course_event(event: Dictionary) -> void:
 			_spawn_bat_swarm(event, event_x)
 		&"ghost_hand":
 			_spawn_ghost_hand(event, event_x)
+		&"ember_bomb":
+			_spawn_ghost_hand(event, event_x, EMBER_BOMB_SCRIPT, "EmberBomb")
 		&"saw":
 			var saw_event := _resolve_singleplayer_saw_event(event)
 			if saw_event.is_empty():
@@ -1341,20 +1344,22 @@ func _spawn_bat_swarm(event: Dictionary, event_x: float) -> void:
 	obstacles.append(swarm)
 
 ## Campaign haunted feature: a hand that reaches out of one lane (hazards/ghost_hand.gd).
-func _spawn_ghost_hand(event: Dictionary, event_x: float) -> void:
+## Volcano ember bombs (hazards/ember_bomb.gd) reuse the hand with their own look.
+func _spawn_ghost_hand(event: Dictionary, event_x: float, script: GDScript = GHOST_HAND_SCRIPT, prefix: String = "GhostHand") -> void:
 	var from_ceiling := bool(event.get("from_ceiling", false))
 	var lane_clearance := _floor_surface_y(event_x) - _ceiling_surface_y(event_x)
 	if lane_clearance < float(event.get("height", 120.0)) + 44.0 + 12.0:
 		return
-	var hand := GHOST_HAND_SCRIPT.new() as Node2D
-	hand.name = "GhostHand_%.0f" % float(event.get("course_distance", 0.0))
+	var hand := script.new() as Node2D
+	hand.name = prefix + "_%.0f" % float(event.get("course_distance", 0.0))
 	hand.call("configure_hand", event, event_x, _ceiling_surface_y(event_x) if from_ceiling else _floor_surface_y(event_x))
 	hand.connect("emerged", Callable(self, "_on_ghost_hand_emerged"))
 	add_child(hand)
 	obstacles.append(hand)
 
 func _on_ghost_hand_emerged(hand: Node2D) -> void:
-	_play_cave_sfx("hand_scrape", "%s|ghost_hand|%s" % [_singleplayer_audio_round_id, str(hand.name)], _is_singleplayer_event_audible(hand.global_position.x))
+	var sound := "ember_impact" if hand.is_in_group("ember_bombs") else "hand_scrape"
+	_play_cave_sfx(sound, "%s|ghost_hand|%s" % [_singleplayer_audio_round_id, str(hand.name)], _is_singleplayer_event_audible(hand.global_position.x))
 
 func _on_campaign_bonus_coins(amount: int) -> void:
 	run_state.call("add_coins", amount)

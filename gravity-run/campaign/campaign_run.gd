@@ -18,6 +18,7 @@ const FinishLineScript := preload("res://campaign/finish_line.gd")
 const FinishConfettiScript := preload("res://campaign/finish_confetti.gd")
 const PressurePlateScript := preload("res://campaign/pressure_plate.gd")
 const RullarenViewScript := preload("res://campaign/rullaren_view.gd")
+const MagmaWormViewScript := preload("res://campaign/magma_worm_view.gd")
 const StalactiteViewScript := preload("res://campaign/stalactite_view.gd")
 const GiantIcicleScript := preload("res://campaign/giant_icicle.gd")
 const GhostKingViewScript := preload("res://campaign/ghost_king_view.gd")
@@ -27,6 +28,7 @@ const CaveDarknessScript := preload("res://campaign/cave_darkness.gd")
 const CaveCrystalsScript := preload("res://campaign/cave_crystals.gd")
 const CaveInDustScript := preload("res://campaign/cave_in_dust.gd")
 const ForestFogScript := preload("res://campaign/forest_fog.gd")
+const AshRainScript := preload("res://campaign/ash_rain.gd")
 const WispScript := preload("res://campaign/wisp.gd")
 const COURSE_START_X := 180.0
 ## Rullaren's thrown barrels: the throw covers this much course distance
@@ -65,6 +67,7 @@ var _dust_lines: Array[Node2D] = []
 var _darkness: CaveDarkness
 var _crystals: CaveCrystals
 var _fog: ForestFog
+var _ash: AshRain
 var _runner_x := 0.0
 ## Wisps: {feature, node, collected, y} per wisp feature. The lane history is
 ## one entry per physics tick (the runner's gravity direction).
@@ -97,6 +100,13 @@ func setup(stage: CampaignLevel) -> void:
 		_boss_view.name = "StalactiteGiant"
 		add_child(_boss_view)
 		_add_icicle_for_current()
+	elif level.is_boss() and level.boss_id == &"magma_worm":
+		boss = MagmaWormBoss.new()
+		boss.reset()
+		_boss_view = MagmaWormViewScript.new() as Node2D
+		_boss_view.name = "MagmaWorm"
+		add_child(_boss_view)
+		_add_plate_for_current()
 	elif level.is_boss():
 		boss = RullarenBoss.new()
 		boss.reset()
@@ -113,6 +123,7 @@ func _setup_features() -> void:
 	_cued_features.clear()
 	var dark_sections: Array[Vector2] = []
 	var fog_sections: Array[Vector2] = []
+	var ash_sections: Array[Vector2] = []
 	for feature in level.features:
 		var kind := str(feature.get("kind", ""))
 		if not CampaignFeatures.is_known(kind):
@@ -123,6 +134,8 @@ func _setup_features() -> void:
 			dark_sections.append(Vector2(float(feature.at), float(feature.at) + CampaignFeatures.length_of(feature)))
 		elif kind == "fog":
 			fog_sections.append(Vector2(float(feature.at), float(feature.at) + CampaignFeatures.length_of(feature)))
+		elif kind == "ash":
+			ash_sections.append(Vector2(float(feature.at), float(feature.at) + CampaignFeatures.length_of(feature)))
 		elif kind == "wisp":
 			var wisp := WispScript.new() as Node2D
 			wisp.name = "Wisp%d" % _wisps.size()
@@ -138,6 +151,11 @@ func _setup_features() -> void:
 			add_child(dust)
 			_dust_lines.append(dust)
 	_feature_events.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.course_distance) < float(b.course_distance))
+	if not ash_sections.is_empty():
+		_ash = AshRainScript.new() as AshRain
+		_ash.name = "AshRain"
+		_ash.call("setup", ash_sections, level.seed_value)
+		add_child(_ash)
 	if not fog_sections.is_empty():
 		_fog = ForestFogScript.new() as ForestFog
 		_fog.name = "ForestFog"
@@ -433,7 +451,7 @@ func _tick_boss(course_distance: float, gravity_direction: int, grounded: bool) 
 		"hit":
 			_boss_view.call("notify_hit", rullaren.hp)
 			boss_changed.emit(rullaren.hp, RullarenBoss.MAX_HP)
-			callout.emit("boss", tr("Direct hit!"), tr("Rullaren speeds up"), tr("%d hits left") % rullaren.hp)
+			callout.emit("boss", tr("Direct hit!"), tr("The worm grows angrier") if boss is MagmaWormBoss else tr("Rullaren speeds up"), tr("%d hits left") % rullaren.hp)
 			_add_plate_for_current()
 		"missed":
 			callout.emit("boss", tr("Missed the plate"), tr("It comes around again"), tr("Be on the glowing side when you pass it"))
@@ -441,7 +459,7 @@ func _tick_boss(course_distance: float, gravity_direction: int, grounded: bool) 
 		"defeated":
 			_boss_view.call("notify_defeated")
 			boss_changed.emit(0, RullarenBoss.MAX_HP)
-			callout.emit("boss", tr("Boss beaten"), tr("Rullaren is beaten!"), tr("Run to the finish"))
+			callout.emit("boss", tr("Boss beaten"), tr("Magmaormen is beaten!") if boss is MagmaWormBoss else tr("Rullaren is beaten!"), tr("Run to the finish"))
 			_place_finish_line(COURSE_START_X + rullaren.finish_distance)
 
 ## Stalaktitjätten: true when its dive caught the runner.
@@ -556,6 +574,8 @@ func update_presentation(view_left: float, view_width: float, surface_y_at: Call
 			plate.set("surface_y", float(surface_y_at.call(plate.position.x, bool(plate.get("on_ceiling")))))
 	var runner_x := _runner_x
 	_surface_y_at = surface_y_at
+	if is_instance_valid(_ash):
+		_ash.update_view(view_left, view_width, runner_x)
 	for wisp in _wisps:
 		var node := wisp.node as Wisp
 		var render_offset := CampaignFeatures.wisp_offset(wisp.feature, view_left)

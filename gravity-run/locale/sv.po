@@ -2032,3 +2032,15 @@ msgstr "lavapooler"
 
 msgid "ember bombs"
 msgstr "glödbomber"
+
+msgid "Magmaormen"
+msgstr "Magmaormen"
+
+msgid "Boss: the magma worm"
+msgstr "Boss: magmaormen"
+
+msgid "The worm grows angrier"
+msgstr "Ormen blir argare"
+
+msgid "Magmaormen is beaten!"
+msgstr "Magmaormen är besegrad!"

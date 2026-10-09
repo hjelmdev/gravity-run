@@ -44,6 +44,9 @@ const FEATURE_PLAN := {
 	"3-4": [["fog", 0.30, {"length": 2000.0}], ["fog", 0.62, {"length": 2400.0}]],
 	"3-5": [["wisp", 0.22, {"length": 1500.0}], ["wisp", 0.50, {"length": 1500.0}], ["wisp", 0.78, {"length": 1500.0}]],
 	"3-6": [["ghost_hand", 0.30, {"side": "ceiling"}], ["fog", 0.50, {"length": 2000.0}], ["ghost_hand", 0.72, {"side": "floor"}]],
+	"4-2": [["ash", 0.24, {"length": 3400.0}], ["ash", 0.62, {"length": 3800.0}]],
+	"4-5": [["ember_bomb", 0.22, {"side": "floor"}], ["ember_bomb", 0.40, {"side": "ceiling"}], ["ember_bomb", 0.58, {"side": "floor"}], ["ember_bomb", 0.76, {"side": "ceiling"}]],
+	"4-6": [["ember_bomb", 0.28, {"side": "ceiling"}], ["ash", 0.48, {"length": 3000.0}], ["ember_bomb", 0.72, {"side": "floor"}]],
 	"2-6": [["cave_in", 0.93, {"count": 3}], ["darkness", 0.58, {"length": 3200.0}], ["bat_swarm", 0.30, {"side": "floor"}], ["bat_swarm", 0.84, {"side": "ceiling"}]],
 }
 
