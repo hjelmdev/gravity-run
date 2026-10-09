@@ -421,7 +421,7 @@ func _check_mine_carts() -> void:
 	var meadow_game: Node = await _make_game()
 	meadow_game.call("_spawn_obstacle_scene", preload("res://hazards/barrel.tscn"), 54.0, 54.0, false, 900.0)
 	var barrel: Node2D = (meadow_game.get("obstacles") as Array).back()
-	_check(str(barrel.get("skin")).is_empty(), "barrels on other stages stay barrels")
+	_check(str(barrel.get("skin")) == "meadow", "barrels on a meadow stage are rolling logs")
 	meadow_game.queue_free()
 	await get_tree().process_frame
 	Campaign.clear_active()

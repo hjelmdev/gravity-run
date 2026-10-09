@@ -1,7 +1,7 @@
 extends "res://hazards/hazard.gd"
 
 ## Presentation only. "grave" draws the block as a gravestone (haunted campaign
-## stages); the hitbox is unchanged.
+## stages), "meadow" as a pixel-art stone pillar; the hitbox is unchanged.
 var skin := ""
 
 func _begin_destruction() -> void:
@@ -15,6 +15,9 @@ func _draw() -> void:
 	var top := 0.0 if from_ceiling else -size.y
 	if skin == "grave":
 		_draw_gravestone(top)
+		return
+	if skin == "meadow":
+		draw_texture_rect(MeadowPixelArt.block_texture(size, from_ceiling, int(absf(position.x)) % 3), Rect2(Vector2(-size.x * 0.5, top), size), false)
 		return
 	draw_rect(Rect2(Vector2(-size.x * 0.5, top), size), Color("ffad5c"))
 	draw_rect(Rect2(Vector2(-size.x * 0.5 + 7.0, top + 8.0), size - Vector2(14.0, 16.0)), Color("cf753b"))

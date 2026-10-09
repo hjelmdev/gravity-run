@@ -1313,6 +1313,8 @@ func _spawn_course_event(event: Dictionary) -> void:
 					rock_event["event_id"] = rock_event_id
 				rock.call("configure", rock_event)
 				rock.name = "FallingRock_%s" % rock_event_id
+				if _campaign_level != null and _campaign_level.world_id == &"meadow" and int(rock_event.get("rock_variant", 0)) != 1:
+					rock.set("skin", "meadow")
 				add_child(rock)
 				obstacles.append(rock)
 		&"bat_swarm":
@@ -1750,6 +1752,10 @@ func _spawn_obstacle_scene(scene: PackedScene, width: float, height: float, from
 	# Campaign cave stages draw rolling barrels as mine carts (skin only).
 	if obstacle.is_in_group("barrels") and _campaign_level != null and _campaign_level.world_id == &"cave":
 		obstacle.set("skin", "mine_cart")
+	# The meadow draws barrels as rolling logs (not Rullaren's own barrels) and
+	# blocks and spikes as pixel art.
+	if _campaign_level != null and _campaign_level.world_id == &"meadow" and ((obstacle.is_in_group("barrels") and not _campaign_level.is_boss()) or obstacle.is_in_group("breakable") or obstacle.is_in_group("spikes")):
+		obstacle.set("skin", "meadow")
 	# Haunted campaign stages draw blocks and spikes as gravestones and crosses.
 	if _campaign_level != null and _campaign_level.world_id == &"haunted" and (obstacle.is_in_group("breakable") or obstacle.is_in_group("spikes")):
 		obstacle.set("skin", "grave")

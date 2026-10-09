@@ -18,6 +18,9 @@ var _render_tick := 0.0
 var _render_phase := "dormant"
 var _render_hitbox := Rect2()
 var _impact_debris_spawned := false
+## Presentation only: "meadow" draws a pixel-art boulder and digs it into the
+## meadow's dirt instead of the default ground colour.
+var skin := ""
 
 func apply_world_state(value: Dictionary) -> void:
 	if value.has("activation_tick"):
@@ -127,7 +130,11 @@ func _draw() -> void:
 			# The visible ground is drawn after the stone so its surface clearly
 			# occludes the lower polygon. This is presentation-only; the model hitbox
 			# remains the full permanent buried rectangle.
-			draw_rect(buried_ground_occlusion_mask(surface_y, width), GroundRenderer.FILL_COLOR)
+			var mask := buried_ground_occlusion_mask(surface_y, width)
+			if skin == "meadow":
+				_draw_meadow_dirt(mask, surface_y)
+				return
+			draw_rect(mask, GroundRenderer.FILL_COLOR)
 			var edge_color := GroundRenderer.EDGE_COLOR
 			edge_color.a = 0.82
 			draw_line(Vector2(-width * 0.76, surface_y), Vector2(-width * 0.68, surface_y), edge_color, 2.0, true)
@@ -141,6 +148,9 @@ func _draw_stone_silhouette(rect: Rect2) -> void:
 		return
 	if int(event.get("rock_variant", 0)) == 1:
 		_draw_icicle_silhouette(rect)
+		return
+	if skin == "meadow":
+		draw_texture_rect(MeadowPixelArt.boulder_texture(rect.size), rect, false)
 		return
 	var origin := rect.position
 	var size := rect.size
@@ -192,3 +202,31 @@ func _draw_icicle_silhouette(rect: Rect2) -> void:
 		o + Vector2(s.x * 0.58, s.y * 0.72),
 	]), Color("effcff", 0.5))
 	draw_line(o + Vector2(s.x * 0.29, s.y * 0.13), o + Vector2(s.x * 0.43, s.y * 0.48), Color("8bc7df", 0.84), 2.0, true)
+
+## The meadow's dirt over the buried part of the rock, anchored to the world
+## like the ground fill, so the rock sits in the ground without a seam.
+func _draw_meadow_dirt(mask: Rect2, surface_y: float) -> void:
+	var meadow: BiomeDefinition = load("res://assets/biomes/definitions/meadow.tres")
+	# Dirt from the surface down through the grass cap's depth, then the cap.
+	mask = Rect2(Vector2(mask.position.x, surface_y), Vector2(mask.size.x, float(meadow.tile_world_size.y - meadow.tile_rise)))
+	var texture := BiomeRenderer.pixel_texture(meadow.terrain_fill_texture, true)
+	var texel := Vector2(meadow.terrain_fill_texture.get_size()) * meadow.fill_texture_scale
+	var corners := PackedVector2Array([mask.position, Vector2(mask.end.x, mask.position.y), mask.end, Vector2(mask.position.x, mask.end.y)])
+	var uvs := PackedVector2Array()
+	for corner in corners:
+		uvs.append((corner + global_position) / texel)
+	draw_polygon(corners, PackedColorArray([Color.WHITE, Color.WHITE, Color.WHITE, Color.WHITE]), uvs, texture)
+	# The grass cap over the rock's buried base, so the grass line runs on
+	# unbroken in front of it.
+	var source := meadow.tile_set.get_source(meadow.atlas_source_id) as TileSetAtlasSource
+	var grass := BiomeRenderer.pixel_texture(source.texture, false)
+	var tile := Vector2(meadow.tile_world_size)
+	var region := Vector2(source.texture_region_size)
+	var x := mask.position.x
+	while x < mask.end.x:
+		var piece := minf(tile.x, mask.end.x - x)
+		var variant := posmod(int(floor((x + global_position.x) / tile.x)), meadow.floor_surface_tiles.size())
+		var atlas: Vector2i = meadow.floor_surface_tiles[variant]
+		var src := Rect2(Vector2(atlas) * region, Vector2(region.x * piece / tile.x, region.y))
+		draw_texture_rect_region(grass, Rect2(Vector2(x, surface_y - float(meadow.tile_rise)), Vector2(piece, tile.y)), src)
+		x += piece

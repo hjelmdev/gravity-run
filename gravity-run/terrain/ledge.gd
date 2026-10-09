@@ -70,8 +70,15 @@ func _spike_triangles_local() -> Array[PackedVector2Array]:
 	return triangles
 
 func _draw_side_spikes() -> void:
+	# The meadow draws them as outlined steel spikes like its other spikes.
+	var meadow := BiomeRenderer.locked_biome_id() == &"meadow"
 	for triangle in _spike_triangles_local():
-		draw_colored_polygon(triangle, SPIKE_COLOR)
+		if meadow:
+			draw_colored_polygon(triangle, MeadowPixelArt.STEEL)
+			draw_line(triangle[0], triangle[2], MeadowPixelArt.STEEL_LIGHT, 2.0)
+			draw_polyline(PackedVector2Array([triangle[0], triangle[1], triangle[2], triangle[0]]), MeadowPixelArt.OUTLINE, 2.0)
+		else:
+			draw_colored_polygon(triangle, SPIKE_COLOR)
 		draw_polyline(PackedVector2Array([triangle[0], triangle[2], triangle[1]]), Color("ffd0d8"), 2.0, true)
 
 func intersects_spikes(rect: Rect2) -> bool:

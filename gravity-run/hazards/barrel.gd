@@ -139,10 +139,12 @@ func _draw() -> void:
 		_draw_destruction_fragments()
 		return
 	var rendered_roll := roll_angle
+	var base := Transform2D.IDENTITY
 	if _local_render_motion:
 		var fraction := Engine.get_physics_interpolation_fraction()
 		var rendered_position := _previous_position.lerp(position, fraction)
-		draw_set_transform((rendered_position - position).rotated(-rotation), lerp_angle(_previous_rotation, rotation, fraction) - rotation)
+		base = Transform2D(lerp_angle(_previous_rotation, rotation, fraction) - rotation, (rendered_position - position).rotated(-rotation))
+		draw_set_transform_matrix(base)
 		rendered_roll = lerpf(_previous_roll, roll_angle, fraction)
 	var radius := HazardRules.barrel_radius(size.x, size.y)
 	var center_y := radius if from_ceiling else -radius
@@ -155,6 +157,14 @@ func _draw() -> void:
 		detail_color = Color("143f57")
 	if is_rubber and bounce_ticks > 0:
 		body_color = Color("77e2d3")
+	if skin == "meadow" and not is_rubber:
+		# A rolling log: its cut end turns with the roll.
+		var log := MeadowPixelArt.log_texture(radius, is_spiked)
+		var side := Vector2(log.get_size()) * MeadowPixelArt.ART_SCALE
+		draw_set_transform_matrix(base * Transform2D(rendered_roll, Vector2(0.0, center_y)))
+		draw_texture_rect(log, Rect2(-side * 0.5, side), false)
+		draw_set_transform(Vector2.ZERO)
+		return
 	if skin == "mine_cart":
 		_draw_mine_cart(radius, center_y, rendered_roll, is_rubber)
 	else:
