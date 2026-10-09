@@ -624,7 +624,7 @@ func _gen17_biome_event_keeps(event: Dictionary, surface_index: RefCounted) -> b
 func _make_multiplayer_ruleset(generator_version: int) -> Resource:
 	var ruleset := CourseRulesetScript.new() as Resource
 	ruleset.set("ruleset_id", &"multiplayer_race")
-	if generator_version in [CourseGenerator.GENERATOR_VERSION_19, CourseGenerator.GENERATOR_VERSION_20, CourseGenerator.GENERATOR_VERSION_21]:
+	if generator_version in [CourseGenerator.GENERATOR_VERSION_19, CourseGenerator.GENERATOR_VERSION_20, CourseGenerator.GENERATOR_VERSION_21, CourseGenerator.GENERATOR_VERSION_22]:
 		ruleset.set("revision", 16)
 		ruleset.set("event_density", 2.5)
 		ruleset.set("coin_revision", 2)
@@ -753,7 +753,7 @@ func _resolve_event_range(source_events: Array[Dictionary], course_length_px: in
 				var block_width := float(source.get("width", 48.0))
 				var block_height := float(source.get("height", 72.0))
 				var required_clearance := block_height + 56.0
-				if generator_version in [CourseGenerator.GENERATOR_VERSION_18, CourseGenerator.GENERATOR_VERSION_19, CourseGenerator.GENERATOR_VERSION_20, CourseGenerator.GENERATOR_VERSION_21] and _gen18_small_block_has_supported_runner_clearance(resolved, source_events, course_distance, block_width, block_height):
+				if generator_version in [CourseGenerator.GENERATOR_VERSION_18, CourseGenerator.GENERATOR_VERSION_19, CourseGenerator.GENERATOR_VERSION_20, CourseGenerator.GENERATOR_VERSION_21, CourseGenerator.GENERATOR_VERSION_22] and _gen18_small_block_has_supported_runner_clearance(resolved, source_events, course_distance, block_width, block_height):
 					required_clearance = block_height + float(RunnerMotionScript.SIZE.y) + 4.0
 				if floor_surface_y - ceiling_surface_y < required_clearance:
 					event_index += 1
@@ -786,7 +786,7 @@ func _resolve_event_range(source_events: Array[Dictionary], course_length_px: in
 				}
 				if generator_version >= CourseGenerator.GENERATOR_VERSION_12 and bool(source.get("spiked", false)):
 					barrel_record["spiked"] = true
-				if generator_version == CourseGenerator.GENERATOR_VERSION_21 and int(source.get("barrel_variant", 0)) == 1:
+				if generator_version in [CourseGenerator.GENERATOR_VERSION_21, CourseGenerator.GENERATOR_VERSION_22] and int(source.get("barrel_variant", 0)) == 1:
 					barrel_record["barrel_variant"] = 1
 					barrel_record["rubber_target_x"] = PLAYER_START_X + float(source.get("rubber_target_course_distance", NAN))
 				resolved.append(barrel_record)

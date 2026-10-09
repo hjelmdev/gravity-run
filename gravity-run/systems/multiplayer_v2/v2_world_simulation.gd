@@ -464,7 +464,7 @@ func apply_world_commit(commit: Dictionary) -> String:
 func apply_baseline(value: Dictionary) -> bool:
 	var baseline_version := int(value.get("baseline_format_version", -1))
 	if baseline_version == GEN21_BARREL_BASELINE_FORMAT_VERSION:
-		if manifest == null or int(manifest.get("generator_version")) != CourseGeneratorScript.GENERATOR_VERSION_21:
+		if manifest == null or int(manifest.get("generator_version")) not in [CourseGeneratorScript.GENERATOR_VERSION_21, CourseGeneratorScript.GENERATOR_VERSION_22]:
 			return false
 		if not _restore_gen21_barrel_states(value):
 			return false
@@ -495,7 +495,7 @@ func apply_baseline(value: Dictionary) -> bool:
 
 func baseline() -> Dictionary:
 	var value: Dictionary = entity_ledger.baseline()
-	if manifest == null or int(manifest.get("generator_version")) != CourseGeneratorScript.GENERATOR_VERSION_21:
+	if manifest == null or int(manifest.get("generator_version")) not in [CourseGeneratorScript.GENERATOR_VERSION_21, CourseGeneratorScript.GENERATOR_VERSION_22]:
 		return value
 	value["baseline_format_version"] = GEN21_BARREL_BASELINE_FORMAT_VERSION
 	value["simulation_tick"] = tick
@@ -578,7 +578,7 @@ func state_hash() -> String:
 	var barrel_state := []
 	for barrel in barrels:
 		var normalized_barrel := {"id": str(barrel.entity_id), "x": int(round(float(barrel.x) * 16.0)), "y": int(round(float(barrel.y) * 16.0)), "spawned": bool(barrel.spawned), "falling": bool(barrel.falling), "destroyed": bool(barrel.destroyed), "spiked": bool(barrel.get("spiked", false))}
-		if manifest != null and int(manifest.get("generator_version")) == CourseGeneratorScript.GENERATOR_VERSION_21:
+		if manifest != null and int(manifest.get("generator_version")) in [CourseGeneratorScript.GENERATOR_VERSION_21, CourseGeneratorScript.GENERATOR_VERSION_22]:
 			normalized_barrel["variant"] = int(barrel.get("barrel_variant", 0))
 			normalized_barrel["travel_direction"] = int(barrel.get("travel_direction", 1))
 			normalized_barrel["bounce_count"] = int(barrel.get("bounce_count", 0))

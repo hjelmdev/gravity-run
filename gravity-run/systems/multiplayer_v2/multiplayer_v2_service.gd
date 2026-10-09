@@ -51,7 +51,7 @@ signal membership_removed(reason: String)
 ## until it comes back) or returned.
 signal host_away_changed(away: bool)
 
-const V2_GAME_VERSION := "2.1.20261008.17"
+const V2_GAME_VERSION := "2.1.20261010.18"
 const MAX_PLAYERS := 5
 const POSITION_RATE_HZ := 30
 

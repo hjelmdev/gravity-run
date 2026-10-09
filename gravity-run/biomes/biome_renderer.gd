@@ -90,8 +90,8 @@ static var pixel_rotation := true
 ## on the slot whose rules they share, one lap of the rotation each: classic
 ## slots are the meadow, then the clouds, then the desert; cave slots the cave,
 ## then the frost mountain. Presentation only (same course, same seeds).
-static func _look(definition: BiomeDefinition, lap := 0) -> BiomeDefinition:
-	if not pixel_rotation:
+static func _look(definition: BiomeDefinition, lap := 0, always := false) -> BiomeDefinition:
+	if not pixel_rotation and not always:
 		return definition
 	match definition.biome_id:
 		&"cave": return [CAVE_CAMPAIGN, FROST_CAMPAIGN][posmod(lap, 2)]
@@ -102,14 +102,23 @@ static func _look(definition: BiomeDefinition, lap := 0) -> BiomeDefinition:
 static func definition_for_generator(distance: float, generator_version: int) -> BiomeDefinition:
 	if _locked_definition != null:
 		return _locked_definition
+	return _rotation_look(distance, generator_version, _look_shift)
+
+## The rotation look of a run with this seed at a distance (biome offset
+## included), independent of any lock or run frame. The generator uses it to
+## place the frost and desert worlds' own hazards where they are drawn.
+static func look_id_for(distance: float, generator_version: int, seed_value: int) -> StringName:
+	return _rotation_look(distance, generator_version, posmod(seed_value, 6), true).biome_id
+
+static func _rotation_look(distance: float, generator_version: int, shift: int, always := false) -> BiomeDefinition:
 	var cycle_length := GEN14_CYCLE_LENGTH if generator_version >= GENERATOR_VERSION_14 else CYCLE_LENGTH
 	var slot := int(floor(fposmod(maxf(distance, 0.0), cycle_length) / THEME_LENGTH))
-	var lap := int(floor(maxf(distance, 0.0) / cycle_length)) + _look_shift
+	var lap := int(floor(maxf(distance, 0.0) / cycle_length)) + shift
 	match slot:
-		1: return _look(CAVE, lap)
-		2: return _look(HAUNTED, lap)
-		3: return _look(LAVA if generator_version >= GENERATOR_VERSION_14 else CLASSIC, lap)
-		_: return _look(CLASSIC, lap)
+		1: return _look(CAVE, lap, always)
+		2: return _look(HAUNTED, lap, always)
+		3: return _look(LAVA if generator_version >= GENERATOR_VERSION_14 else CLASSIC, lap, always)
+		_: return _look(CLASSIC, lap, always)
 
 ## Where hazards of the current run sit on the course: world x of course
 ## distance 0, the seed's biome start offset and the generator version. Set
