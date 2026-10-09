@@ -68,6 +68,17 @@ const CAMPAIGN_RUNOUT_TICKS := 75
 const SP_MAX_PHYSICS_STEPS := 3
 const SHADER_WARMUP_SCRIPT := preload("res://systems/shader_warmup.gd")
 const PB_GHOST_SCRIPT := preload("res://player/personal_best_ghost.gd")
+## Near miss: a flip that clears a hazard by at most NEAR_MISS_GAP px within
+## NEAR_MISS_FLIP_TICKS of the flip gets a short callout (presentation only).
+const NEAR_MISS_GAP := 14.0
+const NEAR_MISS_FLIP_TICKS := 40
+const NEAR_MISS_COOLDOWN_TICKS := 150
+const NEAR_MISS_LINES := ["Close one!", "Phew!", "Just made it!", "Whoa!"]
+var _near_miss_seen: Dictionary = {}
+var _near_miss_last_tick := -100000
+var _last_flip_tick := -100000
+var _last_gravity_direction := 1
+var near_miss_count := 0
 var _pb_ghost: PersonalBestGhost
 var _engine_max_physics_steps := 8
 ## Singleplayer pickup reach. The pixel runners are drawn wider than the shared
@@ -324,6 +335,11 @@ func _start_run() -> void:
 	_clear_nodes(gaps)
 	game_over = false
 	_singleplayer_simulation_tick = 0
+	_near_miss_seen.clear()
+	_near_miss_last_tick = -100000
+	_last_flip_tick = -100000
+	_last_gravity_direction = 1
+	near_miss_count = 0
 	run_blocked = false
 	_presentation.reset(player.position)
 	_render_player_position = player.position
@@ -882,6 +898,8 @@ func _physics_process(delta: float) -> void:
 		# A bubble absorbed the hit. Forget the contact so coins past it still count.
 		run_end_requested = false
 		lethal_fraction = -1.0
+	if not run_end_requested and not demo_mode:
+		_check_near_miss(final_player_rect)
 	run_blocked = blocked_by_edge and not game_over
 	hud.call("set_run_blocked", run_blocked)
 	if not demo_mode:
@@ -2236,3 +2254,32 @@ func _runner_facing() -> float:
 	var sprite_node: Node2D = player.get("sprite")
 	var pixel_scale := float(player.get("_pixel_scale"))
 	return sprite_node.scale.y / pixel_scale if is_instance_valid(sprite_node) and pixel_scale > 0.0 else float(player.call("get_gravity_direction"))
+
+## Near miss: the runner flipped a moment ago and slips past a hazard with a
+## hair's breadth to spare. Each hazard counts once, and callouts are spaced out.
+func _check_near_miss(player_rect: Rect2) -> void:
+	var direction := int(player.call("get_gravity_direction"))
+	if direction != _last_gravity_direction:
+		_last_gravity_direction = direction
+		_last_flip_tick = _singleplayer_simulation_tick
+	if _singleplayer_simulation_tick - _last_flip_tick > NEAR_MISS_FLIP_TICKS:
+		return
+	if _singleplayer_simulation_tick - _near_miss_last_tick < NEAR_MISS_COOLDOWN_TICKS:
+		return
+	var reach := player_rect.grow(NEAR_MISS_GAP)
+	for obstacle in obstacles:
+		if not is_instance_valid(obstacle) or not obstacle.has_method("get_hitbox_rect"):
+			continue
+		if absf(obstacle.global_position.x - player_rect.get_center().x) > 220.0:
+			continue
+		var id := obstacle.get_instance_id()
+		if _near_miss_seen.has(id):
+			continue
+		var rect: Rect2 = obstacle.call("get_hitbox_rect")
+		if rect.size == Vector2.ZERO or rect.intersects(player_rect) or not rect.intersects(reach):
+			continue
+		_near_miss_seen[id] = true
+		_near_miss_last_tick = _singleplayer_simulation_tick
+		near_miss_count += 1
+		hud.call("show_campaign_callout", tr(NEAR_MISS_LINES[near_miss_count % NEAR_MISS_LINES.size()]), Color("8fe6ff"))
+		return

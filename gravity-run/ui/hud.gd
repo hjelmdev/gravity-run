@@ -174,9 +174,10 @@ func _draw() -> void:
 	_draw_effect_row(viewport_height)
 	if campaign_level != null:
 		_draw_campaign_bar(viewport_width)
-		_draw_campaign_callout(viewport_width, viewport_height)
 	else:
 		_draw_seed_chase_strip(viewport_width, viewport_height)
+	# Callouts: campaign news, and near misses in every run.
+	_draw_campaign_callout(viewport_width, viewport_height)
 	if pass_flash_left > 0.0:
 		var flash_phase := sin(Time.get_ticks_msec() / 75.0) * 0.5 + 0.5
 		var flash_color := Color("f5d45e", 0.75 + flash_phase * 0.25)

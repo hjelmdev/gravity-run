@@ -2074,3 +2074,15 @@ msgstr "Dagens bana"
 
 msgid "The same course for everyone today, with its own leaderboard"
 msgstr "Samma bana för alla i dag, med egen topplista"
+
+msgid "Close one!"
+msgstr "Nära ögat!"
+
+msgid "Phew!"
+msgstr "Puh!"
+
+msgid "Just made it!"
+msgstr "Precis!"
+
+msgid "Whoa!"
+msgstr "Oj!"

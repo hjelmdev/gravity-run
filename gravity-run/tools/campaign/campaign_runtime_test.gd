@@ -57,6 +57,7 @@ func _run() -> void:
 	_check_ash()
 	await _check_biome_keys()
 	await _check_personal_best_ghost()
+	await _check_near_miss()
 	_check_hand_sweep()
 	await _check_fog_lights()
 	await _check_wisp(true)
@@ -866,3 +867,31 @@ func _check_personal_best_ghost() -> void:
 	Campaign.clear_active()
 	Campaign.reset_progress()
 	PersonalBestGhost.clear_all()
+
+class NearMissProbe extends Node2D:
+	var rect := Rect2()
+	func get_hitbox_rect() -> Rect2:
+		return rect
+
+## Near miss: right after a flip, passing a hazard within a few pixels gives one
+## callout per hazard; touching it or passing far away does not.
+func _check_near_miss() -> void:
+	Campaign.clear_active()
+	var game: Node = await _make_game()
+	var player: Node = game.get_node("Player")
+	var player_rect: Rect2 = player.call("get_player_rect")
+	var close := NearMissProbe.new()
+	close.rect = Rect2(Vector2(player_rect.position.x, player_rect.end.y + 6.0), Vector2(40.0, 40.0))
+	close.position = close.rect.get_center()
+	var far := NearMissProbe.new()
+	far.rect = Rect2(Vector2(player_rect.position.x, player_rect.end.y + 80.0), Vector2(40.0, 40.0))
+	far.position = far.rect.get_center()
+	game.add_child(close)
+	game.add_child(far)
+	(game.get("obstacles") as Array).append_array([far, close])
+	game.set("_last_gravity_direction", -int(player.call("get_gravity_direction")))
+	game.call("_check_near_miss", player_rect)
+	game.call("_check_near_miss", player_rect)
+	_check(int(game.get("near_miss_count")) == 1, "a hazard passed by a few pixels right after a flip is one near miss")
+	game.queue_free()
+	await get_tree().process_frame
