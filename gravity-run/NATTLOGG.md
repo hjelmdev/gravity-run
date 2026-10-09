@@ -2,6 +2,30 @@
 
 Förloppet för de schemalagda passen (se NATTPASS.md). Nyast överst.
 
+## 2026-10-09 dagpass (Adam på jobbet) – läget
+- Supabase-migrationerna 202610080002–0004 är INTE körda: Supabase-kopplingen här når bara
+  Middagstipset och Block Pact, och datorn har ingen Supabase CLI eller databasnyckel.
+  Adam kan klistra in filerna i SQL-editorn i den ordningen.
+- Klart: Vulkanen (värld 4) enligt WORLD4_VOLCANO_PLAN.md: sex banor med frysta seeds och
+  stjärnor (8462b4c), glödbomber, askregn och bossen Magmaormen (185825f), Bit låses upp av
+  Magmaormen (ebab436), utseende, musik och ljud (444d8dc). Ingen Python på datorn, så
+  ljudgeneratorn är skriven i GDScript och musiken är en loopande wav.
+- Klart: biomnycklar, utrustning steg 4 (d7be110). Nycklarna är kampanjbelöningar i den
+  lokala progressen, inte inventarieprylar (effektprylar är av i kampanjen).
+- Klart: prestanda (7898ece): max 3 fysiksteg per bildruta i singleplayer, shaderförvärmning
+  vid start, loggar ignoreras av git.
+- Städning i huvudutcheckningen `gravity-run/` (gren codex/current-prototype): 532 loggfiler
+  och 34 `.codex-*`-mappar flyttade till `gravity-run/logs/` (med .gdignore), inget raderat.
+  `.codex-clean-gen20-8dd7e47` gick inte att flytta: två gamla Godot-processer från 8 okt
+  (pid 67324 och 52780) håller den låst.
+- Klart: multiplayer (91ab9ee): TURN via Edge Function turn-credentials (källan i
+  supabase/functions, inte driftsatt, behöver CF_TURN_KEY_ID och CF_TURN_KEY_API_TOKEN) och
+  besked till gästerna när värdens flik hamnar i bakgrunden.
+- Inte gjort i fas 3: frysning av banor som händelselistor (generator 21 ändras aldrig, så
+  det ger lite nu) och hemligheter (fas 6, belöningen är inte bestämd). Bakgrunder som noder
+  (backlog 1.2) väntar, eftersom det behöver mätas i Chrome.
+- Kända testfel som fanns före i dag: multiplayer contract_test (två gen11-versionsgrindar).
+
 ## 2026-10-09 08:00 – pass 2 slut
 - Klart: sista regressionskörningen på allt är grön mot gamla bygget (enda skillnaden är
   `death_result_audio_test`, som är instabil även på gamla bygget). Webbexporten
