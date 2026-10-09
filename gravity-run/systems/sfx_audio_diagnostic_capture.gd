@@ -28,8 +28,22 @@ func start_capture(seed_value: int, generator_version: int, duration_seconds := 
 	_capture_active = true
 	_report.clear()
 	SfxController.begin_diagnostic_capture()
-	get_tree().create_timer(_capture_duration_seconds, true, false, true).timeout.connect(_finish_capture.bind("duration_complete"))
+	_arm_duration_timer(_capture_duration_seconds)
 	return true
+
+## A timer created during a long frame (the first one after loading the game)
+## can complete at once, so the timeout checks real elapsed time and re-arms.
+func _arm_duration_timer(seconds: float) -> void:
+	get_tree().create_timer(seconds, true, false, true).timeout.connect(_on_duration_timer)
+
+func _on_duration_timer() -> void:
+	if not _capture_active:
+		return
+	var remaining := _capture_duration_seconds - float(Time.get_ticks_usec() - _capture_started_usec) / 1_000_000.0
+	if remaining > 0.05:
+		_arm_duration_timer(remaining)
+		return
+	_finish_capture("duration_complete")
 
 func is_capture_active() -> bool:
 	return _capture_active
