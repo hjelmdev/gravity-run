@@ -741,3 +741,88 @@ static func make_tumbleweed(r: int, spiked: bool) -> Image:
 				_put(image, int(p.x), int(p.y), pal.steel_light if step < 3 else pal.steel)
 	# No outline: the twigs are thin, an outline would turn them all dark.
 	return image
+
+## A ghost filling w x h world pixels, in its own colours (ghosts look the same
+## in every biome). variant 0 is the sheet ghost, 1 the wisp, 2 the hooded
+## grim ghost (GhostHazard.skin_variant).
+static func ghost_texture(size: Vector2, variant: int) -> Texture2D:
+	if _default_palette == null:
+		_default_palette = PixelPalette.new()
+	return _cached(_default_palette, "ghost|%d|%d|%d" % [int(size.x), int(size.y), variant], func() -> Image: return make_ghost(_art(size.x), _art(size.y), variant))
+
+const GHOST_OUTLINE := Color8(40, 30, 76)
+const GHOST_BODY := Color8(244, 246, 255)
+const GHOST_SHADE := Color8(196, 204, 244)
+const GHOST_EYE := Color8(36, 26, 70)
+const WISP_BODY := Color8(186, 255, 226)
+const WISP_SHADE := Color8(110, 220, 196)
+const GRIM_CLOAK := Color8(132, 116, 180)
+const GRIM_SHADE := Color8(98, 84, 142)
+const GRIM_EYE := Color8(150, 255, 210)
+
+static func make_ghost(w: int, h: int, variant: int) -> Image:
+	var image := _blank(w, h)
+	var cx := float(w) * 0.5
+	var head := float(w) * 0.5 - 0.5
+	var body := GHOST_BODY
+	var shade := GHOST_SHADE
+	if variant == 1:
+		body = WISP_BODY
+		shade = WISP_SHADE
+	elif variant == 2:
+		body = GRIM_CLOAK
+		shade = GRIM_SHADE
+	for y in range(h):
+		for x in range(w):
+			var p := Vector2(float(x) + 0.5, float(y) + 0.5)
+			var inside := false
+			if variant == 1:
+				# A teardrop flame: round below, tapering to a curled tip on top.
+				var r := head * 0.85
+				var c := Vector2(cx, float(h) - r - 1.0)
+				var t := clampf((c.y - p.y) / maxf(c.y, 1.0), 0.0, 1.0)
+				var curl := sin(t * PI * 1.2) * float(w) * 0.12
+				inside = p.distance_to(c) <= r or (p.y < c.y and absf(p.x - cx - curl) <= r * (1.0 - t) * 0.95)
+			else:
+				# Dome head, straight sides, a wavy hem of three tails.
+				var top := head + 0.5
+				if p.y < top:
+					inside = Vector2(p.x - cx, p.y - top).length() <= head
+				else:
+					var hem := float(h) - 1.0 - (absf(sin(p.x / float(w) * PI * 3.0)) * float(h) * 0.12)
+					inside = p.y <= hem and absf(p.x - cx) <= head
+			if not inside:
+				continue
+			var color := body
+			if p.x > cx + head * 0.35:
+				color = shade
+			image.set_pixel(x, y, color)
+	# Face: eyes and a small mouth on the sheet and wisp; a dark hood with
+	# glowing eyes on the grim ghost.
+	var eye_y := int(float(h) * (0.36 if variant != 1 else 0.6))
+	var eye_dx := maxi(int(float(w) * 0.16), 2)
+	if variant == 2:
+		for y in range(int(float(h) * 0.2), int(float(h) * 0.5)):
+			for x in range(int(cx - head * 0.6), int(cx + head * 0.6) + 1):
+				if image.get_pixel(x, y).a > 0.5:
+					image.set_pixel(x, y, GHOST_OUTLINE)
+		for side in [-1, 1]:
+			var gx: int = int(cx) + side * eye_dx - (1 if side < 0 else 0)
+			_put(image, gx, eye_y, GRIM_EYE)
+			_put(image, gx + side, eye_y, GRIM_EYE)
+			_put(image, gx, eye_y + 1, GRIM_EYE)
+	else:
+		for side in [-1, 1]:
+			var ex: int = int(cx) + side * eye_dx - (1 if side < 0 else 0)
+			for dy in range(maxi(int(float(h) * 0.1), 3)):
+				_put(image, ex, eye_y + dy, GHOST_EYE)
+				_put(image, ex + side, eye_y + dy, GHOST_EYE)
+			_put(image, ex, eye_y, Color.WHITE)
+		_put(image, int(cx), eye_y + maxi(int(float(h) * 0.12), 3), GHOST_EYE)
+		_put(image, int(cx) - 1, eye_y + maxi(int(float(h) * 0.12), 3), GHOST_EYE)
+	var saved := pal
+	pal = PixelPalette.new()
+	pal.hazard_outline = GHOST_OUTLINE
+	_outline(image)
+	pal = saved
+	return image

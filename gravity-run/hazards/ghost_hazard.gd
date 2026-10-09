@@ -158,7 +158,11 @@ func _draw() -> void:
 	elif draw_phase == Model.FADING:
 		tint = Color("bdc9e3", 0.28)
 	draw_set_transform(visual_offset(), sin(_visual_time * TAU / 4.0) * 0.025)
-	draw_texture_rect(SKINS[skin_variant], Rect2(-size * 0.5, size), false, tint)
+	if BiomeRenderer.locked_pixel_palette() != null:
+		# Pixel-style biomes draw the ghost in pixel art (same box, same tint).
+		draw_texture_rect(PixelHazardArt.ghost_texture(size, skin_variant), Rect2(-size * 0.5, size), false, tint)
+	else:
+		draw_texture_rect(SKINS[skin_variant], Rect2(-size * 0.5, size), false, tint)
 	draw_set_transform(Vector2.ZERO)
 	if draw_phase == Model.WARNING:
 		var pulse := 0.65 + 0.25 * sin(fposmod(_presentation_tick, 24.0) * TAU / 24.0)

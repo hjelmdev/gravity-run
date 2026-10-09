@@ -142,6 +142,10 @@ var _saw_activation_scan_index := 0
 var _manifest_builder: RefCounted
 ## Campaign stage of this run (null for endless, challenge and demo runs).
 var _campaign_level: CampaignLevel
+## The campaign stage the menu's demo run borrows (course and look), or null.
+var _demo_level: CampaignLevel = null
+## Which world the next demo run shows; the worlds take turns.
+static var _demo_world_index := -1
 var _campaign_run: Node2D
 var _campaign_result_panel: CanvasLayer
 var _campaign_banner: CanvasLayer
@@ -276,18 +280,22 @@ func _start_run() -> void:
 	run_state.call("start_run")
 	course_distance = 0.0
 	_campaign_level = null if demo_mode else Campaign.active_level
+	# The menu's demo runner shows the campaign worlds in turn: each demo run
+	# borrows one world's stage (its course and pixel look), not the campaign.
+	_demo_level = _next_demo_level() if demo_mode else null
+	var look_level: CampaignLevel = _campaign_level if _campaign_level != null else _demo_level
 	# Campaign stages pin one biome; every other run uses the rotation.
-	BIOME_RENDERER_SCRIPT.set_locked_biome(_campaign_level.get_presentation_biome() if _campaign_level != null else &"")
+	BIOME_RENDERER_SCRIPT.set_locked_biome(look_level.get_presentation_biome() if look_level != null else &"")
 	_manifest_builder.call("clear_runtime_cache")
-	var run_seed := _campaign_level.seed_value if _campaign_level != null else ChallengeService.begin_run()
+	var run_seed := look_level.seed_value if look_level != null else ChallengeService.begin_run()
 	loot_spawn_planner.reset(run_seed)
 	_active_seed = run_seed
-	_active_seed_version = _campaign_level.generator_version if _campaign_level != null else ChallengeService.generation_version
+	_active_seed_version = look_level.generator_version if look_level != null else ChallengeService.generation_version
 	_seed_scores.clear()
 	_pending_hazard_discoveries.clear()
 	var run_definition: Resource
-	if _campaign_level != null:
-		run_definition = _campaign_level.create_run_definition()
+	if look_level != null:
+		run_definition = look_level.create_run_definition()
 	else:
 		run_definition = COURSE_RUN_DEFINITION_SCRIPT.new() as Resource
 		run_definition.set("scenario_id", &"seed_challenge" if ChallengeService.active else &"endless")
@@ -1326,7 +1334,7 @@ func _spawn_course_event(event: Dictionary) -> void:
 					rock_event["event_id"] = rock_event_id
 				rock.call("configure", rock_event)
 				rock.name = "FallingRock_%s" % rock_event_id
-				if _campaign_level != null and BIOME_RENDERER_SCRIPT.locked_pixel_palette() != null:
+				if BIOME_RENDERER_SCRIPT.locked_pixel_palette() != null:
 					rock.set("skin", "pixel")
 				add_child(rock)
 				obstacles.append(rock)
@@ -1769,15 +1777,15 @@ func _spawn_obstacle_scene(scene: PackedScene, width: float, height: float, from
 	if obstacle.is_in_group("barrels") and obstacle.has_signal("destruction_started"):
 		_connect_barrel_audio(obstacle)
 	# Campaign cave stages draw rolling barrels as mine carts (skin only).
-	if obstacle.is_in_group("barrels") and _campaign_level != null and _campaign_level.world_id == &"cave":
+	if obstacle.is_in_group("barrels") and BIOME_RENDERER_SCRIPT.locked_biome_id() == &"cave_campaign":
 		obstacle.set("skin", "mine_cart")
 	# Pixel-style biomes draw barrels (not a boss machine's own barrels; the
 	# Snow Giant's are the frost world's snowballs),
 	# blocks and spikes as pixel art.
-	if _campaign_level != null and BIOME_RENDERER_SCRIPT.locked_pixel_palette() != null and str(obstacle.get("skin")).is_empty() and ((obstacle.is_in_group("barrels") and (not _campaign_level.is_boss() or _campaign_level.boss_id == &"snow_giant")) or obstacle.is_in_group("breakable") or obstacle.is_in_group("spikes")):
+	if BIOME_RENDERER_SCRIPT.locked_pixel_palette() != null and str(obstacle.get("skin")).is_empty() and ((obstacle.is_in_group("barrels") and (_campaign_level == null or not _campaign_level.is_boss() or _campaign_level.boss_id == &"snow_giant")) or obstacle.is_in_group("breakable") or obstacle.is_in_group("spikes")):
 		obstacle.set("skin", "pixel")
 	# Haunted campaign stages draw blocks and spikes as gravestones and crosses.
-	if _campaign_level != null and _campaign_level.world_id == &"haunted" and (obstacle.is_in_group("breakable") or obstacle.is_in_group("spikes")):
+	if BIOME_RENDERER_SCRIPT.locked_biome_id() == &"haunted_campaign" and (obstacle.is_in_group("breakable") or obstacle.is_in_group("spikes")):
 		if str(obstacle.get("skin")).is_empty():
 			obstacle.set("skin", "grave")
 	if obstacle.has_method("set_motion_speed_multiplier"):
@@ -2263,6 +2271,17 @@ func _draw_track() -> void:
 			step_positions.append(float(terrain.call("get_start_x")))
 	var biome_start_offset := BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(_active_seed, _active_seed_version)
 	COURSE_SURFACE_RENDERER.draw_track(self, _render_course_distance, Vector2(screen_width, screen_height), surface_gaps, terrain_boundaries, step_positions, Callable(self, "_surface_y_at"), 0.0, null, BIOME_RENDERER_SCRIPT.course_distance_at_world_x(PLAYER_X, 0.0) - biome_start_offset, _active_seed_version)
+
+## The next world's stage for the demo run: the worlds take turns, starting
+## at a random one, each time on a random stage of that world.
+func _next_demo_level() -> CampaignLevel:
+	var all := CampaignCatalog.worlds()
+	if _demo_world_index < 0:
+		_demo_world_index = randi_range(0, all.size() - 1)
+	var world: CampaignWorld = all[_demo_world_index % all.size()]
+	_demo_world_index += 1
+	var stages := world.levels.filter(func(level: CampaignLevel) -> bool: return not level.is_boss())
+	return stages.pick_random() if not stages.is_empty() else null
 
 ## Course identity for the personal-best ghost: a campaign stage, or a seed that
 ## can come again (challenge, typed seed, daily stage). "" for random seeds and
