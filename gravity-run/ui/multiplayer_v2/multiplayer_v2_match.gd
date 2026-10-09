@@ -14,6 +14,7 @@ const RightEdgeCaptureScript := preload("res://systems/multiplayer_v2/v2_right_e
 const CoursePresentationScript := preload("res://systems/race_course_presentation.gd")
 const CourseGeneratorScript := preload("res://systems/course_generator.gd")
 const BiomeRendererScript := preload("res://biomes/biome_renderer.gd")
+const CampaignAudio := preload("res://campaign/campaign_audio.gd")
 const RoundCoordinatorScript := preload("res://systems/multiplayer_v2/v2_round_coordinator.gd")
 const HudLayout := preload("res://ui/multiplayer_v2/v2_hud_layout.gd")
 const SharedRunHudScene := preload("res://ui/shared_run_hud.tscn")
@@ -72,6 +73,8 @@ var _player_views: Dictionary = {}
 var _course_root: Node2D
 var _course_presentation: Node2D
 var _camera_left := 0.0
+## The biome whose music the race is playing (&"" before the first).
+var _music_biome: StringName = &""
 var _spectator_peer_id := 0
 var _last_spectator_event_peer_id := -1
 var _result: Dictionary = {}
@@ -676,6 +679,7 @@ func _process(delta: float) -> void:
 	_render_camera.configure(get_viewport_rect().size, CAMERA_PLAYER_X)
 	_render_camera.follow(Vector2(_camera_left + CAMERA_PLAYER_X, 0.0), true)
 	_course_presentation.call("set_camera_left", _camera_left)
+	_update_biome_music(_camera_left + CAMERA_PLAYER_X)
 	var world_render_fraction := _render_fraction
 	if _round_started:
 		world_render_fraction = WorldSimulationScript.presentation_fraction(presentation_tick, _world.tick)
@@ -1113,6 +1117,7 @@ func _on_round_started(round_id: String, _descriptor: Dictionary) -> void:
 	_pending_barrel_contact_usec = -1
 	_local_death_sfx_diagnostic_recorded = false
 	MusicController.start_round(round_id)
+	_music_biome = &""
 	SfxController.begin_round(round_id)
 	_world_tick = 0
 	_local_start_deadline_usec = int(MultiplayerV2Service._round_coordinator.clock.started_at_usec)
@@ -2236,3 +2241,15 @@ func _play_local_death_sfx(source: String) -> void:
 func _on_host_away_changed(away: bool) -> void:
 	if is_instance_valid(_host_away_label):
 		_host_away_label.visible = away
+
+## Like endless: the music of the biome at the camera's runner position (the
+## campaign worlds' tracks), changing with a short fade at each biome seam.
+func _update_biome_music(world_x: float) -> void:
+	if not _round_started:
+		return
+	var biome := BiomeRendererScript.definition_at_world_x(world_x).biome_id
+	if biome == _music_biome:
+		return
+	var first := _music_biome.is_empty()
+	_music_biome = biome
+	MusicController.switch_track(CampaignAudio.track_for(biome), 0.3 if first else 1.4)
