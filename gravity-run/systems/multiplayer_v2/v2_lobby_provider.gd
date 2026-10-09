@@ -34,6 +34,9 @@ func refresh_room(room_id: String, loadout_hash: String, token: String, context:
 func set_ready(room_id: String, ready: bool, cycle: int, content_revision: int, loadout_hash: String, token: String, context: String) -> void:
 	_call("set_ready", "multiplayer_v2_set_ready", {"p_room_id": room_id, "p_ready": ready, "p_expected_cycle": cycle, "p_expected_content_revision": content_revision, "p_loadout_hash": loadout_hash}, token, context)
 
+func set_equipment(room_id: String, enabled: bool, cycle: int, token: String, context: String) -> void:
+	_call("set_equipment", "multiplayer_v2_set_equipment", {"p_room_id": room_id, "p_enabled": enabled, "p_expected_cycle": cycle}, token, context)
+
 func set_skin(room_id: String, skin_id: int, token: String, context: String) -> void:
 	_call("set_skin", "multiplayer_v2_set_skin", {"p_room_id": room_id, "p_skin_id": skin_id}, token, context)
 

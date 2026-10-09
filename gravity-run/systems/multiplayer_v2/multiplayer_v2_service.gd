@@ -10,6 +10,7 @@ const CoinAwardProviderScript := preload("res://systems/multiplayer_v2/v2_coin_a
 const SignalingTransportScript := preload("res://systems/supabase_signaling_transport.gd")
 const WebRTCTransportScript := preload("res://systems/multiplayer_v2/v2_webrtc_transport.gd")
 const CourseGeneratorScript := preload("res://systems/course_generator.gd")
+const RoomSettingsScript := preload("res://systems/multiplayer_v2/v2_room_settings.gd")
 const ValidationScript := preload("res://systems/multiplayer_v2/v2_validation.gd")
 const RoundCoordinatorScript := preload("res://systems/multiplayer_v2/v2_round_coordinator.gd")
 const ManifestBuilderScript := preload("res://systems/course_manifest_builder.gd")
@@ -373,6 +374,20 @@ func set_ready(ready: bool) -> void:
 		_clear_start_failure()
 		_begin_identity_action("set_ready", {"room_id": str(room_state.get("room_id", "")), "ready": ready, "lobby_cycle": int(room_state.get("lobby_cycle", 0)), "content_revision": int(room_state.get("content_revision", 0)), "loadout_hash": loadout_hash})
 
+## Host only, lobby only: turns "Equipment on/off" for the next round. The server
+## bumps the content revision, so every player confirms ready again.
+func set_equipment_enabled(enabled: bool) -> bool:
+	if not has_room() or not is_room_owner() or str(room_state.get("phase", "")) != "OPEN":
+		return false
+	if RoomSettingsScript.equipment_enabled(room_state) == enabled:
+		return false
+	_clear_start_failure()
+	_begin_identity_action("set_equipment", {"room_id": str(room_state.get("room_id", "")), "enabled": enabled, "lobby_cycle": int(room_state.get("lobby_cycle", 0))})
+	return true
+
+func is_equipment_enabled() -> bool:
+	return RoomSettingsScript.equipment_enabled(room_state)
+
 func set_skin_id(skin_id: int) -> void:
 	if has_room():
 		_begin_identity_action("set_skin", {"room_id": str(room_state.get("room_id", "")), "skin_id": posmod(skin_id, 4)})
@@ -550,6 +565,8 @@ func _on_identity_ready(user_id: String, _token: String, anonymous: bool, contex
 			_lobby_provider.refresh_room(str(arguments.room_id), str(arguments.loadout_hash), token, context)
 		"set_ready":
 			_lobby_provider.set_ready(str(arguments.room_id), bool(arguments.ready), int(arguments.lobby_cycle), int(arguments.content_revision), str(arguments.loadout_hash), token, context)
+		"set_equipment":
+			_lobby_provider.set_equipment(str(arguments.room_id), bool(arguments.enabled), int(arguments.lobby_cycle), token, context)
 		"set_skin":
 			_lobby_provider.set_skin(str(arguments.room_id), int(arguments.skin_id), token, context)
 		"leave_room":
@@ -637,6 +654,7 @@ func _on_lobby_request_finished(action: String, success: bool, data: Variant, me
 		diagnostics.session["round_id"] = _round_id
 		session["roster_revision"] = int(room_state.get("lobby_generation", 0))
 		var descriptor := {"attempt_id": _start_attempt_id, "round_id": _round_id, "room_id": str(room_state.get("room_id", "")), "room_session_id": str(room_state.get("room_session_id", "")), "lobby_generation": int(room_state.get("lobby_generation", 0)), "roster_revision": int(room_state.get("lobby_generation", 0)), "manifest_hash": str(room_state.get("manifest_hash", "")), "seed": int(room_state.get("seed", 1)), "course_length_px": int(room_state.get("course_length_px", 45000)), "players": room_state.get("members", []).duplicate(true)}
+		RoomSettingsScript.apply_to_descriptor(descriptor, room_state)
 		descriptor["peer_map"] = _peer_map_for_roster(descriptor.players)
 		var descriptor_error := _validate_round_descriptor(descriptor)
 		if not descriptor_error.is_empty():

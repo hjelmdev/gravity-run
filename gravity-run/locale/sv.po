@@ -1960,3 +1960,15 @@ msgstr "Glid längs mitten i 1 s, laddar om på %d s"
 
 msgid "Use gravity anchor"
 msgstr "Använd gravitationsankare"
+
+msgid "Equipment items"
+msgstr "Utrustning"
+
+msgid "Host setting. On: every player's equipped effect items apply in the race. Off: everyone races without items."
+msgstr "Värdens val. På: allas utrustade prylar gäller i loppet. Av: alla kör utan prylar."
+
+msgid "Equipment is ON: everyone's equipped items apply in the race."
+msgstr "Utrustning är PÅ: allas utrustade prylar gäller i loppet."
+
+msgid "Equipment is OFF: everyone races without items."
+msgstr "Utrustning är AV: alla kör utan prylar."

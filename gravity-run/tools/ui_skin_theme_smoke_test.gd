@@ -40,7 +40,12 @@ func _ready() -> void:
 	bag.call("_cycle_character", 1)
 	if PlayerProfile.selected_character_id != &"nova_mini":
 		failures.append("bag picker did not advance (got %s)" % PlayerProfile.selected_character_id)
-	for _step in CharacterCatalog.DEFINITIONS.size() - 1:
+	# The picker skips characters that are still locked (campaign unlocks).
+	var unlocked_count := 0
+	for definition: CharacterDefinition in CharacterCatalog.DEFINITIONS:
+		if CharacterCatalog.is_unlocked(definition):
+			unlocked_count += 1
+	for _step in unlocked_count - 1:
 		bag.call("_cycle_character", 1)
 	if PlayerProfile.selected_character_id != &"nova":
 		failures.append("bag picker did not wrap (got %s)" % PlayerProfile.selected_character_id)

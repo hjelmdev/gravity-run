@@ -20,6 +20,9 @@ const SharedRunHudScene := preload("res://ui/shared_run_hud.tscn")
 const ConfirmedCoinPresentationScript := preload("res://systems/confirmed_coin_presentation.gd")
 const MpAchievementResultSectionScript := preload("res://ui/multiplayer_v2/mp_achievement_result_section.gd")
 const TouchGestureLifecycleScript := preload("res://systems/touch_gesture_lifecycle.gd")
+const RunEffectsScript := preload("res://systems/run_effects.gd")
+const RoomSettingsScript := preload("res://systems/multiplayer_v2/v2_room_settings.gd")
+const EffectHudRowScript := preload("res://ui/effect_hud_row.gd")
 
 const FIXED_DELTA := 1.0 / 60.0
 const CAMERA_PLAYER_X := CameraScript.PLAYER_ANCHOR_X
@@ -42,6 +45,12 @@ var _manifest: Resource
 var _runner
 var _world
 var _round_id := ""
+## Lobby toggle "Equipment on": this runner's effect items (RunEffects) apply.
+## False in every clean round, which then runs exactly the code it always did.
+var _effects_active := false
+var _run_effects: RefCounted
+var _effect_row: Control
+var _effect_overlay: Node2D
 var _round_started := false
 var _round_aborted := false
 var _world_tick := 0
@@ -185,6 +194,7 @@ func _ready() -> void:
 	var loadout_snapshot: Resource = InventoryService.create_run_loadout_snapshot(PlayerProfile.get_character_stats())
 	var resolved_stats: Dictionary = loadout_snapshot.get_resolved_stats() if loadout_snapshot != null and loadout_snapshot.has_method("is_valid") and bool(loadout_snapshot.call("is_valid")) else {}
 	_runner.configure(_round_id, local_peer, float(_manifest.start_x), float(_manifest.initial_floor_y), resolved_stats)
+	_configure_run_effects(loadout_snapshot)
 	_record_local_pose(0)
 	MultiplayerV2Service.diagnostics.record_event("local_loadout_frozen", {"run_speed_percent": int(resolved_stats.get("run_speed_percent", 10000)), "flip_cooldown_percent": int(resolved_stats.get("flip_cooldown_percent", 10000))})
 	MultiplayerV2Service.configure_world_simulation(_world)
@@ -206,6 +216,48 @@ func _ready() -> void:
 	MultiplayerV2Service.mark_local_prepared()
 	_status_label.text = tr("Preparing all players…")
 	queue_redraw()
+
+## Equipment toggle: the host froze it into the round descriptor, so every peer
+## reads the same value. Only the owning client decides what its own effects
+## absorb, before anything is reported, so nobody else needs to know about them.
+func _configure_run_effects(loadout_snapshot: Resource) -> void:
+	var round_config := RoomSettingsScript.run_config(MultiplayerV2Service.get_active_round_descriptor())
+	if not bool(round_config.get(RoomSettingsScript.KEY_EQUIPMENT_ENABLED, false)):
+		return
+	if loadout_snapshot == null or not loadout_snapshot.has_method("has_effects") or not bool(loadout_snapshot.call("has_effects")):
+		MultiplayerV2Service.diagnostics.record_event("round_equipment_enabled", {"round_id": _round_id, "local_effects": 0})
+		return
+	_run_effects = RunEffectsScript.new()
+	_run_effects.call("configure", loadout_snapshot)
+	_effects_active = bool(_run_effects.call("has_any"))
+	MultiplayerV2Service.diagnostics.record_event("round_equipment_enabled", {"round_id": _round_id, "local_effects": _run_effects.call("get_hud_entries").size(), "modified": _effects_active})
+
+## True when the round runs with this runner's effect items; submitted results
+## of such a round must carry the `modified` flag.
+func is_run_modified() -> bool:
+	return _effects_active
+
+## An effect item stops a lethal contact. Decided here, by the owning client,
+## at the place where terminal contacts are decided; an absorbed contact is
+## never reported, so the host and the other clients see a runner that lives on.
+func _effects_absorb_contact(contact: Dictionary) -> bool:
+	if not _effects_active:
+		return false
+	var spike_contact := str(contact.get("reason", "")) in ["spikes", "step_spikes"]
+	var already_protected := bool(_run_effects.call("is_invulnerable"))
+	var absorbed := spike_contact and bool(_run_effects.call("is_spike_immune"))
+	if not absorbed:
+		absorbed = bool(_run_effects.call("on_lethal_contact"))
+	if absorbed and not already_protected:
+		MultiplayerV2Service.diagnostics.record_event("effect_absorbed_contact", {"round_id": _round_id, "tick": _runner.simulation_tick, "reason": str(contact.get("reason", "")), "entity_id": str(contact.get("entity_id", ""))})
+	return absorbed
+
+func _tick_run_effects() -> void:
+	if not _effects_active:
+		return
+	_run_effects.call("tick")
+	if is_instance_valid(_effect_row):
+		_effect_row.call("set_entries", _run_effects.call("get_hud_entries"))
 
 func _configure_profiling() -> void:
 	if OS.has_feature("web"):
@@ -237,6 +289,17 @@ func _build_overlay() -> void:
 	_shared_run_hud.name = "SharedRunHud"
 	_hud_root.add_child(_shared_run_hud)
 	_shared_run_hud.call("set_show_distance", false)
+	if _effects_active:
+		_effect_row = EffectHudRowScript.new()
+		_effect_row.name = "EffectHudRow"
+		_effect_row.anchor_top = 1.0
+		_effect_row.anchor_bottom = 1.0
+		_effect_row.offset_left = 14.0
+		_effect_row.offset_right = 14.0 + 3.0 * (EffectIcons.SLOT_SIZE + EffectIcons.SLOT_GAP)
+		_effect_row.offset_top = -EffectIcons.SLOT_SIZE - 14.0
+		_effect_row.offset_bottom = -14.0
+		_hud_root.add_child(_effect_row)
+		_effect_row.call("set_entries", _run_effects.call("get_hud_entries"))
 	_status_label = Label.new()
 	_status_label.add_theme_font_size_override("font_size", 17)
 	status_style(_status_label)
@@ -508,6 +571,12 @@ func _build_peer_slots() -> void:
 		_remote_locomotion[peer_id] = "running"
 	if is_instance_valid(local_runner_view):
 		_course_root.move_child(local_runner_view, _course_root.get_child_count() - 1)
+	if _effects_active:
+		# Above the runners, which draw after this node's own _draw().
+		_effect_overlay = Node2D.new()
+		_effect_overlay.name = "EffectOverlay"
+		_effect_overlay.draw.connect(_draw_effect_overlay)
+		_course_root.add_child(_effect_overlay)
 
 func _physics_process(delta: float) -> void:
 	if SfxController.diagnostic_capture_active():
@@ -631,6 +700,8 @@ func _process(delta: float) -> void:
 	if _local_start_deadline_usec >= 0 and Time.get_ticks_usec() - _local_start_deadline_usec > int(START_TRACE_SECONDS * 1_000_000.0):
 		MultiplayerV2Service.diagnostics.freeze_round_trace("start_window_complete")
 	queue_redraw()
+	if is_instance_valid(_effect_overlay):
+		_effect_overlay.queue_redraw()
 	if _profiling_enabled:
 		_capture_first_course_draw_profile()
 
@@ -655,6 +726,7 @@ func _step_local_round_impl() -> void:
 		MultiplayerV2Service.report_world_hash(_world_tick, _world.entity_ledger.revision, _world.state_hash())
 	if str(_runner.player_state.get("state", "")) == "pending_barrel":
 		_runner.advance_pending_tick()
+		_tick_run_effects()
 		return
 	if str(_runner.player_state.get("state", "")) != "running":
 		return
@@ -668,6 +740,8 @@ func _step_local_round_impl() -> void:
 	var candidate := state.duplicate(true)
 	candidate["world_x"] = candidate_x
 	var contact: Dictionary = _world.player_contact(candidate)
+	if _effects_active and str(contact.get("kind", "")) == "shared_interaction" and _effects_absorb_contact(contact):
+		contact = {}
 	if str(contact.get("kind", "")) == "shared_interaction":
 		_request_shared_barrel(contact)
 		_runner.advance_pending_tick()
@@ -693,6 +767,8 @@ func _step_local_round_impl() -> void:
 		var audit := {"round_id": _round_id, "owner_peer_id": int(MultiplayerV2Service.session.get("local_peer_id", 1)), "input_seq": _runner.input_sequence, "simulation_tick": _runner.simulation_tick, "kind": "gravity_flip", "requested_direction": flip, "accepted": flip_accepted, "gravity_direction": int(_runner.player_state.get("gravity_direction", gravity_before))}
 		MultiplayerV2Service.report_input_audit(audit)
 		if bool(audit.accepted):
+			if _effects_active:
+				_run_effects.call("on_flip")
 			_mp_achievement_flips += 1
 			AchievementService.update_run_metrics(0, _mp_achievement_flips, _mp_achievement_hazards.keys())
 			SfxController.play_event("gravity_flip", "%s|flip|%d" % [_round_id, _runner.input_sequence])
@@ -701,6 +777,11 @@ func _step_local_round_impl() -> void:
 	contact = _world.player_contact(_runner.player_state)
 	if not swept.is_empty():
 		contact = swept
+	if _effects_active and str(contact.get("kind", "")) in ["terminal", "shared_interaction"] and _effects_absorb_contact(contact):
+		# Absorbed: the runner keeps its proposed pose and nothing is reported.
+		contact = {}
+		swept = {}
+	elif not swept.is_empty():
 		_runner.player_state.world_x = float(swept.world_x)
 		_runner.player_state.y = float(swept.y)
 	if str(contact.get("kind", "")) == "shared_interaction":
@@ -728,6 +809,7 @@ func _step_local_round_impl() -> void:
 		_runner.stop("finished")
 		MultiplayerV2Service.submit_local_terminal("finished", "finish_line", _runner.simulation_tick, float(_runner.player_state.world_x), float(_runner.player_state.y), int(_runner.player_state.gravity_direction))
 		return
+	_tick_run_effects()
 	MultiplayerV2Service.send_sample(sample)
 	_submit_coin_claims(previous_state, proposed_state, 2.0)
 	MultiplayerV2Service.observe_local_world_progress(previous_state, proposed_state)
@@ -1689,6 +1771,29 @@ func _draw_players() -> void:
 		var font_height := font.get_height(font_size)
 		var baseline_y := screen_position.y - Motion.SIZE.y * 0.5 - 7.0 if int(pose.gravity) > 0 else screen_position.y + Motion.SIZE.y * 0.5 + font_height + 7.0
 		draw_string(font, Vector2(screen_position.x - text_width * 0.5, baseline_y), label_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color("edf3ff"))
+
+## Bubble helmet, local runner only: a faint bubble while ready, a pulsing ring
+## while invulnerable after a hit, and an expanding pop ring.
+func _draw_effect_overlay() -> void:
+	if _runner == null or str(_runner.player_state.get("state", "running")) in ["dead", "finished"]:
+		return
+	var pose: Dictionary = _local_presentation_pose if not _local_presentation_pose.is_empty() else _runner.render_state(_render_fraction)
+	_draw_bubble_shield(_effect_overlay, Vector2(float(pose.get("world_x", 0.0)), float(pose.get("y", 0.0))))
+
+func _draw_bubble_shield(canvas: CanvasItem, center: Vector2) -> void:
+	if bool(_run_effects.call("bubble_ready")):
+		canvas.draw_circle(center, 31.0, Color(0.26, 0.84, 0.77, 0.14))
+		canvas.draw_arc(center, 31.0, 0.0, TAU, 32, Color(0.26, 0.84, 0.77, 0.7), 2.0, true)
+		canvas.draw_arc(center, 24.0, PI * 1.1, PI * 1.5, 8, Color(0.93, 0.95, 1.0, 0.8), 2.0, true)
+	elif bool(_run_effects.call("is_invulnerable")):
+		var pulse := 0.5 + 0.5 * sin(float(_runner.simulation_tick) * 0.9)
+		canvas.draw_arc(center, 31.0, 0.0, TAU, 32, Color(0.93, 0.95, 1.0, 0.25 + 0.4 * pulse), 2.0, true)
+	var pop := float(_run_effects.call("pop_progress"))
+	if pop >= 0.0:
+		canvas.draw_arc(center, 31.0 + 40.0 * pop, 0.0, TAU, 40, Color(0.93, 0.95, 1.0, 1.0 - pop), 3.0, true)
+		for index in range(8):
+			var direction := Vector2.from_angle(TAU * float(index) / 8.0)
+			canvas.draw_circle(center + direction * (31.0 + 52.0 * pop), 3.0 * (1.0 - pop), Color(0.26, 0.84, 0.77, 1.0 - pop))
 
 func _player_render_pose(member: Dictionary) -> Dictionary:
 	var peer_id := int(member.get("player_slot", 1))

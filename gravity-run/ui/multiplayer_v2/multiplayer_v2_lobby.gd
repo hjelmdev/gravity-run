@@ -4,6 +4,7 @@ const ReadyIndicatorScript := preload("res://ui/ready_indicator.gd")
 const RunnerFrames := preload("res://assets/character/run_frames.tres")
 const SkinPalette := preload("res://player/skin_palette.gd")
 const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_export.gd")
+const RoomSettings := preload("res://systems/multiplayer_v2/v2_room_settings.gd")
 
 signal back_requested
 signal match_start_requested
@@ -27,6 +28,10 @@ var _room_view: VBoxContainer
 var _public_rooms: VBoxContainer
 var _room_summary: Label
 var _players: VBoxContainer
+var _equipment_box: VBoxContainer
+var _equipment_toggle: CheckButton
+var _equipment_state_label: Label
+var _equipment_request_pending := false
 var _ready_button: Button
 var _start_button: Button
 var _diagnostics_button: Button
@@ -198,6 +203,18 @@ func _build_ui() -> void:
 	_players = VBoxContainer.new()
 	_players.add_theme_constant_override("separation", 6)
 	members_panel.add_child(_players)
+	_equipment_box = VBoxContainer.new()
+	_equipment_box.add_theme_constant_override("separation", 2)
+	_room_view.add_child(_equipment_box)
+	_equipment_toggle = CheckButton.new()
+	_equipment_toggle.text = tr("Equipment items")
+	_equipment_toggle.tooltip_text = tr("Host setting. On: every player's equipped effect items apply in the race. Off: everyone races without items.")
+	_equipment_toggle.toggled.connect(_on_equipment_toggled)
+	_equipment_box.add_child(_equipment_toggle)
+	_equipment_state_label = Label.new()
+	_equipment_state_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_equipment_state_label.add_theme_font_size_override("font_size", 13)
+	_equipment_box.add_child(_equipment_state_label)
 	_ready_button = _button(tr("Ready"))
 	_ready_button.pressed.connect(_toggle_ready)
 	_room_view.add_child(_ready_button)
@@ -245,6 +262,30 @@ func _join_room() -> void:
 		return
 	MultiplayerV2Service.join_room(_room_code.text, _name_value())
 	_status.text = tr("Joining room…")
+
+func _on_equipment_toggled(enabled: bool) -> void:
+	_equipment_request_pending = MultiplayerV2Service.set_equipment_enabled(enabled)
+	_refresh_equipment_setting(_room)
+
+## Host: a switch. Everyone else: the same state as read-only text. Rooms from a
+## server without the field hide the setting (it reads as off).
+func _refresh_equipment_setting(room: Dictionary) -> void:
+	if not is_instance_valid(_equipment_box):
+		return
+	# Hidden until the server sends the field (migration 202610080004), so the
+	# lobby looks exactly as before on a server without the setting.
+	_equipment_box.visible = room.has(RoomSettings.KEY_EQUIPMENT_ENABLED)
+	var enabled := RoomSettings.equipment_enabled(room)
+	var is_host := MultiplayerV2Service.is_room_owner()
+	_equipment_toggle.visible = is_host
+	_equipment_toggle.set_pressed_no_signal(enabled)
+	_equipment_toggle.disabled = _equipment_request_pending or str(room.get("phase", "OPEN")) != "OPEN"
+	if enabled:
+		_equipment_state_label.text = tr("Equipment is ON: everyone's equipped items apply in the race.")
+		_equipment_state_label.add_theme_color_override("font_color", Color("42d6c5"))
+	else:
+		_equipment_state_label.text = tr("Equipment is OFF: everyone races without items.")
+		_equipment_state_label.add_theme_color_override("font_color", Color("b8c7dc"))
 
 func _toggle_ready() -> void:
 	var cycle := int(_room.get("lobby_cycle", 0))
@@ -368,6 +409,7 @@ func _on_room_changed(room: Dictionary) -> void:
 			kick_button.tooltip_text = tr("Remove this player from the open lobby")
 			kick_button.pressed.connect(MultiplayerV2Service.kick_member.bind(str(member.get("user_id", "")), int(member.get("player_slot", -1))))
 			row.add_child(kick_button)
+	_refresh_equipment_setting(room)
 	_ready_button.text = tr("Not ready") if local_ready else tr("Ready")
 	_ready_button.disabled = str(room.get("phase", "")) != "OPEN" or not local_manifest_ready or not MultiplayerV2Service.local_peer_mapping_valid() or not _local_member_returned(room)
 	_start_button.visible = MultiplayerV2Service.is_room_owner()
@@ -457,6 +499,9 @@ func _on_rooms_loaded(rooms: Array, message: String) -> void:
 func _on_request_finished(action: String, success: bool, message: String) -> void:
 	if action == "set_skin":
 		_skin_request_pending = false
+	if action == "set_equipment":
+		_equipment_request_pending = false
+		_refresh_equipment_setting(_room)
 	if not success:
 		_status.text = message
 	elif action == "connect":
