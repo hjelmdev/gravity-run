@@ -426,6 +426,12 @@ static func get_level(level_id: StringName) -> CampaignLevel:
 static func world_of(level: CampaignLevel) -> CampaignWorld:
 	return get_world(level.world_id) if level != null else null
 
+## The world after this one, or null after the last.
+static func next_world(world: CampaignWorld) -> CampaignWorld:
+	var all := worlds()
+	var index := all.find(world)
+	return all[index + 1] if index >= 0 and index + 1 < all.size() else null
+
 ## The stage after this one in the same world, or null after the boss.
 static func next_level(level: CampaignLevel) -> CampaignLevel:
 	var world := world_of(level)

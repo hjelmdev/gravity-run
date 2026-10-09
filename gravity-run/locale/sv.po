@@ -2317,3 +2317,9 @@ msgstr "Spökkungen härmar din sida"
 
 msgid "Run on the lantern's side, then flip away when the arrow flashes"
 msgstr "Spring på lyktans sida och flippa bort när pilen blinkar"
+
+msgid "%s IS BEATEN!"
+msgstr "%s ÄR BESEGRAD!"
+
+msgid "On to %s"
+msgstr "Vidare till %s"

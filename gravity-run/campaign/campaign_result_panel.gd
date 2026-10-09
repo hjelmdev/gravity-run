@@ -5,6 +5,8 @@ extends CanvasLayer
 signal retry_requested
 signal next_requested
 signal map_requested
+## After a beaten boss: open the map on the next world.
+signal next_world_requested
 
 const StarIconScript := preload("res://campaign/star_icon.gd")
 
@@ -92,6 +94,8 @@ func _button(text: String, parent: Container) -> Button:
 func _on_primary() -> void:
 	if _primary_action == "next":
 		next_requested.emit()
+	elif _primary_action == "next_world":
+		next_world_requested.emit()
 	elif _primary_action == "map":
 		map_requested.emit()
 	else:
@@ -121,7 +125,7 @@ func show_result(level: CampaignLevel, result: Dictionary) -> void:
 		_primary_action = "retry"
 		_replay.visible = false
 	else:
-		_title.text = tr("RULLAREN IS BEATEN!") if level.is_boss() else tr("STAGE CLEAR!")
+		_title.text = (tr("%s IS BEATEN!") % tr(level.title).to_upper()) if level.is_boss() else tr("STAGE CLEAR!")
 		_title.add_theme_color_override("font_color", Color("f5d45e"))
 		_subtitle.text = "%s  %s" % [str(level.level_id), tr(level.title)]
 		_stars_row.visible = star_total > 0
@@ -157,6 +161,11 @@ func show_result(level: CampaignLevel, result: Dictionary) -> void:
 		var has_next := next != null and Campaign.is_level_unlocked(next)
 		_primary.text = tr("Next stage") if has_next else tr("Map")
 		_primary_action = "next" if has_next else "map"
+		var following := CampaignCatalog.next_world(CampaignCatalog.world_of(level)) if level.is_boss() else null
+		if following != null and Campaign.is_world_unlocked(following):
+			_primary.text = tr("On to %s") % tr(following.title)
+			_primary_action = "next_world"
+			has_next = true
 		_replay.visible = true
 		_map.visible = has_next
 	if failed:

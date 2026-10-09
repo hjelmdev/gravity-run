@@ -631,6 +631,9 @@ func _check_boss(skip_first_plate: bool, level_id: StringName = &"1-B") -> void:
 	_check(boss != null and boss.is_defeated(), "%s is beaten by following its schedule%s (%d ticks, hp %d)" % [boss_level.title, label, ticks, boss.hp if boss != null else -1])
 	var panel: Node = game.get("_campaign_result_panel")
 	_check(bool(game.get("game_over")) and is_instance_valid(panel) and bool(panel.get("visible")) and Campaign.is_completed(boss_level), "the %s boss stage ends at its flag and is recorded%s" % [boss_level.level_id, label])
+	var following := CampaignCatalog.next_world(CampaignCatalog.world_of(boss_level))
+	if following != null and is_instance_valid(panel):
+		_check(str(panel.get("_primary_action")) == "next_world", "beating %s offers the way on to %s (%s)" % [boss_level.level_id, following.world_id, str(panel.get("_primary_action"))])
 	var spawned_boss_attacks := 0
 	for obstacle in game.get("obstacles"):
 		if is_instance_valid(obstacle):

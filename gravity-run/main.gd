@@ -1031,6 +1031,7 @@ func _show_campaign_result(result: Dictionary) -> void:
 		_campaign_result_panel.connect("retry_requested", retry_run)
 		_campaign_result_panel.connect("next_requested", _play_next_campaign_level)
 		_campaign_result_panel.connect("map_requested", return_to_main_menu)
+		_campaign_result_panel.connect("next_world_requested", _open_next_campaign_world)
 	_campaign_result_panel.call("show_result", _campaign_level, result)
 
 func _play_next_campaign_level() -> void:
@@ -1040,6 +1041,13 @@ func _play_next_campaign_level() -> void:
 		return
 	Campaign.start_level(next)
 	_start_run()
+
+## After a beaten boss: back to the map, opened on the next world.
+func _open_next_campaign_world() -> void:
+	var following := CampaignCatalog.next_world(CampaignCatalog.world_of(_campaign_level)) if _campaign_level != null else null
+	if following != null and not following.levels.is_empty():
+		Campaign.remember_selection(following.levels[0])
+	return_to_main_menu()
 
 func retry_run() -> void:
 	if _campaign_level != null:
