@@ -71,8 +71,9 @@ static func _draw_segment_cached(canvas: CanvasItem, ceiling: bool, start_x: flo
 		fill.append(Vector2(end_x - canvas_origin_x, view_size.y))
 		fill.append(Vector2(start_x - canvas_origin_x, view_size.y))
 	var palette: BiomeDefinition = biome if biome != null else BiomeRendererScript.definition_for_generator(maxf((start_x + end_x) * 0.5 - biome_distance_offset, 0.0), generator_version)
-	canvas.draw_colored_polygon(fill, palette.terrain_fill_color if palette != null else FILL_COLOR)
-	canvas.draw_polyline(points, palette.terrain_edge_color if palette != null else EDGE_COLOR, 3.0, true)
+	_fill_terrain(canvas, fill, palette)
+	if palette == null or palette.draw_edge_line:
+		canvas.draw_polyline(points, palette.terrain_edge_color if palette != null else EDGE_COLOR, 3.0, true)
 	BiomeRendererScript.draw_surface_tiles(canvas, biome, ceiling, start_x, end_x, canvas_origin_x, surface_y_at, biome.surface_tint if biome != null else Color.WHITE, biome_distance_offset, generator_version)
 
 static func _append_sorted_values_in_range(destination: Array[float], values: Array[float], start_x: float, end_x: float) -> void:
@@ -167,8 +168,9 @@ static func _draw_segment(canvas: CanvasItem, ceiling: bool, start_x: float, end
 		fill.append(Vector2(end_x - canvas_origin_x, view_size.y))
 		fill.append(Vector2(start_x - canvas_origin_x, view_size.y))
 	var palette: BiomeDefinition = biome if biome != null else BiomeRendererScript.definition_for_generator(maxf((start_x + end_x) * 0.5 - biome_distance_offset, 0.0), generator_version)
-	canvas.draw_colored_polygon(fill, palette.terrain_fill_color if palette != null else FILL_COLOR)
-	canvas.draw_polyline(points, palette.terrain_edge_color if palette != null else EDGE_COLOR, 3.0, true)
+	_fill_terrain(canvas, fill, palette)
+	if palette == null or palette.draw_edge_line:
+		canvas.draw_polyline(points, palette.terrain_edge_color if palette != null else EDGE_COLOR, 3.0, true)
 	BiomeRendererScript.draw_surface_tiles(canvas, biome, ceiling, start_x, end_x, canvas_origin_x, surface_y_at, biome.surface_tint if biome != null else Color.WHITE, biome_distance_offset, generator_version)
 
 static func _draw_biome_segments_cached(canvas: CanvasItem, ceiling: bool, start_x: float, end_x: float, canvas_origin_x: float, view_size: Vector2, terrain_boundaries: Array[float], step_positions: Array[float], surface_y_at: Callable, distance_offset: float, generator_version: int) -> void:
@@ -190,3 +192,20 @@ static func _draw_biome_segments(canvas: CanvasItem, ceiling: bool, start_x: flo
 		var biome := BiomeRendererScript.definition_for_generator(maxf((cursor + piece_end) * 0.5 - distance_offset, 0.0), generator_version)
 		_draw_segment(canvas, ceiling, cursor, piece_end, canvas_origin_x, view_size, terrain_boundaries, step_positions, surface_y_at, biome, distance_offset, generator_version)
 		cursor = piece_end
+
+## The ground under the surface: the biome's repeated fill texture (anchored to
+## the world, so it scrolls with the course) or its flat fill colour.
+static func _fill_terrain(canvas: CanvasItem, fill: PackedVector2Array, palette: BiomeDefinition) -> void:
+	if palette == null or palette.terrain_fill_texture == null:
+		canvas.draw_colored_polygon(fill, palette.terrain_fill_color if palette != null else FILL_COLOR)
+		return
+	var texture := BiomeRendererScript.pixel_texture(palette.terrain_fill_texture, true)
+	var texel := Vector2(palette.terrain_fill_texture.get_size()) * palette.fill_texture_scale
+	var uvs := PackedVector2Array()
+	uvs.resize(fill.size())
+	for index in range(fill.size()):
+		uvs[index] = fill[index] / texel
+	var colors := PackedColorArray()
+	colors.resize(fill.size())
+	colors.fill(Color.WHITE)
+	canvas.draw_polygon(fill, colors, uvs, texture)

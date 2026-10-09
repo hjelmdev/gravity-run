@@ -290,15 +290,17 @@ static func draw_surface_tiles(canvas: CanvasItem, biome: BiomeDefinition, ceili
 		var u0 := clampf((tile_left - x) / float(world_tile_size.x), 0.0, 1.0)
 		var u1 := clampf((tile_right - x) / float(world_tile_size.x), 0.0, 1.0)
 		var source_rect := Rect2(Vector2(atlas * texture_tile_size), Vector2(texture_tile_size))
+		var tile_texture: Texture2D = pixel_texture(source.texture, false) if selected_biome.pixel_art else source.texture
+		var rise := selected_biome.tile_rise
 		var step_threshold := _find_step_threshold(surface_y_at, ceiling, x, cell_right, float(surface_y_at.call(x, ceiling)), float(surface_y_at.call((x + cell_right) * 0.5, ceiling)), float(surface_y_at.call(cell_right, ceiling)))
 		if step_threshold > tile_left and step_threshold < tile_right:
 			var step_fraction := (step_threshold - x) / float(world_tile_size.x)
 			var left_surface := Callable(func(position_x: float, _ceiling: bool) -> float: return float(surface_y_at.call(minf(position_x, step_threshold - 0.01), ceiling)))
 			var right_surface := Callable(func(position_x: float, _ceiling: bool) -> float: return float(surface_y_at.call(maxf(position_x, step_threshold + 0.01), ceiling)))
-			_draw_surface_tile_quad(canvas, source.texture, source_rect, tile_left, step_threshold, x, world_tile_size.y, canvas_origin_x, left_surface, ceiling, tile_tint, selected_biome.surface_overlay_color, selected_biome.flip_ceiling_tiles, u0, step_fraction)
-			_draw_surface_tile_quad(canvas, source.texture, source_rect, step_threshold, tile_right, x, world_tile_size.y, canvas_origin_x, right_surface, ceiling, tile_tint, selected_biome.surface_overlay_color, selected_biome.flip_ceiling_tiles, step_fraction, u1)
+			_draw_surface_tile_quad(canvas, tile_texture, source_rect, tile_left, step_threshold, x, world_tile_size.y, canvas_origin_x, left_surface, ceiling, tile_tint, selected_biome.surface_overlay_color, selected_biome.flip_ceiling_tiles, u0, step_fraction, rise)
+			_draw_surface_tile_quad(canvas, tile_texture, source_rect, step_threshold, tile_right, x, world_tile_size.y, canvas_origin_x, right_surface, ceiling, tile_tint, selected_biome.surface_overlay_color, selected_biome.flip_ceiling_tiles, step_fraction, u1, rise)
 		else:
-			_draw_surface_tile_quad(canvas, source.texture, source_rect, tile_left, tile_right, x, world_tile_size.y, canvas_origin_x, surface_y_at, ceiling, tile_tint, selected_biome.surface_overlay_color, selected_biome.flip_ceiling_tiles, u0, u1)
+			_draw_surface_tile_quad(canvas, tile_texture, source_rect, tile_left, tile_right, x, world_tile_size.y, canvas_origin_x, surface_y_at, ceiling, tile_tint, selected_biome.surface_overlay_color, selected_biome.flip_ceiling_tiles, u0, u1, rise)
 		drew_any = true
 	return drew_any
 
@@ -337,11 +339,14 @@ static func _find_step_threshold(surface_y_at: Callable, ceiling: bool, left: fl
 			high = middle
 	return (low + high) * 0.5
 
-static func _draw_surface_tile_quad(canvas: CanvasItem, texture: Texture2D, source_rect: Rect2, left: float, right: float, tile_origin_x: float, tile_height: int, canvas_origin_x: float, surface_y_at: Callable, ceiling: bool, tint: Color, overlay: Color, flip_ceiling: bool, u0: float, u1: float) -> void:
+static func _draw_surface_tile_quad(canvas: CanvasItem, texture: Texture2D, source_rect: Rect2, left: float, right: float, tile_origin_x: float, tile_height: int, canvas_origin_x: float, surface_y_at: Callable, ceiling: bool, tint: Color, overlay: Color, flip_ceiling: bool, u0: float, u1: float, rise: int = 0) -> void:
 	if right <= left:
 		return
-	var y0 := float(surface_y_at.call(left, ceiling))
-	var y1 := float(surface_y_at.call(right, ceiling))
+	# The tile reaches `rise` px past the surface (grass tips above the floor,
+	# below the ceiling).
+	var lift := float(rise) if ceiling else -float(rise)
+	var y0 := float(surface_y_at.call(left, ceiling)) + lift
+	var y1 := float(surface_y_at.call(right, ceiling)) + lift
 	var top0 := y0 - float(tile_height) if ceiling else y0
 	var top1 := y1 - float(tile_height) if ceiling else y1
 	var bottom0 := y0 if ceiling else y0 + float(tile_height)
@@ -906,3 +911,19 @@ static func _landmark_for_cell(cell: int, period: float, salt: int) -> Vector2:
 	var jitter := float(raw) / 2147483647.0
 	var vertical := float(next_raw) / 2147483647.0
 	return Vector2((float(cell) + 0.18 + jitter * 0.64) * period, vertical)
+
+static var _pixel_textures: Dictionary = {}
+
+## The texture wrapped for pixel art: nearest filtering (no blur when scaled up)
+## and, for fills, repeat. Cached per texture.
+static func pixel_texture(texture: Texture2D, repeat: bool) -> Texture2D:
+	if texture == null:
+		return null
+	var key := "%d|%s" % [texture.get_instance_id(), str(repeat)]
+	if not _pixel_textures.has(key):
+		var wrapped := CanvasTexture.new()
+		wrapped.diffuse_texture = texture
+		wrapped.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		wrapped.texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED if repeat else CanvasItem.TEXTURE_REPEAT_DISABLED
+		_pixel_textures[key] = wrapped
+	return _pixel_textures[key]

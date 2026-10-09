@@ -10,6 +10,16 @@ extends Resource
 @export var tile_set: TileSet
 @export var atlas_source_id: int = 0
 @export var tile_world_size: Vector2i = Vector2i(64, 64)
+## World px the surface tiles reach above the surface line (grass blade tips).
+@export var tile_rise: int = 0
+## Pixel art: tiles and the fill texture are drawn with nearest filtering.
+@export var pixel_art := false
+## Optional texture repeated under the surface (world-anchored) instead of the
+## flat terrain_fill_color, scaled by fill_texture_scale world px per texel.
+@export var terrain_fill_texture: Texture2D
+@export var fill_texture_scale: float = 2.0
+## The thin coloured line along the surface; off when the tiles draw their own.
+@export var draw_edge_line := true
 @export var flip_ceiling_tiles := true
 @export var palette_row: int = 0
 @export var floor_surface_tiles: Array[Vector2i] = []
