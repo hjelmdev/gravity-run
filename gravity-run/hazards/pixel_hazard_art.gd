@@ -53,8 +53,8 @@ static func icicle_texture(palette: PixelPalette, size: Vector2) -> Texture2D:
 
 ## A mine cart (without wheels) in a square of side 2*radius + padding; "teal"
 ## is the rubber variant.
-static func cart_texture(palette: PixelPalette, radius: float, teal: bool) -> Texture2D:
-	return _cached(palette, "cart|%d|%s" % [int(radius), str(teal)], func() -> Image: return make_cart(_art(radius), teal))
+static func cart_texture(palette: PixelPalette, radius: float, teal: bool, spiked := false) -> Texture2D:
+	return _cached(palette, "cart|%d|%s|%s" % [int(radius), str(teal), str(spiked)], func() -> Image: return make_cart(_art(radius), teal, spiked))
 
 ## A cart wheel of `radius` world pixels, square texture.
 static func wheel_texture(palette: PixelPalette, radius: float) -> Texture2D:
@@ -385,8 +385,9 @@ static func make_saw(r: int) -> Image:
 ## A mine cart filling the barrel's circle (radius r, square side 2r + 2): a
 ## tapered body of planks with an iron rim, an ore pile heaped above it, lit
 ## top-left, outlined. The wheels are separate pictures so they can turn.
-static func make_cart(r: int, teal: bool) -> Image:
-	var side := r * 2 + 2
+static func make_cart(r: int, teal: bool, spiked := false) -> Image:
+	# A spiked cart gets room for steel spikes sticking out of its front and back.
+	var side := r * 2 + 2 + (14 if spiked else 0)
 	var image := _blank(side, side)
 	var c := float(side) * 0.5
 	var rf := float(r)
@@ -422,6 +423,16 @@ static func make_cart(r: int, teal: bool) -> Image:
 			elif dx < -half * 0.5:
 				color = body_light
 			image.set_pixel(x, y, color)
+	if spiked:
+		# Two big spikes out of each end wall, pointing forwards and backwards.
+		for row in [top + 3, bottom - 2]:
+			var half_here := rf * lerpf(0.92, 0.68, float(row - top) / float(maxi(bottom - top, 1)))
+			for dir in [-1, 1]:
+				var base_x := int(c + float(dir) * half_here)
+				for k in range(7):
+					var spread := 3 - k / 2
+					for dy in range(-spread, spread + 1):
+						_put(image, base_x + dir * (k + 1), row + dy, pal.steel_light if dy < 0 else pal.steel)
 	_outline(image)
 	return image
 

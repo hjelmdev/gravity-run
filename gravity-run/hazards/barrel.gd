@@ -189,7 +189,7 @@ func _draw() -> void:
 		if not is_rubber:
 			draw_line(first_start, first_end, detail_color, 4.0)
 			draw_line(second_start, second_end, detail_color, 4.0)
-	if is_spiked:
+	if is_spiked and not (skin == "mine_cart" and BiomeRenderer.locked_pixel_palette() != null):
 		for index in range(8):
 			var angle := TAU * float(index) / 8.0 + rendered_roll
 			var outward := Vector2.RIGHT.rotated(angle)
@@ -240,7 +240,8 @@ func _draw_mine_cart(radius: float, center_y: float, wheel_angle: float, teal: b
 ## and two wheels that turn with the roll, at the vector cart's places.
 func _draw_pixel_cart(radius: float, center_y: float, wheel_angle: float, teal: bool) -> void:
 	var palette := PixelHazardArt.palette()
-	var cart := PixelHazardArt.cart_texture(palette, radius, teal)
+	# A spiked cart carries its spikes on its walls (they do not orbit it).
+	var cart := PixelHazardArt.cart_texture(palette, radius, teal, is_spiked)
 	var side := Vector2(cart.get_size()) * PixelHazardArt.ART_SCALE
 	draw_texture_rect(cart, Rect2(Vector2(0.0, center_y) - side * 0.5, side), false)
 	var wheel_radius := radius * 0.24
