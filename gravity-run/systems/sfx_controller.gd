@@ -38,6 +38,13 @@ const STREAMS: Dictionary = {
 	"ember_impact": preload("res://assets/audio/sfx/ember_impact.wav"),
 	"magma_roar": preload("res://assets/audio/sfx/magma_roar.wav"),
 	"ember_star": preload("res://assets/audio/sfx/ember_star.wav"),
+	# Cloud Realm and Desert (tools/audio/generate_sky_desert_audio.gd).
+	# cloud_star and desert_star replace gravity_star on those stages.
+	"thunder_crack": preload("res://assets/audio/sfx/thunder_crack.wav"),
+	"cloud_star": preload("res://assets/audio/sfx/cloud_star.wav"),
+	"desert_star": preload("res://assets/audio/sfx/desert_star.wav"),
+	"sand_burst": preload("res://assets/audio/sfx/sand_burst.wav"),
+	"thunderbird_screech": preload("res://assets/audio/sfx/thunderbird_screech.wav"),
 	# Campaign (tools/audio/generate_campaign_audio.py).
 	"campaign_goal": preload("res://assets/audio/sfx/campaign_goal.wav"),
 	"rullaren_throw": preload("res://assets/audio/sfx/rullaren_throw.wav"),

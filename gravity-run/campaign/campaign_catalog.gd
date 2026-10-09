@@ -16,6 +16,7 @@ const CAVE_MAP_NODES := [Vector2(34, 70), Vector2(74, 98), Vector2(116, 74), Vec
 const HAUNTED_MAP_NODES := [Vector2(36, 120), Vector2(78, 92), Vector2(118, 124), Vector2(160, 96), Vector2(202, 130), Vector2(242, 100), Vector2(286, 74)]
 const LAVA_MAP_NODES := [Vector2(36, 96), Vector2(76, 128), Vector2(118, 100), Vector2(158, 132), Vector2(200, 104), Vector2(240, 134), Vector2(286, 104)]
 const FROST_MAP_NODES := [Vector2(34, 126), Vector2(76, 100), Vector2(118, 128), Vector2(160, 96), Vector2(202, 124), Vector2(244, 94), Vector2(286, 70)]
+const CLOUD_MAP_NODES := [Vector2(36, 90), Vector2(78, 118), Vector2(120, 88), Vector2(162, 116), Vector2(204, 86), Vector2(246, 112), Vector2(286, 80)]
 
 ## Ängen. Each stage adds one hazard family; 1-6 is the exam with everything.
 ## Lengths grow from 30 s to 45 s at the base 500 px/s.
@@ -286,9 +287,64 @@ const FROST_STAGES := [
 	},
 ]
 
+## Molnriket. Generated with the classic mix, drawn as cloud tops at sunset by
+## the clouds palette. Lightning and wind gusts are scripted features.
+const CLOUD_STAGES := [
+	{
+		"id": &"6-1", "title": "Cloud Walk", "intro": "Soft clouds, but the holes are real",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade"], "new": [],
+		"weights": {"floor_gap": 1.6, "ceiling_gap": 1.6},
+		"density": 1.55, "margin": 1.0, "length": 18000.0,
+		"seed": 6107,
+		"stars": [Vector2(4527.93, 426.00), Vector2(10322.80, 222.00), Vector2(16084.47, 426.00)],
+	},
+	{
+		"id": &"6-2", "title": "Thunderhead", "intro": "The storm clouds wake up",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade"], "new": [],
+		"density": 1.6, "margin": 0.97, "length": 19500.0,
+		"seed": 6214,
+		"stars": [Vector2(4790.70, 296.00), Vector2(10373.31, 114.00), Vector2(15966.27, 214.00)],
+		"features": [{"kind": "lightning", "at": 8300.0, "side": "floor"}, {"kind": "lightning", "at": 11690.0, "side": "ceiling"}, {"kind": "lightning", "at": 16280.0, "side": "floor"}],
+		"new_features": ["lightning"],
+	},
+	{
+		"id": &"6-3", "title": "Sky Islands", "intro": "Hop between floating islands",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade"], "new": [],
+		"weights": {"terrain_step": 1.7, "terrain_slope": 1.7},
+		"density": 1.68, "margin": 0.94, "length": 21000.0,
+		"seed": 6303,
+		"stars": [Vector2(5121.64, 114.00), Vector2(11328.17, 74.00), Vector2(16648.58, 146.00)],
+	},
+	{
+		"id": &"6-4", "title": "Wind Song", "intro": "Gusts whistle past the clouds",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade"], "new": [],
+		"weights": {"barrel_chain": 1.6, "saw_blade": 1.5},
+		"density": 1.75, "margin": 0.9, "length": 22500.0,
+		"seed": 6405,
+		"stars": [Vector2(5975.54, 114.00), Vector2(10705.61, 146.00), Vector2(19113.76, 296.00)],
+		"features": [{"kind": "gust", "at": 5400.0, "length": 3400.0}, {"kind": "gust", "at": 13950.0, "length": 3800.0}],
+	},
+	{
+		"id": &"6-5", "title": "Storm Front", "intro": "Lightning all along the front",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade"], "new": [],
+		"density": 1.85, "margin": 0.86, "length": 24000.0,
+		"seed": 6515,
+		"stars": [Vector2(6559.01, 214.00), Vector2(11926.19, 254.00), Vector2(21547.00, 466.00)],
+		"features": [{"kind": "lightning", "at": 3310.0, "side": "ceiling"}, {"kind": "lightning", "at": 9120.0, "side": "floor"}, {"kind": "gust", "at": 12480.0, "length": 2600.0}, {"kind": "lightning", "at": 20900.0, "side": "ceiling"}, {"kind": "lightning", "at": 22320.0, "side": "floor"}],
+	},
+	{
+		"id": &"6-6", "title": "Sky Exam", "intro": "Everything the sky has taught you",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade"], "new": [],
+		"density": 1.95, "margin": 0.82, "length": 25000.0,
+		"seed": 6613,
+		"stars": [Vector2(6195.02, 362.00), Vector2(13896.09, 74.00), Vector2(22414.40, 74.00)],
+		"features": [{"kind": "lightning", "at": 5030.0, "side": "floor"}, {"kind": "gust", "at": 11500.0, "length": 3000.0}, {"kind": "lightning", "at": 19190.0, "side": "ceiling"}, {"kind": "lightning", "at": 21850.0, "side": "floor"}],
+	},
+]
+
 ## Stage tables per world: [world_id, generation biome, stages].
 static func stage_tables() -> Array:
-	return [[&"meadow", &"classic", MEADOW_STAGES], [&"cave", &"cave", CAVE_STAGES], [&"haunted", &"haunted", HAUNTED_STAGES], [&"volcano", &"lava", LAVA_STAGES], [&"frost", &"cave", FROST_STAGES]]
+	return [[&"meadow", &"classic", MEADOW_STAGES], [&"cave", &"cave", CAVE_STAGES], [&"haunted", &"haunted", HAUNTED_STAGES], [&"volcano", &"lava", LAVA_STAGES], [&"frost", &"cave", FROST_STAGES], [&"clouds", &"classic", CLOUD_STAGES]]
 
 static var _worlds: Array[CampaignWorld] = []
 
@@ -362,6 +418,14 @@ static func _build_worlds() -> Array[CampaignWorld]:
 	for level in frost.levels:
 		level.presentation_biome = &"frost_campaign"
 	result.append(frost)
+	var clouds := _make_world(&"clouds", 6, "Cloud Realm", &"classic", "map_clouds", CLOUD_MAP_NODES, Color("ffb48a"))
+	_add_stages(clouds, CLOUD_STAGES)
+	if not clouds.levels.is_empty():
+		clouds.levels.append(_make_boss(&"clouds", &"classic", clouds.levels.size() + 1, &"6-B", "Thunderbird", "Boss: the bird that rides the storm", &"thunderbird"))
+	# Presentation only; encounters use the classic mix.
+	for level in clouds.levels:
+		level.presentation_biome = &"clouds_campaign"
+	result.append(clouds)
 	return result
 
 ## Adds a world's stages. A stage only joins once the level tool has frozen

@@ -6,7 +6,8 @@ class_name AshRain
 ## within ASH_CLEAR px ahead of the runner so the lane right in front stays
 ## clean. Collision, timing and generation are untouched.
 ## "style" picks the weather: "ash" (volcano), "snow" (frost mountain's
-## snowstorm, driving sideways) or "sand" (desert sandstorm, fast streaks).
+## snowstorm, driving sideways), "wind" (cloud realm gusts, long white
+## streaks) or "sand" (desert sandstorm, fast streaks).
 
 const FLAKES := 140
 const RAMP := 420.0
@@ -78,6 +79,9 @@ func _draw() -> void:
 		elif style == "sand":
 			fall_speed = 0.05
 			wind = 420.0
+		elif style == "wind":
+			fall_speed = 0.01
+			wind = 560.0
 		var fall := fmod(flake.y + _time * fall_speed * flake.z, 1.0)
 		var sway := sin(_time * 1.3 + float(index)) * 10.0
 		var x := _view.position.x + fposmod(flake.x * _view.size.x - _time * wind * flake.z, _view.size.x)
@@ -95,6 +99,10 @@ func _draw() -> void:
 			# A blue-grey shadow pixel keeps the flake visible on the pale sky.
 			draw_rect(Rect2(at + Vector2(2.0, 2.0), Vector2(side, side)), Color(0.45, 0.56, 0.74, minf(alpha * 1.4, 0.8)))
 			draw_rect(Rect2(at, Vector2(side, side)), Color(0.98, 1.0, 1.0, minf(alpha * 1.8, 1.0)))
+		elif style == "wind":
+			if index % 3 == 0:
+				var streak := 18.0 + float(index % 5) * 8.0
+				draw_rect(Rect2(roundf(x / 2.0) * 2.0, roundf(y / 2.0) * 2.0, streak, 2.0), Color(1.0, 0.97, 1.0, minf(alpha * 1.2, 0.7)))
 		elif style == "sand":
 			draw_rect(Rect2(roundf(x / 2.0) * 2.0, roundf(y / 2.0) * 2.0, 10.0 if index % 4 == 0 else 6.0, 2.0), Color(0.93, 0.78, 0.5, alpha))
 		elif index % 11 == 0:

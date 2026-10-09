@@ -58,6 +58,7 @@ const CAMPAIGN_FEATURES_SCRIPT := preload("res://campaign/campaign_features.gd")
 const BAT_SWARM_SCRIPT := preload("res://hazards/bat_swarm.gd")
 const GHOST_HAND_SCRIPT := preload("res://hazards/ghost_hand.gd")
 const EMBER_BOMB_SCRIPT := preload("res://hazards/ember_bomb.gd")
+const LIGHTNING_SCRIPT := preload("res://hazards/lightning_strike.gd")
 const CampaignResultPanelScript := preload("res://campaign/campaign_result_panel.gd")
 const CampaignBannerScript := preload("res://campaign/campaign_banner.gd")
 ## Ticks the runner keeps running past the finish line before the result.
@@ -1323,6 +1324,8 @@ func _spawn_course_event(event: Dictionary) -> void:
 			_spawn_ghost_hand(event, event_x)
 		&"ember_bomb":
 			_spawn_ghost_hand(event, event_x, EMBER_BOMB_SCRIPT, "EmberBomb")
+		&"lightning":
+			_spawn_ghost_hand(event, event_x, LIGHTNING_SCRIPT, "Lightning")
 		&"saw":
 			var saw_event := _resolve_singleplayer_saw_event(event)
 			if saw_event.is_empty():
@@ -1403,7 +1406,11 @@ func _spawn_ghost_hand(event: Dictionary, event_x: float, script: GDScript = GHO
 	obstacles.append(hand)
 
 func _on_ghost_hand_emerged(hand: Node2D) -> void:
-	var sound := "ember_impact" if hand.is_in_group("ember_bombs") else "hand_scrape"
+	var sound := "hand_scrape"
+	if hand.is_in_group("ember_bombs"):
+		sound = "ember_impact"
+	elif hand.is_in_group("lightning_strikes"):
+		sound = "thunder_crack"
 	_play_cave_sfx(sound, "%s|ghost_hand|%s" % [_singleplayer_audio_round_id, str(hand.name)], _is_singleplayer_event_audible(hand.global_position.x))
 
 func _on_campaign_bonus_coins(amount: int) -> void:

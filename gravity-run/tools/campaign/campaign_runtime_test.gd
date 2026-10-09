@@ -56,6 +56,10 @@ func _run() -> void:
 	await _check_feature_stage("ember_bomb", "ceiling", true)
 	await _check_feature_stage("avalanche", "floor", false)
 	await _check_feature_stage("avalanche", "floor", true)
+	await _check_feature_stage("lightning", "floor", false)
+	await _check_feature_stage("lightning", "floor", true)
+	await _check_feature_stage("lightning", "ceiling", false)
+	await _check_feature_stage("lightning", "ceiling", true)
 	_check_ash()
 	await _check_biome_keys()
 	await _check_personal_best_ghost()
@@ -73,6 +77,8 @@ func _run() -> void:
 	await _check_boss(true, &"4-B")
 	await _check_boss(false, &"5-B")
 	await _check_boss(true, &"5-B")
+	await _check_boss(false, &"6-B")
+	await _check_boss(true, &"6-B")
 	await _check_stalactite("hit")
 	await _check_stalactite("early")
 	await _check_stalactite("stay")
@@ -181,10 +187,14 @@ const FROZEN_FEATURES := {
 	"5-4": [["snowstorm", 5850.0], ["snowstorm", 14400.0]],
 	"5-5": [["avalanche", 13050.0], ["avalanche", 20320.0]],
 	"5-6": [["avalanche", 9530.0], ["snowstorm", 12500.0], ["avalanche", 16890.0]],
+	"6-2": [["lightning", 8300.0], ["lightning", 11690.0], ["lightning", 16280.0]],
+	"6-4": [["gust", 5400.0], ["gust", 13950.0]],
+	"6-5": [["lightning", 3310.0], ["lightning", 9120.0], ["gust", 12480.0], ["lightning", 20900.0], ["lightning", 22320.0]],
+	"6-6": [["lightning", 5030.0], ["gust", 11500.0], ["lightning", 19190.0], ["lightning", 21850.0]],
 }
 
 func _check_features_frozen() -> void:
-	for spec in CampaignCatalog.CAVE_STAGES + CampaignCatalog.HAUNTED_STAGES + CampaignCatalog.LAVA_STAGES + CampaignCatalog.FROST_STAGES:
+	for spec in CampaignCatalog.CAVE_STAGES + CampaignCatalog.HAUNTED_STAGES + CampaignCatalog.LAVA_STAGES + CampaignCatalog.FROST_STAGES + CampaignCatalog.CLOUD_STAGES:
 		var level := CampaignCatalog.get_level(spec.id)
 		var frozen: Array = FROZEN_FEATURES.get(str(spec.id), [])
 		var actual: Array = []
@@ -445,7 +455,7 @@ func _check_mine_carts() -> void:
 ## side reaches the flag. `follow` picks which runner this is.
 func _check_feature_stage(kind: String, side: String, follow: bool) -> void:
 	var feature := {"kind": kind, "at": 3600.0}
-	var has_side := kind in ["bat_swarm", "ghost_hand", "ember_bomb"]
+	var has_side := kind in ["bat_swarm", "ghost_hand", "ember_bomb", "lightning"]
 	if has_side:
 		feature["side"] = side
 	var level := CampaignLevel.new()
@@ -774,6 +784,11 @@ func _check_unlocks() -> void:
 	Campaign.start_level(CampaignCatalog.get_world(&"frost").get_boss())
 	Campaign.record_completion(0, 0)
 	_check(CharacterCatalog.is_unlocked(bambu), "beating the Snow Giant unlocks Bambu")
+	var hopp := CharacterCatalog.get_definition(&"frog")
+	_check(not CharacterCatalog.is_unlocked(hopp), "Hopp is locked before the Thunderbird")
+	Campaign.start_level(CampaignCatalog.get_world(&"clouds").get_boss())
+	Campaign.record_completion(0, 0)
+	_check(CharacterCatalog.is_unlocked(hopp), "beating the Thunderbird unlocks Hopp")
 	Campaign.clear_active()
 	Campaign.reset_progress()
 

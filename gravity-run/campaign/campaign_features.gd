@@ -27,6 +27,9 @@ class_name CampaignFeatures
 ##   avalanche  a cave-in on the frost mountain: the same rocks (drawn snowy by
 ##              the frost palette) under a crack of snow in the ceiling.
 ##   snowstorm  presentation only: snow driving across the screen (AshRain).
+##   lightning  a storm cloud and sparks warn a lane, then lightning strikes it
+##              ("side": floor|ceiling). Same timing and hitbox as the ghost hand.
+##   gust       presentation only: wind streaks blowing across the screen.
 
 ## True for kinds that can kill: they need a quiet stretch of course.
 const KINDS := {
@@ -40,6 +43,8 @@ const KINDS := {
 	"ash": {"hazardous": false, "default_length": 3000.0},
 	"avalanche": {"hazardous": true, "before": 420.0, "after": 140.0, "default_count": 3},
 	"snowstorm": {"hazardous": false, "default_length": 3000.0},
+	"lightning": {"hazardous": true, "before": 360.0, "after": 70.0, "margin": 30.0},
+	"gust": {"hazardous": false, "default_length": 3000.0},
 }
 
 ## Falling rocks of a cave-in: spacing, size and timing. The rocks use the
@@ -89,7 +94,7 @@ const FINISH_MARGIN := 240.0
 ## along the other surface. main.gd applies ROCK_MIN_LANE to feature rocks
 ## (generated rocks keep their own 260 rule).
 const ROCK_MIN_LANE := 200.0
-const MIN_LANE_CLEARANCE := {"cave_in": ROCK_MIN_LANE, "avalanche": ROCK_MIN_LANE, "bat_swarm": 200.0, "ghost_hand": 200.0, "ember_bomb": 200.0}
+const MIN_LANE_CLEARANCE := {"cave_in": ROCK_MIN_LANE, "avalanche": ROCK_MIN_LANE, "bat_swarm": 200.0, "ghost_hand": 200.0, "ember_bomb": 200.0, "lightning": 200.0}
 
 static func is_hazardous(kind: String) -> bool:
 	return bool((KINDS.get(kind, {}) as Dictionary).get("hazardous", false))
@@ -115,9 +120,9 @@ static func span_of(feature: Dictionary) -> Vector2:
 			return Vector2(at - float(def.before), last + ROCK_WIDTH * 0.5 + float(def.after))
 		"bat_swarm":
 			return Vector2(at - float(def.before), at + BAT_WIDTH * 0.5 + float(def.after))
-		"ghost_hand", "ember_bomb":
+		"ghost_hand", "ember_bomb", "lightning":
 			return Vector2(at - float(def.before), at + HAND_WIDTH * 0.5 + float(def.after))
-		"darkness", "wisp", "fog", "ash", "snowstorm":
+		"darkness", "wisp", "fog", "ash", "snowstorm", "gust":
 			return Vector2(at, at + length_of(feature))
 	return Vector2(at, at)
 
@@ -129,7 +134,7 @@ static func critical_range_of(feature: Dictionary) -> Vector2:
 			return Vector2(at - 60.0, at + float(rock_count(feature) - 1) * ROCK_SPACING + 60.0)
 		"bat_swarm":
 			return Vector2(at - 300.0, at + BAT_WIDTH * 0.5)
-		"ghost_hand", "ember_bomb":
+		"ghost_hand", "ember_bomb", "lightning":
 			return Vector2(at - 60.0, at + 60.0)
 	return span_of(feature)
 
@@ -172,6 +177,13 @@ static func events_of(feature: Dictionary) -> Array[Dictionary]:
 				"from_ceiling": str(feature.get("side", "floor")) == "ceiling",
 				"early_lead": HAND_EARLY_LEAD, "feature_event": true,
 			})
+		"lightning":
+			result.append({
+				"kind": "lightning", "id": "lightning", "feature": "lightning",
+				"course_distance": at, "width": HAND_WIDTH, "height": HAND_HEIGHT,
+				"from_ceiling": str(feature.get("side", "floor")) == "ceiling",
+				"early_lead": HAND_EARLY_LEAD, "feature_event": true,
+			})
 	return result
 
 ## Which surface the runner has to be on near a course distance to survive this
@@ -187,7 +199,7 @@ static func required_side_at(feature: Dictionary, course_distance: float) -> int
 		"bat_swarm":
 			if course_distance >= at - BAT_TRIGGER_DISTANCE and course_distance <= at + 260.0:
 				return 1 if str(feature.get("side", "ceiling")) == "ceiling" else -1
-		"ghost_hand", "ember_bomb":
+		"ghost_hand", "ember_bomb", "lightning":
 			if course_distance >= at - 330.0 and course_distance <= at + 80.0:
 				return 1 if str(feature.get("side", "floor")) == "ceiling" else -1
 	return 0

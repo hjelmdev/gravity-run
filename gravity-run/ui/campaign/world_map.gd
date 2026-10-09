@@ -493,6 +493,9 @@ func _draw_mini_boss(origin: Vector2) -> void:
 	if boss != null and boss.boss_id == &"snow_giant":
 		_draw_mini_snow_giant(origin)
 		return
+	if boss != null and boss.boss_id == &"thunderbird":
+		_draw_mini_thunderbird(origin)
+		return
 	# A tiny Rullaren on its stone: body, stack, eyes and a barrel.
 	var body := Color("8c5a46")
 	_px(origin, -6, -8, 13, 9, OUTLINE)
@@ -563,3 +566,19 @@ func _draw_mini_snow_giant(origin: Vector2) -> void:
 	_px(origin, 4, -12 + stomp, 1, 2, Color("d6f2ff"))
 	_px(origin, -9, -5, 4, 4, OUTLINE)
 	_px(origin, -8, -4, 2, 2, fur)
+
+## A tiny Thunderbird hovering over its stone, wings flapping, a spark below.
+func _draw_mini_thunderbird(origin: Vector2) -> void:
+	var flap := 1 if fmod(_time, 0.5) < 0.25 else 0
+	var body := Color("2c3f7a")
+	_px(origin, -3, -10, 7, 5, OUTLINE)
+	_px(origin, -2, -9, 5, 3, body)
+	_px(origin, -5, -9, 2, 2, OUTLINE)
+	_px(origin, -6, -8, 1, 1, Color("ffb02e"))
+	_px(origin, -1, -11, 1, 1, Color("ffc23a"))
+	_px(origin, -8, -12 + flap * 3, 5, 2, OUTLINE)
+	_px(origin, -7, -12 + flap * 3, 4, 1, Color("ffe45c"))
+	_px(origin, 4, -12 + flap * 3, 5, 2, OUTLINE)
+	_px(origin, 4, -12 + flap * 3, 4, 1, Color("ffe45c"))
+	if fmod(_time, 1.2) < 0.2:
+		_px(origin, 0, -3, 1, 2, Color("fff38a"))

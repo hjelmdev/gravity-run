@@ -2173,3 +2173,72 @@ msgstr "Jätten stampar av ilska"
 
 msgid "The Snow Giant is beaten!"
 msgstr "Snöjätten är besegrad!"
+
+msgid "Cloud Realm"
+msgstr "Molnriket"
+
+msgid "Cloud Walk"
+msgstr "Molnpromenaden"
+
+msgid "Soft clouds, but the holes are real"
+msgstr "Mjuka moln, men hålen är på riktigt"
+
+msgid "Thunderhead"
+msgstr "Åskmolnet"
+
+msgid "The storm clouds wake up"
+msgstr "Åskmolnen vaknar"
+
+msgid "Sky Islands"
+msgstr "Himlaöarna"
+
+msgid "Hop between floating islands"
+msgstr "Hoppa mellan svävande öar"
+
+msgid "Wind Song"
+msgstr "Vindens sång"
+
+msgid "Gusts whistle past the clouds"
+msgstr "Vindbyar viner förbi molnen"
+
+msgid "Storm Front"
+msgstr "Stormfronten"
+
+msgid "Lightning all along the front"
+msgstr "Blixtar längs hela fronten"
+
+msgid "Sky Exam"
+msgstr "Himlaprovet"
+
+msgid "Everything the sky has taught you"
+msgstr "Allt himlen har lärt dig"
+
+msgid "Thunderbird"
+msgstr "Åskfågeln"
+
+msgid "Boss: the bird that rides the storm"
+msgstr "Boss: fågeln som rider på stormen"
+
+msgid "First thunder"
+msgstr "Första åskan"
+
+msgid "Rolling storm"
+msgstr "Rullande storm"
+
+msgid "Eye of the storm"
+msgstr "Stormens öga"
+
+msgid "lightning"
+msgstr "blixtnedslag"
+
+msgid "Lightning"
+msgstr "Blixtnedslag"
+
+msgid "A storm cloud over one lane: lightning strikes there, so take the other"
+msgstr "Ett åskmoln över en sida: blixten slår ner där, så ta den andra"
+
+msgid "The bird shrieks with rage"
+msgstr "Fågeln skriker av ilska"
+
+msgid "The Thunderbird is beaten!"
+msgstr "Åskfågeln är besegrad!"

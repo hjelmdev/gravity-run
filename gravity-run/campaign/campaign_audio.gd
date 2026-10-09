@@ -34,6 +34,18 @@ const WORLD_AUDIO := {
 		"bpm": 136.0,
 		"star_sfx": "crystal_chime",
 	},
+	&"clouds_campaign": {
+		"track": preload("res://assets/audio/music/cloud_kingdom.wav"),
+		## tools/audio/generate_world_music.gd
+		"bpm": 116.0,
+		"star_sfx": "cloud_star",
+	},
+	&"desert_campaign": {
+		"track": preload("res://assets/audio/music/desert_dunes.wav"),
+		## tools/audio/generate_world_music.gd
+		"bpm": 148.0,
+		"star_sfx": "desert_star",
+	},
 }
 
 ## The stage's own music, or null (the normal round track).

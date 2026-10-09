@@ -20,6 +20,8 @@ const HAUNTED_CAMPAIGN: BiomeDefinition = preload("res://assets/biomes/definitio
 const VOLCANO_CAMPAIGN: BiomeDefinition = preload("res://assets/biomes/definitions/volcano_campaign.tres")
 ## Campaign-only presentation biome (world 5). Generation is the cave mix.
 const FROST_CAMPAIGN: BiomeDefinition = preload("res://assets/biomes/definitions/frost_campaign.tres")
+## Campaign-only presentation biome (world 6). Generation is the classic mix.
+const CLOUDS_CAMPAIGN: BiomeDefinition = preload("res://assets/biomes/definitions/clouds_campaign.tres")
 const GENERATOR_VERSION_14 := 14
 const GENERATOR_VERSION_16 := 16
 const GENERATOR_VERSION_21 := 21
@@ -45,6 +47,7 @@ static func set_locked_biome(biome_id: StringName) -> void:
 		&"haunted_campaign": _locked_definition = HAUNTED_CAMPAIGN
 		&"volcano_campaign": _locked_definition = VOLCANO_CAMPAIGN
 		&"frost_campaign": _locked_definition = FROST_CAMPAIGN
+		&"clouds_campaign": _locked_definition = CLOUDS_CAMPAIGN
 		_: _locked_definition = null
 
 static func locked_biome_id() -> StringName:
@@ -65,6 +68,7 @@ static func definition_for_id(biome_id: StringName) -> BiomeDefinition:
 		&"haunted_campaign": return HAUNTED_CAMPAIGN
 		&"volcano_campaign": return VOLCANO_CAMPAIGN
 		&"frost_campaign": return FROST_CAMPAIGN
+		&"clouds_campaign": return CLOUDS_CAMPAIGN
 		&"cave": return CAVE
 		&"haunted": return HAUNTED
 		&"lava": return LAVA
@@ -160,7 +164,7 @@ static func _draw_weather_layer(canvas: CanvasItem, biome: BiomeDefinition, left
 	## Small deterministic primitives only: no per-frame nodes, textures, or RNG.
 	## Lava ember polygons are tiny CPU-side arrays bounded by visible cells.
 	## Cell identity uses course position; every motif stays inside its biome fragment.
-	if size.x <= 8.0 or size.y <= 32.0 or biome.biome_id == &"cave_campaign" or biome.biome_id == &"haunted_campaign" or biome.biome_id == &"volcano_campaign" or biome.biome_id == &"frost_campaign":
+	if size.x <= 8.0 or size.y <= 32.0 or biome.biome_id == &"cave_campaign" or biome.biome_id == &"haunted_campaign" or biome.biome_id == &"volcano_campaign" or biome.biome_id == &"frost_campaign" or biome.biome_id == &"clouds_campaign":
 		return
 	var kind := str(biome.biome_id)
 	var period := 138.0
@@ -504,6 +508,8 @@ static func _draw_pixel_backdrop(canvas: CanvasItem, left: float, size: Vector2,
 			if clipped.size.x > 0.0:
 				canvas.draw_rect(clipped, part[1])
 	# Far ridge, then two hill ranges; trees stand on the near range.
+	if palette.islands:
+		_draw_pixel_islands(canvas, left, size, view_left, camera_course_distance * 0.08 + time_seconds * 3.0, palette)
 	var puffy := palette.hill_style == "puffy"
 	_draw_pixel_hills(canvas, left, size, view_left, camera_course_distance * 0.05, size.y * 0.46, 40.0, 0.006, palette.ridge, palette.ridge_crest, puffy)
 	_draw_pixel_hills(canvas, left, size, view_left, camera_course_distance * 0.10, size.y * 0.54, 34.0, 0.011, palette.hills_far, palette.hills_far_crest, puffy)
@@ -1126,3 +1132,47 @@ static func _draw_pixel_cactus(canvas: CanvasItem, ground: Vector2, size: float,
 	var rib := Rect2(Vector2(x - px * 0.5, ground.y - height + px), Vector2(px * 0.5, height - px * 2.0)).intersection(clip)
 	if rib.size.x > 0.0:
 		canvas.draw_rect(rib, palette.tree_light)
+
+## Grassy islands floating in the sky: a grass cap with a lit edge on a rock
+## underside that narrows in steps to a point, a dark rim, now and then a
+## small round tree. Slow parallax, between the clouds and the hills.
+static func _draw_pixel_islands(canvas: CanvasItem, left: float, size: Vector2, view_left: float, parallax_offset: float, palette: PixelPalette) -> void:
+	var px := PIXEL_PX
+	var period := 520.0
+	var view := Rect2(left, 0.0, size.x, size.y)
+	var first := floori((parallax_offset + (left - view_left) - 140.0) / period)
+	var last := ceili((parallax_offset + (left + size.x - view_left) + 140.0) / period)
+	for cell in range(first, last + 1):
+		var landmark := _landmark_for_cell(cell, period, 6113)
+		var cx := roundf((view_left + landmark.x - parallax_offset) / px) * px
+		var top := roundf(size.y * (0.3 + landmark.y * 0.14) / px) * px
+		var half := roundf((28.0 + landmark.y * 30.0) / px) * px
+		if cx + half + px < left or cx - half - px > left + size.x:
+			continue
+		var blocks: Array[Array] = []
+		# Rock underside: rows narrowing to a point.
+		var rows := int(half / px * 0.8) + 2
+		for row in range(rows):
+			var row_half := roundf(half * (1.0 - float(row) / float(rows)) / px) * px
+			if row_half < px:
+				row_half = px * 0.5
+			var shade := palette.tree_trunk if row % 3 != 2 else palette.tree_trunk.darkened(0.2)
+			blocks.append([Rect2(cx - row_half, top + px * 2.0 + float(row) * px, row_half * 2.0, px), shade])
+		blocks.append([Rect2(cx - half, top, half * 2.0, px * 2.0), palette.tree_canopy])
+		blocks.append([Rect2(cx - half, top, half * 2.0, px), palette.tree_light])
+		for entry in blocks:
+			var rim := (entry[0] as Rect2).grow(px * 0.5).intersection(view)
+			if rim.size.x > 0.0:
+				canvas.draw_rect(rim, palette.tree_rim)
+		for entry in blocks:
+			var body := (entry[0] as Rect2).intersection(view)
+			if body.size.x > 0.0:
+				canvas.draw_rect(body, entry[1])
+		if landmark.y > 0.45:
+			var tree := Vector2(cx - half * 0.4, top - px * 3.0)
+			var trunk := Rect2(Vector2(tree.x - px * 0.5, tree.y), Vector2(px, px * 3.0)).intersection(view)
+			if trunk.size.x > 0.0:
+				canvas.draw_rect(trunk, palette.tree_trunk)
+			_pixel_disc(canvas, tree, 10.0, px, palette.tree_rim, view)
+			_pixel_disc(canvas, tree, 7.0, px, palette.tree_canopy, view)
+			_pixel_disc(canvas, tree + Vector2(-px, -px), 4.0, px, palette.tree_light, view)

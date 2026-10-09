@@ -20,6 +20,7 @@ const PressurePlateScript := preload("res://campaign/pressure_plate.gd")
 const RullarenViewScript := preload("res://campaign/rullaren_view.gd")
 const MagmaWormViewScript := preload("res://campaign/magma_worm_view.gd")
 const SnowGiantViewScript := preload("res://campaign/snow_giant_view.gd")
+const ThunderbirdViewScript := preload("res://campaign/thunderbird_view.gd")
 const StalactiteViewScript := preload("res://campaign/stalactite_view.gd")
 const GiantIcicleScript := preload("res://campaign/giant_icicle.gd")
 const GhostKingViewScript := preload("res://campaign/ghost_king_view.gd")
@@ -108,6 +109,13 @@ func setup(stage: CampaignLevel) -> void:
 		_boss_view.name = "SnowGiant"
 		add_child(_boss_view)
 		_add_plate_for_current()
+	elif level.is_boss() and level.boss_id == &"thunderbird":
+		boss = ThunderbirdBoss.new()
+		boss.reset()
+		_boss_view = ThunderbirdViewScript.new() as Node2D
+		_boss_view.name = "Thunderbird"
+		add_child(_boss_view)
+		_add_plate_for_current()
 	elif level.is_boss() and level.boss_id == &"magma_worm":
 		boss = MagmaWormBoss.new()
 		boss.reset()
@@ -143,8 +151,8 @@ func _setup_features() -> void:
 			dark_sections.append(Vector2(float(feature.at), float(feature.at) + CampaignFeatures.length_of(feature)))
 		elif kind == "fog":
 			fog_sections.append(Vector2(float(feature.at), float(feature.at) + CampaignFeatures.length_of(feature)))
-		elif kind == "ash" or kind == "snowstorm":
-			ash_style = "snow" if kind == "snowstorm" else "ash"
+		elif kind in ["ash", "snowstorm", "gust", "sandstorm"]:
+			ash_style = {"ash": "ash", "snowstorm": "snow", "gust": "wind", "sandstorm": "sand"}[kind]
 			ash_sections.append(Vector2(float(feature.at), float(feature.at) + CampaignFeatures.length_of(feature)))
 		elif kind == "wisp":
 			var wisp := WispScript.new() as Node2D
@@ -351,6 +359,7 @@ static func hazard_tip(hazard_id: String) -> String:
 		"lava_volcano": return "It erupts from the floor: be on the ceiling"
 		"lava_tidal_pool": return "The lava rises: get off the floor in time"
 		"ember_bomb": return "A red ring in one lane: an ember bomb lands there, so take the other"
+		"lightning": return "A storm cloud over one lane: lightning strikes there, so take the other"
 	return ""
 
 static func hazard_display_name(hazard_id: String) -> String:
@@ -375,6 +384,7 @@ static func hazard_display_name(hazard_id: String) -> String:
 		"lava_volcano": return "volcanoes"
 		"lava_tidal_pool": return "lava pools"
 		"ember_bomb": return "ember bombs"
+		"lightning": return "lightning"
 	return hazard_id.replace("_", " ")
 
 ## One physics tick. Collects stars with the same swept test as coins, drives
@@ -465,7 +475,9 @@ func _tick_boss(course_distance: float, gravity_direction: int, grounded: bool) 
 	match result:
 		"hit":
 			_boss_view.call("notify_hit", rullaren.hp)
-			if boss is MagmaWormBoss or boss is SnowGiantBoss:
+			if boss is ThunderbirdBoss:
+				SfxController.play_event("thunderbird_screech", "campaign|bird_screech|%d" % rullaren.hp, true)
+			elif boss is MagmaWormBoss or boss is SnowGiantBoss:
 				SfxController.play_event("magma_roar", "campaign|worm_roar|%d" % rullaren.hp, true)
 			boss_changed.emit(rullaren.hp, RullarenBoss.MAX_HP)
 			callout.emit("boss", tr("Direct hit!"), _boss_hit_line(), tr("%d hits left") % rullaren.hp)
@@ -484,6 +496,8 @@ func _boss_hit_line() -> String:
 		return tr("The worm grows angrier")
 	if boss is SnowGiantBoss:
 		return tr("The giant stamps in rage")
+	if boss is ThunderbirdBoss:
+		return tr("The bird shrieks with rage")
 	return tr("Rullaren speeds up")
 
 func _boss_beaten_line() -> String:
@@ -491,6 +505,8 @@ func _boss_beaten_line() -> String:
 		return tr("Magmaormen is beaten!")
 	if boss is SnowGiantBoss:
 		return tr("The Snow Giant is beaten!")
+	if boss is ThunderbirdBoss:
+		return tr("The Thunderbird is beaten!")
 	return tr("Rullaren is beaten!")
 
 ## Stalaktitjätten: true when its dive caught the runner.

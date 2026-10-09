@@ -98,6 +98,9 @@ class_name PixelPalette
 ## "puffy" cloud banks instead of rolling "hills".
 @export var snow := Color(0.95, 0.98, 1.0)
 @export_enum("hills", "puffy") var hill_style := "hills"
+## Small grassy islands floating in the sky (grass in the tree canopy colours,
+## rock in the trunk colour).
+@export var islands := false
 @export var tree_trunk := Color(0.36, 0.25, 0.18)
 @export var tree_rim := Color(0.2, 0.42, 0.26)
 @export var tree_canopy := Color(0.3, 0.56, 0.32)
