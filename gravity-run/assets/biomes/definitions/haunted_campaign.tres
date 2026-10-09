@@ -1,30 +1,25 @@
 [gd_resource type="Resource" script_class="BiomeDefinition" load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://biomes/biome_definition.gd" id="1"]
-[ext_resource type="TileSet" path="res://assets/biomes/tilesheet_complete_atlas.tres" id="2"]
-[ext_resource type="Texture2D" path="res://assets/biomes/backgrounds/haunted_ruins.svg" id="3"]
-[ext_resource type="Texture2D" path="res://assets/biomes/backgrounds/haunted_fog.svg" id="4"]
+[ext_resource type="TileSet" path="res://assets/biomes/haunted_campaign/haunted_campaign_tileset.tres" id="2"]
+[ext_resource type="Texture2D" path="res://assets/biomes/haunted_campaign/haunted_campaign_dirt.png" id="3"]
+[ext_resource type="Resource" path="res://assets/biomes/haunted_campaign/haunted_campaign_palette.tres" id="4"]
 
 [resource]
 script = ExtResource("1")
 biome_id = &"haunted_campaign"
 display_name = "Hemsökt"
 tile_set = ExtResource("2")
-background_layers = Array[Texture2D]([ExtResource("3"), ExtResource("4")])
-background_layer_tints = Array[Color]([Color(0.72, 0.68, 0.86, 0.84), Color(0.9, 0.87, 0.98, 0.7)])
-background_layer_height_ratios = PackedFloat32Array(0.46, 0.32)
-background_layer_y_ratios = PackedFloat32Array(0.3, 0.61)
-background_layer_parallax = PackedFloat32Array(0.22, 0.09)
-palette_row = 0
-floor_surface_tiles = Array[Vector2i]([Vector2i(1, 6), Vector2i(2, 6), Vector2i(3, 6), Vector2i(4, 6), Vector2i(5, 6), Vector2i(6, 6), Vector2i(7, 6), Vector2i(8, 6)])
-ceiling_surface_tiles = Array[Vector2i]([Vector2i(1, 6), Vector2i(2, 6), Vector2i(3, 6), Vector2i(4, 6), Vector2i(5, 6), Vector2i(6, 6), Vector2i(7, 6), Vector2i(8, 6)])
-# The atlas slope wedges do not match the runtime terrain slope angle. Keep
-# the neutral floor tile on sloped sections until a matching slope asset exists.
-ledge_edge_tiles = Array[Vector2i]([Vector2i(0, 6), Vector2i(8, 7), Vector2i(7, 7)])
+tile_world_size = Vector2i(64, 40)
+tile_rise = 8
+pixel_art = true
+terrain_fill_texture = ExtResource("3")
+fill_texture_scale = 2.0
+draw_edge_line = false
+pixel_palette = ExtResource("4")
+floor_surface_tiles = Array[Vector2i]([Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0), Vector2i(4, 0), Vector2i(5, 0), Vector2i(6, 0), Vector2i(7, 0)])
+ceiling_surface_tiles = Array[Vector2i]([Vector2i(2, 0), Vector2i(5, 0), Vector2i(0, 0), Vector2i(7, 0), Vector2i(1, 0), Vector2i(3, 0), Vector2i(6, 0), Vector2i(4, 0)])
 background_color = Color(0.05, 0.04, 0.12, 1)
 accent_color = Color(0.82, 0.75, 1, 1)
-surface_tint = Color(0.92, 0.74, 1, 1)
-surface_overlay_color = Color(0.35, 0.16, 0.54, 0.24)
-terrain_fill_color = Color(0.19, 0.13, 0.28, 1)
-terrain_edge_color = Color(0.72, 0.61, 0.91, 1)
-layer_colors = Array[Color]([Color(0.15, 0.1, 0.25, 1), Color(0.11, 0.08, 0.2, 1), Color(0.08, 0.06, 0.16, 1)])
+terrain_fill_color = Color(0.16, 0.12, 0.2, 1)
+terrain_edge_color = Color(0.05, 0.04, 0.08, 1)

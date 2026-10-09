@@ -60,6 +60,10 @@ class_name PixelPalette
 @export var rubber_dull := Color8(57, 124, 120)
 @export var rubber_dark := Color8(20, 63, 87)
 @export var axle := Color8(255, 178, 83)
+## Shape of blocks: "pillar" (rough stone) or "grave" (a headstone).
+@export_enum("pillar", "grave") var block_style := "pillar"
+## Shape of spikes: "steel" or "cross" (a stone cross-spear).
+@export_enum("steel", "cross") var spike_style := "steel"
 ## Ice (icicles).
 @export var ice := Color8(185, 232, 245)
 @export var ice_light := Color8(234, 255, 255)
@@ -85,6 +89,8 @@ class_name PixelPalette
 @export var hills_near_crest := Color(0.5, 0.75, 0.46)
 ## Round trees on the near hills.
 @export var trees := true
+## "round" leafy trees or "dead" bare trees.
+@export_enum("round", "dead") var tree_style := "round"
 @export var tree_trunk := Color(0.36, 0.25, 0.18)
 @export var tree_rim := Color(0.2, 0.42, 0.26)
 @export var tree_canopy := Color(0.3, 0.56, 0.32)

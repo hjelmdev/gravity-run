@@ -34,7 +34,7 @@ static func palette() -> PixelPalette:
 
 ## A texture ready for drawing (nearest filtering), w x h world pixels.
 static func block_texture(palette: PixelPalette, size: Vector2, ceiling: bool, variant: int) -> Texture2D:
-	return _cached(palette, "block|%d|%d|%s|%d" % [int(size.x), int(size.y), str(ceiling), variant], func() -> Image: return make_block(_art(size.x), _art(size.y), ceiling, variant))
+	return _cached(palette, "block|%d|%d|%s|%d" % [int(size.x), int(size.y), str(ceiling), variant], func() -> Image: return make_grave(_art(size.x), _art(size.y), ceiling, variant) if palette.block_style == "grave" else make_block(_art(size.x), _art(size.y), ceiling, variant))
 
 ## A saw blade of `radius` world pixels (teeth reach past it), square texture.
 static func saw_texture(palette: PixelPalette, radius: float) -> Texture2D:
@@ -45,7 +45,7 @@ static func boulder_texture(palette: PixelPalette, size: Vector2) -> Texture2D:
 	return _cached(palette, "boulder|%d|%d" % [int(size.x), int(size.y)], func() -> Image: return make_boulder(_art(size.x), _art(size.y)))
 
 static func spike_texture(palette: PixelPalette, size: Vector2, ceiling: bool) -> Texture2D:
-	return _cached(palette, "spike|%d|%d|%s" % [int(size.x), int(size.y), str(ceiling)], func() -> Image: return make_spike(_art(size.x), _art(size.y), ceiling))
+	return _cached(palette, "spike|%d|%d|%s" % [int(size.x), int(size.y), str(ceiling)], func() -> Image: return make_cross(_art(size.x), _art(size.y), ceiling) if palette.spike_style == "cross" else make_spike(_art(size.x), _art(size.y), ceiling))
 
 ## An icicle filling w x h world pixels (wide end at the top).
 static func icicle_texture(palette: PixelPalette, size: Vector2) -> Texture2D:
@@ -476,4 +476,75 @@ static func make_icicle(w: int, h: int) -> Image:
 	for step in range(int(s.y * 0.3)):
 		_put(image, int(s.x * 0.55) + step / 4, int(s.y * 0.1) + step, Color.WHITE)
 	_outline(image)
+	return image
+
+## A headstone filling the block: an arched top on the free end, stone shaded
+## from the top left, an engraved cross, moss at the foot and a crack,
+## outlined. Drawn for a floor block; a ceiling block is flipped.
+static func make_grave(w: int, h: int, ceiling: bool, variant: int) -> Image:
+	var image := _blank(w, h)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 6113 + w * 17 + h * 5 + variant * 211
+	var arch := mini(w / 2, maxi(h / 3, 3))
+	var cx := float(w) * 0.5
+	for y in range(h):
+		for x in range(w):
+			var fx := float(x) + 0.5
+			var fy := float(y) + 0.5
+			if fy < float(arch):
+				var dy := float(arch) - fy
+				if Vector2(fx - cx, dy).length() > cx:
+					continue
+			var color := pal.stone
+			if x <= 1 or y <= 1:
+				color = pal.stone_light
+			elif x >= w - 2:
+				color = pal.stone_dark
+			image.set_pixel(x, y, color)
+	# Engraved cross in the upper half.
+	var top := arch + 2
+	var bar := top + maxi(h / 8, 2)
+	for y in range(top, mini(top + maxi(h / 3, 6), h - 3)):
+		_put(image, int(cx), y, pal.mortar)
+	for x in range(int(cx) - maxi(w / 6, 2), int(cx) + maxi(w / 6, 2) + 1):
+		_put(image, x, bar, pal.mortar)
+	# A crack and moss at the foot.
+	var crack_x := rng.randi_range(2, w - 3)
+	for step in range(maxi(3, h / 6)):
+		_put(image, crack_x + (step / 2) % 2, h / 2 + step, pal.stone_dark)
+	for x in range(w):
+		var moss := rng.randi_range(1, 3)
+		for y in range(h - moss, h):
+			if image.get_pixel(x, y).a > 0.5:
+				image.set_pixel(x, y, pal.growth if y > h - moss else pal.growth_dark)
+	_outline(image)
+	if ceiling:
+		image.flip_y()
+	return image
+
+## A stone cross-spear filling the triangle: a spike of weathered stone (lit
+## left face, shaded right) with a crossbar halfway up, outlined.
+static func make_cross(w: int, h: int, ceiling: bool) -> Image:
+	var image := _blank(w, h)
+	var half := float(w) * 0.5
+	for y in range(h):
+		var t := (float(y) + 0.5) / float(h)
+		var reach := half * t
+		for x in range(w):
+			var dx := float(x) + 0.5 - half
+			if absf(dx) > reach:
+				continue
+			var color := pal.stone
+			if dx < -reach * 0.25:
+				color = pal.stone_light
+			elif dx > reach * 0.35:
+				color = pal.stone_dark
+			image.set_pixel(x, y, color)
+	var bar_y := int(float(h) * 0.5)
+	for x in range(int(half * 0.35), int(float(w) - half * 0.35)):
+		_put(image, x, bar_y, pal.mortar)
+		_put(image, x, bar_y + 1, pal.stone_dark)
+	_outline(image)
+	if ceiling:
+		image.flip_y()
 	return image

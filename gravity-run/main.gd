@@ -1758,7 +1758,8 @@ func _spawn_obstacle_scene(scene: PackedScene, width: float, height: float, from
 		obstacle.set("skin", "pixel")
 	# Haunted campaign stages draw blocks and spikes as gravestones and crosses.
 	if _campaign_level != null and _campaign_level.world_id == &"haunted" and (obstacle.is_in_group("breakable") or obstacle.is_in_group("spikes")):
-		obstacle.set("skin", "grave")
+		if str(obstacle.get("skin")).is_empty():
+			obstacle.set("skin", "grave")
 	if obstacle.has_method("set_motion_speed_multiplier"):
 		obstacle.call("set_motion_speed_multiplier", motion_speed_multiplier)
 	if obstacle.has_method("set_spiked"):

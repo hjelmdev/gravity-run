@@ -138,7 +138,10 @@ static func draw_backdrop(canvas: CanvasItem, view_left: float, view_size: Vecto
 				&"volcano_campaign": pass
 				&"lava": _draw_lava_backdrop(canvas, cursor, layout_size, distance, view_left, course_distance, biome)
 				_: _draw_classic_backdrop(canvas, cursor, layout_size, course_distance * 0.12 + fragment_offset, biome)
-		if biome.biome_id == &"volcano_campaign":
+		var pixel_backdrop := biome.pixel_palette != null and biome.pixel_palette.backdrop
+		if pixel_backdrop:
+			pass
+		elif biome.biome_id == &"volcano_campaign":
 			_draw_volcano_campaign_backdrop(canvas, cursor, layout_size, course_distance, fragment_offset, presentation_time_seconds)
 		elif biome.biome_id == &"haunted_campaign":
 			_draw_haunted_campaign_backdrop(canvas, cursor, layout_size, course_distance, fragment_offset, presentation_time_seconds)
@@ -544,6 +547,9 @@ static func _draw_pixel_trees(canvas: CanvasItem, left: float, size: Vector2, vi
 		var ground := roundf(_pixel_hill_y(u, base_y, amplitude, frequency) / px) * px + px * 2.0
 		var radius := 12.0 + roundf(landmark.y * 3.0) * px
 		var crown := Vector2(x, ground - 16.0 - radius)
+		if palette.tree_style == "dead":
+			_draw_pixel_dead_tree(canvas, Vector2(x, ground), radius, px, palette, Rect2(left, 0.0, size.x, size.y), cell)
+			continue
 		var view := Rect2(left, 0.0, size.x, size.y)
 		var trunk := Rect2(Vector2(x - px * 0.5, crown.y), Vector2(px, ground - crown.y)).intersection(view)
 		if trunk.size.x > 0.0:
@@ -1014,3 +1020,33 @@ static func pixel_texture(texture: Texture2D, repeat: bool) -> Texture2D:
 		wrapped.texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED if repeat else CanvasItem.TEXTURE_REPEAT_DISABLED
 		_pixel_textures[key] = wrapped
 	return _pixel_textures[key]
+
+## A bare dead tree of px blocks: a dark trunk that leans a little and a few
+## crooked branches ending in twigs, rooted at `ground`.
+static func _draw_pixel_dead_tree(canvas: CanvasItem, ground: Vector2, size: float, px: float, palette: PixelPalette, clip: Rect2, seed_cell: int) -> void:
+	var height := roundf((size * 2.6) / px) * px
+	var lean := 1.0 if posmod(seed_cell, 2) == 0 else -1.0
+	var blocks: Array[Rect2] = []
+	var x := ground.x
+	var y := ground.y
+	var steps := int(height / px)
+	for step in range(steps):
+		if step % 4 == 3:
+			x += px * lean * 0.5
+		var width := px * (2.0 if step < steps / 2 else 1.0)
+		blocks.append(Rect2(Vector2(roundf(x / px) * px - width * 0.5, y - float(step + 1) * px), Vector2(width, px)))
+	# Branches from the upper half, alternating sides, each rising as it goes.
+	var top := ground.y - height
+	for b in range(3):
+		var side := 1.0 if (b + posmod(seed_cell, 3)) % 2 == 0 else -1.0
+		var start := Vector2(roundf((x - px * lean * 0.5 * float(2 - b)) / px) * px, top + float(b + 1) * height * 0.18)
+		for s in range(3 + b):
+			blocks.append(Rect2(start + Vector2(side * px * float(s + 1), -px * float(s / 2)), Vector2(px, px)))
+	for block in blocks:
+		var rim := block.grow(px * 0.5).intersection(clip)
+		if rim.size.x > 0.0:
+			canvas.draw_rect(rim, palette.tree_rim)
+	for block in blocks:
+		var body := block.intersection(clip)
+		if body.size.x > 0.0:
+			canvas.draw_rect(body, palette.tree_trunk)

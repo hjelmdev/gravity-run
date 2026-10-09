@@ -390,7 +390,7 @@ func _check_grave_skins() -> void:
 	var found: Array[String] = []
 	for obstacle in haunted.get("obstacles"):
 		found.append(str(obstacle.get("skin")))
-	_check(found == ["grave", "grave", ""], "blocks and spikes are gravestones on haunted stages, barrels stay barrels (%s)" % str(found))
+	_check(found == ["pixel", "pixel", "pixel"] and PixelHazardArt.palette().block_style == "grave" and PixelHazardArt.palette().spike_style == "cross", "haunted stages draw pixel gravestones, stone crosses and pixel barrels (%s)" % str(found))
 	haunted.queue_free()
 	await get_tree().process_frame
 	Campaign.clear_active()
