@@ -88,6 +88,7 @@ func _run() -> void:
 	await _check_stalactite("stay")
 	await _check_ghost_king("hit")
 	await _check_ghost_king("early")
+	_check_generation_biomes()
 	_check_unlocks()
 	BiomeRendererScript.set_locked_biome(&"")
 	print("CAMPAIGN_RUNTIME_TEST failures=%d" % failures)
@@ -936,3 +937,14 @@ func _check_near_miss() -> void:
 	_check(int(game.get("near_miss_count")) == 1, "a hazard passed by a few pixels right after a flip is one near miss")
 	game.queue_free()
 	await get_tree().process_frame
+
+## A locked campaign stage draws its own look, but encounter rules (ghosts only
+## in "haunted", lava only in "lava") must still see the generation biome, or
+## the stage's ghosts and lava never appear.
+func _check_generation_biomes() -> void:
+	for world in CampaignCatalog.worlds():
+		var level: CampaignLevel = world.levels[0]
+		BiomeRendererScript.set_locked_biome(level.get_presentation_biome())
+		var seen := BiomeRendererScript.biome_id_for_generator(1000.0, level.generator_version)
+		_check(seen == String(level.get_locked_biome()), "%s plays by its generation biome %s while it looks like %s (%s)" % [world.world_id, level.get_locked_biome(), level.get_presentation_biome(), seen])
+	BiomeRendererScript.set_locked_biome(&"")

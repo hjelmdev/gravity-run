@@ -1,7 +1,7 @@
 extends Node2D
 ## Placeholder pixel art for the Ghost King, a crowned ghost drawn in code on
-## a 4 px grid. He floats near the right edge of the view and drifts to the
-## side he copies from the runner, one delay late. A faint echo of the runner's
+## a 4 px grid. He floats just behind the runner and drifts to the side he
+## copies from the runner, one delay late. A faint echo of the runner's
 ## path shows where he is heading. Drawn in world coordinates.
 
 const PIXEL := 4.0
@@ -68,7 +68,7 @@ func _draw() -> void:
 	var high_y := _ceiling_y + 70.0
 	var center := Vector2(_right_x - 70.0, lerpf(low_y, high_y, eased) + sin(_time * 2.4) * 8.0)
 	var slide := maxf(0.0, 1.0 - _intro_time / 1.4)
-	center.x += slide * slide * 300.0
+	center.x -= slide * slide * 300.0
 	if _hit_time < 0.5:
 		center += Vector2(sin(_time * 80.0), cos(_time * 66.0)) * 7.0 * (1.0 - _hit_time / 0.5)
 	var alpha := 0.92

@@ -77,6 +77,7 @@ var _runner_x := 0.0
 var _wisps: Array[Dictionary] = []
 var _lane_history: Array[int] = []
 var _surface_y_at := Callable()
+var _king_hint_shown := false
 
 func setup(stage: CampaignLevel) -> void:
 	level = stage
@@ -564,6 +565,7 @@ func _tick_ghost_king(course_distance: float, gravity_direction: int) -> void:
 	var king := boss as GhostKingBoss
 	var lantern_index := _lanterns.size() - 1
 	var lantern: Node2D = _lanterns[lantern_index] if lantern_index >= 0 and is_instance_valid(_lanterns[lantern_index]) else null
+	_cue_lantern(king, lantern, course_distance)
 	var result := king.observe_runner(course_distance, gravity_direction, true)
 	match result:
 		"fire":
@@ -587,6 +589,19 @@ func _tick_ghost_king(course_distance: float, gravity_direction: int) -> void:
 			SfxController.play_event("ghost_king_laugh", "campaign|king_laugh|%d" % int(king.lantern.distance), true)
 			callout.emit("boss", tr("He slipped past the lantern"), tr("Another lantern comes"), tr("Be on its side, then flip away just before it"))
 			_add_lantern_for_current()
+
+## The lantern shows when to flip away: the king copies the runner one delay
+## later, so flipping at the flashing arrow leaves him in the light. The first
+## lantern also explains the trick once.
+func _cue_lantern(king: GhostKingBoss, lantern: Node2D, course_distance: float) -> void:
+	if lantern == null or king.lantern.is_empty() or str(king.lantern.state) != "armed":
+		return
+	var distance := float(king.lantern.distance)
+	if not _king_hint_shown and course_distance >= distance - 1500.0:
+		_king_hint_shown = true
+		callout.emit("boss", tr("The lantern"), tr("The Ghost King copies your side"), tr("Run on the lantern's side, then flip away when the arrow flashes"))
+	var flip_at := distance - king.delay_distance() + 90.0
+	lantern.set("cue", "flip" if course_distance >= flip_at - 40.0 and course_distance <= distance else ("lure" if course_distance >= distance - 900.0 and course_distance < flip_at - 40.0 else ""))
 
 func _add_lantern_for_current() -> void:
 	var king := boss as GhostKingBoss
@@ -657,7 +672,10 @@ func update_presentation(view_left: float, view_width: float, surface_y_at: Call
 		if is_instance_valid(icicle):
 			icicle.call("set_surfaces", float(surface_y_at.call(icicle.position.x, false)), float(surface_y_at.call(icicle.position.x, true)))
 	if is_instance_valid(_boss_view) and boss is GhostKingBoss:
-		var king_edge := view_left + view_width - 10.0
+		# He floats just behind the runner on the side the runner had one delay
+		# ago, so he reaches a lantern right after the runner: flip away in time
+		# and he is the one left in its light.
+		var king_edge := maxf(_runner_x - 34.0, view_left + 150.0)
 		_boss_view.call("place", king_edge, float(surface_y_at.call(king_edge - 70.0, true)), float(surface_y_at.call(king_edge - 70.0, false)), (boss as GhostKingBoss).king_on_ceiling(_last_course_distance))
 	elif is_instance_valid(_boss_view) and boss is StalactiteBoss:
 		var edge := view_left + view_width - 10.0

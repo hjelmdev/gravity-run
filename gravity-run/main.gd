@@ -1255,6 +1255,10 @@ func _spawn_course_event(event: Dictionary) -> void:
 			var count := int(event.get("count", 4))
 			var group_width := float(count - 1) * SPIKE_GROUP_SPACING
 			_spawn_spike_group(count, from_ceiling, event_x - group_width * 0.5)
+			if bool(event.get("ghost_fire", false)):
+				# The Ghost King's fire: same spikes, drawn as purple ghost flames.
+				for index in range(maxi(obstacles.size() - count, 0), obstacles.size()):
+					obstacles[index].set("skin", "ghost_fire")
 		&"block":
 			_spawn_obstacle_scene(BLOCK_SCENE, width, height, from_ceiling, event_x)
 		&"barrels":

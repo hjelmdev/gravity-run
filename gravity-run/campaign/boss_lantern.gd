@@ -14,6 +14,9 @@ var ceiling_y := 80.0
 var _time := 0.0
 var _flare_time := -1.0
 var _fade_time := -1.0
+## "lure": be on my side now (the lantern pulses); "flip": flip away now (an
+## arrow flashes toward the other surface); "": nothing to do yet.
+var cue := ""
 
 func _ready() -> void:
 	z_index = 2
@@ -61,3 +64,19 @@ func _draw() -> void:
 	draw_rect(Rect2(body.position + Vector2(-6.0, -6.0), Vector2(48.0, 6.0)), Color(OUTLINE, alpha))
 	draw_rect(Rect2(body.position + Vector2(-6.0, 48.0), Vector2(48.0, 6.0)), Color(OUTLINE, alpha))
 	draw_circle(body_center, 6.0, Color(1.0, 1.0, 1.0, 0.9 * alpha))
+	if _flare_time < 0.0 and _fade_time < 0.0:
+		_draw_cue(body_center, dir)
+
+## The flip cue: while luring, a pulsing ring on the lantern; at the flip, a
+## flashing double chevron pointing away from the lantern's surface.
+func _draw_cue(body_center: Vector2, dir: float) -> void:
+	if cue == "lure":
+		var pulse := 0.5 + 0.5 * sin(_time * 6.0)
+		draw_arc(body_center, 40.0 + 6.0 * pulse, 0.0, TAU, 32, Color(GLOW, 0.5 + 0.4 * pulse), 4.0)
+	elif cue == "flip" and fmod(_time, 0.24) < 0.16:
+		var away := -dir
+		for step in range(2):
+			var tip := body_center + Vector2(0.0, away * (70.0 + float(step) * 26.0))
+			var wing := Vector2(26.0, -away * 22.0)
+			draw_polyline(PackedVector2Array([tip + Vector2(-wing.x, wing.y), tip, tip + wing]), Color(OUTLINE, 0.9), 12.0)
+			draw_polyline(PackedVector2Array([tip + Vector2(-wing.x, wing.y), tip, tip + wing]), Color(1.0, 0.95, 0.6), 6.0)

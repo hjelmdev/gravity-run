@@ -2308,3 +2308,12 @@ msgstr "Masken slår vilt i sanden"
 
 msgid "Sandmasken is beaten!"
 msgstr "Sandmasken är besegrad!"
+
+msgid "The lantern"
+msgstr "Lyktan"
+
+msgid "The Ghost King copies your side"
+msgstr "Spökkungen härmar din sida"
+
+msgid "Run on the lantern's side, then flip away when the arrow flashes"
+msgstr "Spring på lyktans sida och flippa bort när pilen blinkar"

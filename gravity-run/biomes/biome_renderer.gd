@@ -110,8 +110,19 @@ static func biome_id_for_seed(seed_value: int, distance: float, generator_versio
 static func biome_id_at(distance: float) -> String:
 	return String(definition_at(distance).biome_id)
 
+## Campaign presentation biomes and the generation biome their stages use.
+## Encounter rules (ghosts only in "haunted", lava only in "lava") must see
+## the generation biome, not the look, or a locked campaign stage loses them.
+const GENERATION_BIOME := {
+	&"meadow": "classic", &"cave_campaign": "cave", &"haunted_campaign": "haunted",
+	&"volcano_campaign": "lava", &"frost_campaign": "cave", &"clouds_campaign": "classic",
+	&"desert_campaign": "classic",
+}
+
+## The generation biome at a distance (never a campaign presentation biome).
 static func biome_id_for_generator(distance: float, generator_version: int) -> String:
-	return String(definition_for_generator(distance, generator_version).biome_id)
+	var biome_id := definition_for_generator(distance, generator_version).biome_id
+	return str(GENERATION_BIOME.get(biome_id, String(biome_id)))
 
 static func cycle_length_for_generator(generator_version: int) -> float:
 	return GEN14_CYCLE_LENGTH if generator_version >= GENERATOR_VERSION_14 else CYCLE_LENGTH
