@@ -12,6 +12,7 @@ signal updated(count: int)
 const LeaderboardConfig := preload("res://systems/leaderboard_config.gd")
 const FUNCTION_PATH := "/functions/v1/turn-credentials"
 const RETRY_SECONDS := 300.0
+const MISSING_RETRY_SECONDS := 1800.0
 
 ## The list every new peer connection is initialized with (changed in place).
 var ice_servers: Array
@@ -44,6 +45,10 @@ func refresh() -> void:
 		return
 	var result: Array = await http.request_completed
 	http.queue_free()
+	# Not deployed yet (blocked or 404): try again much later, quietly.
+	if int(result[0]) != HTTPRequest.RESULT_SUCCESS or int(result[1]) != 200:
+		_timer.start(MISSING_RETRY_SECONDS)
+		return
 	var data: Variant = JSON.parse_string((result[3] as PackedByteArray).get_string_from_utf8())
 	if int(result[1]) != 200 or not data is Dictionary or not (data as Dictionary).get("iceServers") is Array:
 		_timer.start(RETRY_SECONDS)
