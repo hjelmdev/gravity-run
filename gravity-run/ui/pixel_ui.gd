@@ -149,8 +149,7 @@ func font() -> Font:
 		if font_mode == "plain" or font_mode == "mixed":
 			_font = _plain_font()
 			return _font
-		_font = FontFile.new()
-		_font.load_dynamic_font(FONT_PATH)
+		_font = _load_pixel_font()
 		if font_mode == "pixel":
 			_font.antialiasing = TextServer.FONT_ANTIALIASING_NONE
 			_font.hinting = TextServer.HINTING_NONE
@@ -369,8 +368,7 @@ func heading_font() -> Font:
 	if font_mode == "plain":
 		return font()
 	if _heading_font == null:
-		_heading_font = FontFile.new()
-		_heading_font.load_dynamic_font(FONT_PATH)
+		_heading_font = _load_pixel_font()
 		_heading_font.antialiasing = TextServer.FONT_ANTIALIASING_NONE
 		_heading_font.hinting = TextServer.HINTING_NONE
 		_heading_font.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_DISABLED
@@ -389,3 +387,10 @@ func _style_heading(node: Node) -> void:
 	var control := node as Control
 	if control.get_theme_font_size("font_size") >= HEADING_SIZE and not control.has_theme_font_override("font"):
 		control.add_theme_font_override("font", heading_font())
+
+## A fresh copy of the imported pixel font. It must be load()ed: the raw .ttf
+## is not in the exported game, only its imported resource, so reading the
+## file directly works in the editor but gives empty boxes on the web.
+func _load_pixel_font() -> FontFile:
+	var imported := load(FONT_PATH) as FontFile
+	return imported.duplicate() as FontFile if imported != null else FontFile.new()

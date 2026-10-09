@@ -2104,3 +2104,9 @@ msgstr "Pixelfont överallt"
 
 msgid "Pixel font on headings"
 msgstr "Pixelfont på rubriker"
+
+msgid "Sound effects volume"
+msgstr "Ljudeffektvolym"
+
+msgid "Sound effects enabled"
+msgstr "Ljudeffekter på"
