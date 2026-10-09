@@ -1,64 +1,62 @@
 extends RefCounted
-class_name MeadowPixelArt
-## Pixel art for the meadow's hazards, drawn in code at run time in the same
-## style as the runners and the meadow ground (tools/pixel_tiles): one art
-## pixel is ART_SCALE world pixels, a dark outline, flat colours with one
-## highlight and one shade. Hazards come in many sizes, so each picture is made
-## for the hazard's exact size and cached. Presentation only: hitboxes are the
-## hazards' own.
+class_name PixelHazardArt
+## Pixel art for the hazards of every pixel-style biome, drawn in code at run
+## time from the biome's PixelPalette, in the same style as the runners and the
+## ground (tools/pixel_tiles): one art pixel is ART_SCALE world pixels, a dark
+## outline, flat colours with one highlight and one shade. Hazards come in many
+## sizes, so each picture is made for the hazard's exact size and palette and
+## cached. Presentation only: hitboxes are the hazards' own.
 ##
-##   block   a mossy stone pillar with a grass tuft on its free end
+##   block   a rough stone pillar, the palette's growth creeping over it
 ##   spike   a steel spike with a lit and a shaded face
-##   boulder a rounded rock with moss on top, for falling rocks
+##   saw     a circular saw blade
+##   boulder a faceted rock with a cap of growth, for falling rocks
 ##   barrel  a barrel seen end-on (hoop, planks, bung), spiked or rubber
 
 const ART_SCALE := 2.0
-const OUTLINE := Color8(23, 40, 33)
-const STONE := Color8(150, 146, 136)
-const STONE_LIGHT := Color8(196, 192, 178)
-const STONE_DARK := Color8(104, 100, 96)
-const MORTAR := Color8(84, 80, 78)
-const MOSS := Color8(96, 164, 70)
-const MOSS_DARK := Color8(58, 120, 56)
-const GRASS_HI := Color8(170, 226, 92)
-const STEEL := Color8(176, 186, 198)
-const STEEL_LIGHT := Color8(232, 238, 244)
-const STEEL_DARK := Color8(108, 116, 132)
-const BARK := Color8(104, 66, 42)
-const BARK_DARK := Color8(70, 44, 30)
-const WOOD := Color8(198, 124, 64)
-const IRON := Color8(78, 84, 98)
-const RUBBER := Color8(64, 183, 174)
-const RUBBER_DULL := Color8(57, 124, 120)
-const RUBBER_DARK := Color8(20, 63, 87)
+
+## The palette the picture being made is drawn with.
+static var pal: PixelPalette
 
 static var _cache: Dictionary = {}
+static var _default_palette: PixelPalette
+
+## The palette to draw with: the locked biome's, or the default (meadow) one.
+static func palette() -> PixelPalette:
+	var locked := BiomeRenderer.locked_pixel_palette()
+	if locked != null:
+		return locked
+	if _default_palette == null:
+		_default_palette = PixelPalette.new()
+	return _default_palette
 
 ## A texture ready for drawing (nearest filtering), w x h world pixels.
-static func block_texture(size: Vector2, ceiling: bool, variant: int) -> Texture2D:
-	return _cached("block|%d|%d|%s|%d" % [int(size.x), int(size.y), str(ceiling), variant], func() -> Image: return make_block(_art(size.x), _art(size.y), ceiling, variant))
+static func block_texture(palette: PixelPalette, size: Vector2, ceiling: bool, variant: int) -> Texture2D:
+	return _cached(palette, "block|%d|%d|%s|%d" % [int(size.x), int(size.y), str(ceiling), variant], func() -> Image: return make_block(_art(size.x), _art(size.y), ceiling, variant))
 
 ## A saw blade of `radius` world pixels (teeth reach past it), square texture.
-static func saw_texture(radius: float) -> Texture2D:
-	return _cached("saw|%d" % int(radius), func() -> Image: return make_saw(_art(radius)))
+static func saw_texture(palette: PixelPalette, radius: float) -> Texture2D:
+	return _cached(palette, "saw|%d" % int(radius), func() -> Image: return make_saw(_art(radius)))
 
 ## A boulder filling w x h world pixels.
-static func boulder_texture(size: Vector2) -> Texture2D:
-	return _cached("boulder|%d|%d" % [int(size.x), int(size.y)], func() -> Image: return make_boulder(_art(size.x), _art(size.y)))
+static func boulder_texture(palette: PixelPalette, size: Vector2) -> Texture2D:
+	return _cached(palette, "boulder|%d|%d" % [int(size.x), int(size.y)], func() -> Image: return make_boulder(_art(size.x), _art(size.y)))
 
-static func spike_texture(size: Vector2, ceiling: bool) -> Texture2D:
-	return _cached("spike|%d|%d|%s" % [int(size.x), int(size.y), str(ceiling)], func() -> Image: return make_spike(_art(size.x), _art(size.y), ceiling))
+static func spike_texture(palette: PixelPalette, size: Vector2, ceiling: bool) -> Texture2D:
+	return _cached(palette, "spike|%d|%d|%s" % [int(size.x), int(size.y), str(ceiling)], func() -> Image: return make_spike(_art(size.x), _art(size.y), ceiling))
 
 ## A square texture of a barrel seen end-on, `radius` world pixels; `kind` is
 ## "wood", "spiked", "rubber" or "retired".
-static func barrel_texture(radius: float, kind: String) -> Texture2D:
-	return _cached("barrel|%d|%s" % [int(radius), kind], func() -> Image: return make_barrel(_art(radius), kind))
+static func barrel_texture(palette: PixelPalette, radius: float, kind: String) -> Texture2D:
+	return _cached(palette, "barrel|%d|%s" % [int(radius), kind], func() -> Image: return make_barrel(_art(radius), kind))
 
 static func _art(world: float) -> int:
 	return maxi(int(round(world / ART_SCALE)), 2)
 
-static func _cached(key: String, make: Callable) -> Texture2D:
+static func _cached(palette: PixelPalette, key: String, make: Callable) -> Texture2D:
+	key = palette.cache_key() + "|" + key
 	if not _cache.has(key):
+		pal = palette
 		var wrapped := CanvasTexture.new()
 		wrapped.diffuse_texture = ImageTexture.create_from_image(make.call())
 		wrapped.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -125,15 +123,15 @@ static func make_block(w: int, h: int, ceiling: bool, variant: int) -> Image:
 					var last_x := rx == stone_w - 1
 					# Knocked-off corners between stones.
 					if (rx == 0 or last_x) and (ry == 0 or last_y):
-						image.set_pixel(x, y, MORTAR)
+						image.set_pixel(x, y, pal.mortar)
 						continue
-					var color := STONE
+					var color := pal.stone
 					if last_y or last_x:
-						color = MORTAR
+						color = pal.mortar
 					elif ry == 0 or rx == 0:
-						color = STONE_LIGHT
+						color = pal.stone_light
 					elif ry == row_h - 2 or rx == stone_w - 2:
-						color = STONE_DARK
+						color = pal.stone_dark
 					image.set_pixel(x, y, color.lightened(shade) if shade > 0.0 else color.darkened(-shade))
 			x0 += stone_w
 		y0 += row_h
@@ -144,18 +142,18 @@ static func make_block(w: int, h: int, ceiling: bool, variant: int) -> Image:
 		var cy := rng.randi_range(4, h - 4)
 		var dir := 1 if rng.randf() < 0.5 else -1
 		for step in range(rng.randi_range(3, 6)):
-			_put(image, cx + (step / 2) * dir, cy + step, MORTAR)
+			_put(image, cx + (step / 2) * dir, cy + step, pal.mortar)
 	# Moss from the attached end, and patches on the sides.
 	for x in range(w):
 		var moss := rng.randi_range(1, 4) + (2 if (x / 3) % 2 == 0 else 0)
 		for y in range(h - moss, h):
-			image.set_pixel(x, y, MOSS if y > h - moss else MOSS_DARK)
+			image.set_pixel(x, y, pal.growth if y > h - moss else pal.growth_dark)
 	for _i in range(maxi(1, h / 18)):
 		var py := rng.randi_range(6, h - 8)
 		var left_side := rng.randf() < 0.5
 		for y in range(py, py + rng.randi_range(2, 4)):
 			for x in range(rng.randi_range(2, 3)):
-				_put(image, x if left_side else w - 1 - x, y, MOSS if x == 0 else MOSS_DARK)
+				_put(image, x if left_side else w - 1 - x, y, pal.growth if x == 0 else pal.growth_dark)
 	# Cut the silhouette.
 	for y in range(h):
 		for x in range(w):
@@ -166,9 +164,9 @@ static func make_block(w: int, h: int, ceiling: bool, variant: int) -> Image:
 		if rng.randf() < 0.55:
 			var t := top[x]
 			if x >= inset_left[t] and x < w - inset_right[t]:
-				_put(image, x, t, MOSS)
+				_put(image, x, t, pal.growth)
 				if rng.randf() < 0.5:
-					_put(image, x, t + 1, GRASS_HI)
+					_put(image, x, t + 1, pal.surface_hi)
 	_outline(image)
 	if ceiling:
 		image.flip_y()
@@ -187,11 +185,11 @@ static func make_spike(w: int, h: int, ceiling: bool) -> Image:
 			var dx := float(x) + 0.5 - half
 			if absf(dx) > reach:
 				continue
-			var color := STEEL
+			var color := pal.steel
 			if dx < -reach * 0.25:
-				color = STEEL_LIGHT
+				color = pal.steel_light
 			elif dx > reach * 0.35:
-				color = STEEL_DARK
+				color = pal.steel_dark
 			image.set_pixel(x, y, color)
 	_put(image, int(half) - 1, int(h * 0.3), Color.WHITE)
 	_outline(image)
@@ -211,10 +209,10 @@ static func make_barrel(r: int, kind: String) -> Image:
 	var c := float(size) * 0.5
 	var rf := float(r)
 	var rubber := kind in ["rubber", "retired"]
-	var lid := RUBBER if kind == "rubber" else (RUBBER_DULL if kind == "retired" else WOOD)
+	var lid := pal.rubber if kind == "rubber" else (pal.rubber_dull if kind == "retired" else pal.wood)
 	var lid_light := lid.lightened(0.2)
 	var lid_dark := lid.darkened(0.22)
-	var hoop := RUBBER_DARK if rubber else IRON
+	var hoop := pal.rubber_dark if rubber else pal.iron
 	var plank := maxi(3, r / 3)
 	for y in range(size):
 		for x in range(size):
@@ -228,7 +226,7 @@ static func make_barrel(r: int, kind: String) -> Image:
 			elif rubber:
 				color = lid_light if posmod(x - int(c) + r, plank * 2) < 2 else lid
 			elif posmod(y - int(c) + r, plank) == 0:
-				color = BARK_DARK
+				color = pal.wood_dark
 			if color == lid and (p.x + p.y) < -rf * 0.6:
 				color = lid_light
 			elif color == lid and (p.x + p.y) > rf * 0.7:
@@ -236,14 +234,14 @@ static func make_barrel(r: int, kind: String) -> Image:
 			image.set_pixel(x, y, color)
 	# The bung.
 	if not rubber:
-		_put(image, int(c) + r / 3, int(c) - 1, BARK_DARK)
-		_put(image, int(c) + r / 3 + 1, int(c) - 1, BARK_DARK)
+		_put(image, int(c) + r / 3, int(c) - 1, pal.wood_dark)
+		_put(image, int(c) + r / 3 + 1, int(c) - 1, pal.wood_dark)
 	if kind == "spiked":
 		for index in range(8):
 			var direction := Vector2.RIGHT.rotated(TAU * float(index) / 8.0 + 0.2)
 			for step in range(4):
 				var p := Vector2(c, c) + direction * (rf + float(step))
-				_put(image, int(p.x), int(p.y), STEEL_LIGHT if step < 3 else STEEL)
+				_put(image, int(p.x), int(p.y), pal.steel_light if step < 3 else pal.steel)
 	_outline(image)
 	return image
 
@@ -263,7 +261,7 @@ static func _outline(image: Image) -> void:
 					edge.append(Vector2i(x, y))
 					break
 	for p in edge:
-		image.set_pixel(p.x, p.y, OUTLINE)
+		image.set_pixel(p.x, p.y, pal.hazard_outline)
 
 ## A chunky, faceted rock filling the box: an irregular polygon outline, each
 ## facet (a wedge from an off-centre ridge point to one edge) flat-shaded by
@@ -283,7 +281,7 @@ static func make_boulder(w: int, h: int) -> Image:
 		outline.append(c + Vector2(cos(angle) * (c.x - 1.0), sin(angle) * (c.y - 1.0)) * reach)
 	var ridge := c + Vector2(-0.12 * c.x, -0.18 * c.y)
 	var light := Vector2(-0.6, -0.8).normalized()
-	var tones := [STONE_DARK.darkened(0.15), STONE_DARK, STONE, STONE_LIGHT]
+	var tones := [pal.stone_dark.darkened(0.15), pal.stone_dark, pal.stone, pal.stone_light]
 	for y in range(h):
 		for x in range(w):
 			var p := Vector2(float(x) + 0.5, float(y) + 0.5)
@@ -312,14 +310,14 @@ static func make_boulder(w: int, h: int) -> Image:
 	# A crack down one lit facet.
 	var crack := ridge + Vector2(c.x * 0.25, -c.y * 0.1)
 	for s in range(maxi(3, h / 4)):
-		_put(image, int(crack.x) + (s / 2) % 2, int(crack.y) + s, STONE_DARK.darkened(0.2))
+		_put(image, int(crack.x) + (s / 2) % 2, int(crack.y) + s, pal.stone_dark.darkened(0.2))
 	# A moss cap over the top quarter, hanging down in uneven drips, with a lit
 	# upper rim: the side that was stuck in the ceiling grass.
 	for x in range(w):
 		var drip := int(float(h) * 0.24) + (2 if (x / 3) % 2 == 0 else 0) + rng.randi_range(-1, 1)
 		for y in range(drip):
 			if image.get_pixel(x, y).a > 0.5:
-				image.set_pixel(x, y, MOSS_DARK if y >= drip - 1 else (GRASS_HI if y < int(float(h) * 0.08) else MOSS))
+				image.set_pixel(x, y, pal.growth_dark if y >= drip - 1 else (pal.surface_hi if y < int(float(h) * 0.08) else pal.growth))
 	_outline(image)
 	return image
 
@@ -349,22 +347,22 @@ static func make_saw(r: int) -> Image:
 			if d > edge:
 				continue
 			var light := (-p.x - p.y) / (rf * 1.4)
-			var color := STEEL
+			var color := pal.steel
 			if d > rf * 0.84:
-				color = STEEL_LIGHT if light > -0.2 else STEEL
+				color = pal.steel_light if light > -0.2 else pal.steel
 			elif d > rf * 0.78:
-				color = STEEL_DARK
+				color = pal.steel_dark
 			elif d > rf * 0.3:
-				color = STEEL.darkened(0.12) if light < 0.25 else STEEL
+				color = pal.steel.darkened(0.12) if light < 0.25 else pal.steel
 				# Lightening holes.
 				for hole in range(3):
 					var at := Vector2.from_angle(TAU * float(hole) / 3.0 + 0.5) * rf * 0.54
 					if p.distance_to(at) < rf * 0.13:
 						color = Color(0, 0, 0, 0)
 			elif d > rf * 0.16:
-				color = IRON
+				color = pal.iron
 			else:
-				color = Color8(255, 178, 83)
+				color = pal.axle
 			image.set_pixel(x, y, color)
 	_outline(image)
 	return image

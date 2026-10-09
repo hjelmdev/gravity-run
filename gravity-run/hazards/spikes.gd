@@ -3,7 +3,7 @@ extends "res://hazards/hazard.gd"
 const HazardRules := preload("res://systems/hazard_interaction_rules.gd")
 
 ## Presentation only. "grave" draws each spike as a stone cross-spear (haunted
-## campaign stages), "meadow" as a pixel-art steel spike; the triangle hitbox
+## campaign stages), "pixel" as the biome's pixel-art steel spike; the triangle hitbox
 ## is unchanged.
 var skin := ""
 
@@ -16,8 +16,8 @@ func _draw() -> void:
 		points = PackedVector2Array([Vector2(-size.x * 0.5, 0.0), Vector2(size.x * 0.5, 0.0), Vector2(0.0, size.y)])
 	else:
 		points = PackedVector2Array([Vector2(-size.x * 0.5, 0.0), Vector2(size.x * 0.5, 0.0), Vector2(0.0, -size.y)])
-	if skin == "meadow":
-		draw_texture_rect(MeadowPixelArt.spike_texture(size, from_ceiling), Rect2(Vector2(-size.x * 0.5, 0.0 if from_ceiling else -size.y), size), false)
+	if skin == "pixel":
+		draw_texture_rect(PixelHazardArt.spike_texture(PixelHazardArt.palette(), size, from_ceiling), Rect2(Vector2(-size.x * 0.5, 0.0 if from_ceiling else -size.y), size), false)
 		return
 	if skin == "grave":
 		draw_colored_polygon(points, Color("8b90a6"))

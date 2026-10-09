@@ -1,11 +1,11 @@
 extends SceneTree
-## Generates the meadow's pixel-art ground in the runners' style (1 art pixel =
+## Generates a biome's pixel-art ground in the runners' style (1 art pixel =
 ## 2 screen pixels, a dark outline, flat colours with one highlight and one
-## shade step). Not part of the game.
+## shade step) from the biome's PixelPalette. Not part of the game.
 ##
-##   godot --headless --path . -s res://tools/pixel_tiles/generate_meadow_tiles.gd
+##   godot --headless --path . -s res://tools/pixel_tiles/generate_biome_tiles.gd -- <biome_id>
 ##
-## Writes:
+## Writes (for biome_id "meadow"):
 ##   assets/biomes/meadow/meadow_surface.png  the grass cap atlas: VARIANTS tiles
 ##       of TILE_W x TILE_H art pixels side by side. The renderer stretches each
 ##       tile over one 64 x 40 world cell along the surface (and flips it for the
@@ -21,55 +21,50 @@ const TILE_H := 20
 const RISE := 4
 const VARIANTS := 8
 const DIRT_SIZE := 64
-const OUT_DIR := "res://assets/biomes/meadow/"
+## The palette the art is drawn with (set from the biome before drawing).
+static var p: PixelPalette
 
-const OUTLINE := Color8(23, 52, 33)
-const GRASS_HI := Color8(170, 226, 92)
-const GRASS := Color8(108, 190, 72)
-const GRASS_MID := Color8(70, 152, 60)
-const GRASS_DARK := Color8(44, 108, 50)
-const DIRT := Color8(122, 82, 54)
-const DIRT_SHADE := Color8(104, 69, 46)
-const DIRT_DARK := Color8(76, 49, 35)
-const DIRT_LIGHT := Color8(146, 102, 68)
-const STONE := Color8(150, 142, 132)
-const STONE_LIGHT := Color8(190, 184, 172)
-const STONE_DARK := Color8(104, 98, 92)
-const FLOWER_COLORS := [Color8(250, 246, 236), Color8(255, 214, 74), Color8(244, 128, 168), Color8(150, 196, 255)]
-const FLOWER_CENTER := Color8(255, 176, 40)
-const STEM := Color8(52, 124, 54)
 
 func _initialize() -> void:
-	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(OUT_DIR))
+	var args := OS.get_cmdline_user_args()
+	var biome_id := StringName(args[0] if not args.is_empty() else "meadow")
+	var biome := BiomeRenderer.definition_for_id(biome_id)
+	if biome == null or biome.biome_id != biome_id or biome.pixel_palette == null:
+		push_error("Biome %s has no pixel_palette." % biome_id)
+		quit(1)
+		return
+	p = biome.pixel_palette
+	var out_dir := "res://assets/biomes/%s/" % biome_id
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(out_dir))
 	var surface := Image.create(TILE_W * VARIANTS, TILE_H, false, Image.FORMAT_RGBA8)
 	surface.fill(Color(0, 0, 0, 0))
 	for variant in range(VARIANTS):
 		draw_cap(surface, variant * TILE_W, variant)
-	surface.save_png(OUT_DIR + "meadow_surface.png")
+	surface.save_png(out_dir + "%s_surface.png" % biome_id)
 	var dirt := make_dirt()
-	dirt.save_png(OUT_DIR + "meadow_dirt.png")
-	print("wrote meadow_surface.png (%dx%d) and meadow_dirt.png (%dx%d)" % [surface.get_width(), surface.get_height(), DIRT_SIZE, DIRT_SIZE])
+	dirt.save_png(out_dir + "%s_dirt.png" % biome_id)
+	print("wrote %s_surface.png (%dx%d) and %s_dirt.png (%dx%d)" % [biome_id, surface.get_width(), surface.get_height(), biome_id, DIRT_SIZE, DIRT_SIZE])
 	quit(0)
 
 ## Seamless dirt: a base colour, soft darker clumps, light grains and a few
 ## outlined pebbles at random, well-spaced places. Everything wraps around.
 static func make_dirt() -> Image:
 	var image := Image.create(DIRT_SIZE, DIRT_SIZE, false, Image.FORMAT_RGBA8)
-	image.fill(DIRT)
+	image.fill(p.fill)
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 7021
+	rng.seed = 7021 + p.seed_offset
 	for _i in range(34):
 		var cx := rng.randi_range(0, DIRT_SIZE - 1)
 		var cy := rng.randi_range(0, DIRT_SIZE - 1)
 		var w := rng.randi_range(2, 5)
 		for dy in range(2):
 			for dx in range(maxi(w - dy * 2, 1)):
-				_wrap_put(image, cx + dx + dy, cy + dy, DIRT_SHADE)
+				_wrap_put(image, cx + dx + dy, cy + dy, p.fill_shade)
 	for _i in range(110):
-		_wrap_put(image, rng.randi_range(0, DIRT_SIZE - 1), rng.randi_range(0, DIRT_SIZE - 1), DIRT_LIGHT if rng.randf() < 0.5 else DIRT_DARK)
+		_wrap_put(image, rng.randi_range(0, DIRT_SIZE - 1), rng.randi_range(0, DIRT_SIZE - 1), p.fill_light if rng.randf() < 0.5 else p.fill_dark)
 	var placed: Array[Vector2i] = []
 	var tries := 0
-	while placed.size() < 7 and tries < 400:
+	while placed.size() < p.pebble_count and tries < 400:
 		tries += 1
 		var at := Vector2i(rng.randi_range(0, DIRT_SIZE - 1), rng.randi_range(0, DIRT_SIZE - 1))
 		var free := true
@@ -92,11 +87,11 @@ static func _pebble(image: Image, at: Vector2i, w: int, h: int) -> void:
 			if (x == -1 or x == w) and (y == -1 or y == h):
 				continue
 			var edge := x == -1 or x == w or y == -1 or y == h
-			var color := DIRT_DARK if edge else STONE
+			var color := p.fill_dark if edge else p.pebble
 			if not edge and (x == 0 or y == 0):
-				color = STONE_LIGHT
+				color = p.pebble_light
 			elif not edge and (x == w - 1 or y == h - 1):
-				color = STONE_DARK
+				color = p.pebble_dark
 			_wrap_put(image, at.x + x, at.y + y, color)
 
 static func _wrap_put(image: Image, x: int, y: int, color: Color) -> void:
@@ -113,7 +108,7 @@ static func _put(image: Image, left: int, x: int, y: int, color: Color) -> void:
 ## 0 and TILE_W-1 have the same depth in every variant, so tiles join cleanly.
 static func draw_cap(image: Image, left: int, variant: int) -> void:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 911 + variant * 131
+	rng.seed = 911 + variant * 131 + p.seed_offset
 	var s := RISE
 	# Tuft depth per column below the surface line, a random walk in steps of 3
 	# columns that starts and ends at the same depth.
@@ -130,16 +125,16 @@ static func draw_cap(image: Image, left: int, variant: int) -> void:
 			var r := y - s
 			var color := Color(0, 0, 0, 0)
 			if r == 0 or r == depth[x]:
-				color = OUTLINE
+				color = p.ground_outline
 			elif r < depth[x]:
 				if r == 1:
-					color = GRASS_HI
+					color = p.surface_hi
 				elif r <= 3:
-					color = GRASS
+					color = p.surface
 				elif r == depth[x] - 1:
-					color = GRASS_DARK
+					color = p.surface_dark
 				else:
-					color = GRASS_MID
+					color = p.surface_mid
 			elif r == depth[x] + 1:
 				color = Color(0.1, 0.05, 0.02, 0.3)
 			_put(image, left, x, y, color)
@@ -150,16 +145,16 @@ static func draw_cap(image: Image, left: int, variant: int) -> void:
 		if a != b:
 			var column := x if b > a else x - 1
 			for r in range(mini(a, b), maxi(a, b) + 1):
-				_put(image, left, column, s + r, OUTLINE)
+				_put(image, left, column, s + r, p.ground_outline)
 	# Light strokes inside the grass.
 	for _i in range(5 + variant % 3):
 		var bx := rng.randi_range(1, TILE_W - 2)
 		var length := rng.randi_range(1, 2)
 		for r in range(2, mini(2 + length, depth[bx] - 1)):
-			_put(image, left, bx, s + r, GRASS_HI)
+			_put(image, left, bx, s + r, p.surface_hi)
 	# Blade tips above the surface: clumps of 2-3 blades, 1 to RISE-1 pixels
 	# tall, each outlined on its sides and top. Kept off the tile edges.
-	var clumps := 3 + variant % 3
+	var clumps := (3 + variant % 3) if p.blade_tips else 0
 	for _c in range(clumps):
 		var cx := rng.randi_range(2, TILE_W - 7)
 		var blades := rng.randi_range(2, 3)
@@ -167,34 +162,34 @@ static func draw_cap(image: Image, left: int, variant: int) -> void:
 			var bx := cx + b * 2
 			var height := rng.randi_range(1, RISE - 1)
 			for h in range(1, height + 1):
-				_put(image, left, bx, s - h, GRASS if h < height else GRASS_HI)
+				_put(image, left, bx, s - h, p.surface if h < height else p.surface_hi)
 				if image.get_pixel(left + bx - 1, s - h).a < 0.5:
-					_put(image, left, bx - 1, s - h, OUTLINE)
+					_put(image, left, bx - 1, s - h, p.ground_outline)
 				if image.get_pixel(left + bx + 1, s - h).a < 0.5:
-					_put(image, left, bx + 1, s - h, OUTLINE)
-			_put(image, left, bx, s - height - 1, OUTLINE)
+					_put(image, left, bx + 1, s - h, p.ground_outline)
+			_put(image, left, bx, s - height - 1, p.ground_outline)
 			# The blade's foot replaces the surface outline with grass.
-			_put(image, left, bx, s, GRASS)
+			_put(image, left, bx, s, p.surface)
 	# Flowers: a stem above the surface and a plus-shaped bloom with an outline.
-	var flowers: int = [0, 1, 0, 2, 1, 0, 1, 2][variant]
+	var flowers: int = p.flower_counts[variant % p.flower_counts.size()] if not p.flower_counts.is_empty() else 0
 	for _f in range(flowers):
 		var fx := rng.randi_range(3, TILE_W - 4)
-		var petal: Color = FLOWER_COLORS[rng.randi_range(0, FLOWER_COLORS.size() - 1)]
+		var petal: Color = p.flower_colors[rng.randi_range(0, p.flower_colors.size() - 1)]
 		var top := s - 2
-		_put(image, left, fx, s, GRASS)
+		_put(image, left, fx, s, p.surface)
 		for offset in [Vector2i(0, -2), Vector2i(-2, 0), Vector2i(2, 0), Vector2i(-1, -1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(1, 1)]:
-			var p: Vector2i = Vector2i(fx, top) + offset
-			if p.y >= 0 and p.y < s:
-				_put(image, left, p.x, p.y, OUTLINE)
+			var q: Vector2i = Vector2i(fx, top) + offset
+			if q.y >= 0 and q.y < s:
+				_put(image, left, q.x, q.y, p.ground_outline)
 		for offset in [Vector2i(0, -1), Vector2i(-1, 0), Vector2i(1, 0)]:
-			var p: Vector2i = Vector2i(fx, top) + offset
-			_put(image, left, p.x, p.y, petal)
-		_put(image, left, fx, top, FLOWER_CENTER)
-		_put(image, left, fx, s - 1, STEM)
+			var q: Vector2i = Vector2i(fx, top) + offset
+			_put(image, left, q.x, q.y, petal)
+		_put(image, left, fx, top, p.flower_center)
+		_put(image, left, fx, s - 1, p.stem)
 	# Clover on two variants: dark three-leaf marks in the grass.
-	if variant in [5, 6]:
+	if p.clover and variant in [5, 6]:
 		var cx := rng.randi_range(4, TILE_W - 5)
 		for offset in [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 1), Vector2i(1, 1)]:
-			var p: Vector2i = Vector2i(cx, 3) + offset
-			if p.y < depth[p.x]:
-				_put(image, left, p.x, s + p.y, GRASS_DARK)
+			var q: Vector2i = Vector2i(cx, 3) + offset
+			if q.y < depth[q.x]:
+				_put(image, left, q.x, s + q.y, p.surface_dark)

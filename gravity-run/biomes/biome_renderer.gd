@@ -47,6 +47,14 @@ static func set_locked_biome(biome_id: StringName) -> void:
 static func locked_biome_id() -> StringName:
 	return _locked_definition.biome_id if _locked_definition != null else &""
 
+static func locked_definition() -> BiomeDefinition:
+	return _locked_definition
+
+## The pixel palette of the locked (campaign) biome, or null when it is not a
+## pixel-style biome. Hazards and terrain use it to pick their pixel art.
+static func locked_pixel_palette() -> PixelPalette:
+	return _locked_definition.pixel_palette if _locked_definition != null else null
+
 static func definition_for_id(biome_id: StringName) -> BiomeDefinition:
 	match biome_id:
 		&"meadow": return MEADOW
@@ -118,7 +126,9 @@ static func draw_backdrop(canvas: CanvasItem, view_left: float, view_size: Vecto
 		var fragment_offset := cursor - view_left
 		canvas.draw_rect(Rect2(Vector2(cursor, 0.0), segment_size), biome.background_color)
 		var has_layers := _draw_background_layers(canvas, biome, cursor, layout_size, distance, view_left, course_distance)
-		if not has_layers:
+		if not has_layers and biome.pixel_palette != null and biome.pixel_palette.backdrop:
+			_draw_pixel_backdrop(canvas, cursor, layout_size, view_left, course_distance, presentation_time_seconds, biome.pixel_palette)
+		elif not has_layers:
 			match biome.biome_id:
 				&"cave": _draw_cave_backdrop(canvas, cursor, layout_size, course_distance, fragment_offset, biome)
 				&"cave_campaign":
@@ -127,7 +137,6 @@ static func draw_backdrop(canvas: CanvasItem, view_left: float, view_size: Vecto
 				&"haunted": pass
 				&"volcano_campaign": pass
 				&"lava": _draw_lava_backdrop(canvas, cursor, layout_size, distance, view_left, course_distance, biome)
-				&"meadow": _draw_meadow_backdrop(canvas, cursor, layout_size, view_left, course_distance, presentation_time_seconds)
 				_: _draw_classic_backdrop(canvas, cursor, layout_size, course_distance * 0.12 + fragment_offset, biome)
 		if biome.biome_id == &"volcano_campaign":
 			_draw_volcano_campaign_backdrop(canvas, cursor, layout_size, course_distance, fragment_offset, presentation_time_seconds)
@@ -433,43 +442,44 @@ static func _draw_atlas_decorations(canvas: CanvasItem, biome: BiomeDefinition, 
 			continue
 		canvas.draw_texture_rect_region(source.texture, destination, atlas_region, biome.surface_tint)
 
-## Daylight meadow for the campaign in the runners' pixel style (shapes snap to
-## a 4 px grid): a banded sky with dithered seams, a block sun, outlined
-## clouds, a pale far ridge, two parallax ranges of stepped hills with a lit
-## crest, and round pixel trees on the near hills. Every shape is a function
-## of course position, so fragments at theme boundaries join without seams.
-const MEADOW_SKY := [Color(0.42, 0.68, 0.92), Color(0.47, 0.72, 0.93), Color(0.53, 0.77, 0.94), Color(0.6, 0.82, 0.95)]
-const MEADOW_PX := 4.0
+## The shared pixel backdrop of pixel-style biomes, in the runners' style
+## (shapes snap to a 4 px grid), coloured by the biome's PixelPalette: a banded
+## sky with dithered seams, a block sun, clouds with a shaded underside, a pale
+## far ridge, two parallax ranges of stepped hills with a lit crest, and round
+## pixel trees on the near hills. Each part can be switched off in the palette.
+## Every shape is a function of course position, so fragments at theme
+## boundaries join without seams.
+const PIXEL_PX := 4.0
 
-static func _draw_meadow_backdrop(canvas: CanvasItem, left: float, size: Vector2, view_left: float, camera_course_distance: float, time_seconds: float) -> void:
+static func _draw_pixel_backdrop(canvas: CanvasItem, left: float, size: Vector2, view_left: float, camera_course_distance: float, time_seconds: float, palette: PixelPalette) -> void:
 	var right := left + size.x
-	var px := MEADOW_PX
+	var px := PIXEL_PX
 	# Sky bands, each seam dithered with a checker row.
 	var band_h := roundf(size.y * 0.12 / px) * px
-	for index in range(MEADOW_SKY.size()):
+	for index in range(palette.sky_bands.size()):
 		var y := float(index) * band_h
-		var h := band_h if index < MEADOW_SKY.size() - 1 else size.y * 0.5
-		canvas.draw_rect(Rect2(Vector2(left, y), Vector2(size.x, h)), MEADOW_SKY[index])
+		var h := band_h if index < palette.sky_bands.size() - 1 else size.y * 0.5
+		canvas.draw_rect(Rect2(Vector2(left, y), Vector2(size.x, h)), palette.sky_bands[index])
 		if index > 0:
 			var x := floorf(left / (px * 2.0)) * px * 2.0
 			while x < right:
 				var cell := Rect2(Vector2(x, y), Vector2(px, px)).intersection(Rect2(left, 0.0, size.x, size.y))
 				if cell.size.x > 0.0:
-					canvas.draw_rect(cell, MEADOW_SKY[index - 1])
+					canvas.draw_rect(cell, palette.sky_bands[index - 1])
 				x += px * 2.0
 	# The sun keeps its place on screen: blocks, with a soft block halo.
 	var sun := Vector2(view_left + 760.0, size.y * 0.27)
-	if sun.x - 40.0 >= left and sun.x + 40.0 <= right:
-		_pixel_disc(canvas, sun, 34.0, px, Color(1.0, 0.95, 0.7, 0.3))
-		_pixel_disc(canvas, sun, 22.0, px, Color(1.0, 0.86, 0.45))
-		_pixel_disc(canvas, sun + Vector2(-4.0, -4.0), 14.0, px, Color(1.0, 0.95, 0.66))
+	if palette.sun and sun.x - 40.0 >= left and sun.x + 40.0 <= right:
+		_pixel_disc(canvas, sun, 34.0, px, palette.sun_halo)
+		_pixel_disc(canvas, sun, 22.0, px, palette.sun_disc)
+		_pixel_disc(canvas, sun + Vector2(-4.0, -4.0), 14.0, px, palette.sun_core)
 	# Clouds: stacked block rows with a shaded underside, slow parallax plus wind.
 	var cloud_parallax := camera_course_distance * 0.06 + time_seconds * 6.0
 	var period := 420.0
 	var first := floori((cloud_parallax + (left - view_left) - 120.0) / period)
 	var last := ceili((cloud_parallax + (right - view_left) + 120.0) / period)
 	var view := Rect2(left, 0.0, size.x, size.y)
-	for cell in range(first, last + 1):
+	for cell in range(first, last + 1 if palette.clouds else first):
 		var landmark := _landmark_for_cell(cell, period, 4211)
 		var cx := roundf((view_left + landmark.x - cloud_parallax) / px) * px
 		var cy := roundf(size.y * (0.20 + landmark.y * 0.16) / px) * px
@@ -477,36 +487,37 @@ static func _draw_meadow_backdrop(canvas: CanvasItem, left: float, size: Vector2
 		if cx + w < left or cx - w > right:
 			continue
 		var parts := [
-			[Rect2(cx - w * 0.5, cy - 8.0, w, 12.0), Color(1.0, 1.0, 1.0, 0.92)],
-			[Rect2(cx - w * 0.5 + px, cy + 4.0, w - px * 2.0, 4.0), Color(0.82, 0.9, 0.97, 0.92)],
-			[Rect2(cx - w * 0.3, cy - 20.0, roundf(w * 0.45 / px) * px, 12.0), Color(1.0, 1.0, 1.0, 0.92)],
-			[Rect2(cx - w * 0.05, cy - 28.0, roundf(w * 0.3 / px) * px, 8.0), Color(1.0, 1.0, 1.0, 0.92)],
+			[Rect2(cx - w * 0.5, cy - 8.0, w, 12.0), palette.cloud],
+			[Rect2(cx - w * 0.5 + px, cy + 4.0, w - px * 2.0, 4.0), palette.cloud_shade],
+			[Rect2(cx - w * 0.3, cy - 20.0, roundf(w * 0.45 / px) * px, 12.0), palette.cloud],
+			[Rect2(cx - w * 0.05, cy - 28.0, roundf(w * 0.3 / px) * px, 8.0), palette.cloud],
 		]
 		for part in parts:
 			var clipped: Rect2 = (part[0] as Rect2).intersection(view)
 			if clipped.size.x > 0.0:
 				canvas.draw_rect(clipped, part[1])
 	# Far ridge, then two hill ranges; trees stand on the near range.
-	_draw_meadow_hills(canvas, left, size, view_left, camera_course_distance * 0.05, size.y * 0.46, 40.0, 0.006, Color(0.66, 0.82, 0.82), Color(0.74, 0.88, 0.86))
-	_draw_meadow_hills(canvas, left, size, view_left, camera_course_distance * 0.10, size.y * 0.54, 34.0, 0.011, Color(0.55, 0.77, 0.6), Color(0.64, 0.84, 0.64))
+	_draw_pixel_hills(canvas, left, size, view_left, camera_course_distance * 0.05, size.y * 0.46, 40.0, 0.006, palette.ridge, palette.ridge_crest)
+	_draw_pixel_hills(canvas, left, size, view_left, camera_course_distance * 0.10, size.y * 0.54, 34.0, 0.011, palette.hills_far, palette.hills_far_crest)
 	var near_offset := camera_course_distance * 0.22
 	var near_base := size.y * 0.66
-	_draw_meadow_trees(canvas, left, size, view_left, near_offset, near_base, 28.0, 0.017)
-	_draw_meadow_hills(canvas, left, size, view_left, near_offset, near_base, 28.0, 0.017, Color(0.4, 0.66, 0.42), Color(0.5, 0.75, 0.46))
+	if palette.trees:
+		_draw_pixel_trees(canvas, left, size, view_left, near_offset, near_base, 28.0, 0.017, palette)
+	_draw_pixel_hills(canvas, left, size, view_left, near_offset, near_base, 28.0, 0.017, palette.hills_near, palette.hills_near_crest)
 
-static func _meadow_hill_y(u: float, base_y: float, amplitude: float, frequency: float) -> float:
+static func _pixel_hill_y(u: float, base_y: float, amplitude: float, frequency: float) -> float:
 	return base_y - amplitude * (0.6 * sin(u * frequency) + 0.4 * sin(u * frequency * 2.3 + 1.7))
 
 ## A hill range as stepped columns (4 px wide, heights snapped to 4 px) with a
 ## lighter crest row.
-static func _draw_meadow_hills(canvas: CanvasItem, left: float, size: Vector2, view_left: float, parallax_offset: float, base_y: float, amplitude: float, frequency: float, color: Color, crest := Color.TRANSPARENT) -> void:
-	var px := MEADOW_PX
+static func _draw_pixel_hills(canvas: CanvasItem, left: float, size: Vector2, view_left: float, parallax_offset: float, base_y: float, amplitude: float, frequency: float, color: Color, crest := Color.TRANSPARENT) -> void:
+	var px := PIXEL_PX
 	# Columns as rects (cheap to batch; no polygon triangulation per frame).
 	var x := floorf(left / px) * px
 	var right := left + size.x
 	while x < right:
 		var u := parallax_offset + (x - view_left)
-		var y := roundf(_meadow_hill_y(u, base_y, amplitude, frequency) / px) * px
+		var y := roundf(_pixel_hill_y(u, base_y, amplitude, frequency) / px) * px
 		var x0 := maxf(x, left)
 		var w := minf(x + px, right) - x0
 		if w > 0.0:
@@ -517,8 +528,8 @@ static func _draw_meadow_hills(canvas: CanvasItem, left: float, size: Vector2, v
 
 ## Round pixel trees on the near hills: a trunk and a canopy of 4 px blocks
 ## with a dark rim and a lit top-left, rooted on the hill line behind them.
-static func _draw_meadow_trees(canvas: CanvasItem, left: float, size: Vector2, view_left: float, parallax_offset: float, base_y: float, amplitude: float, frequency: float) -> void:
-	var px := MEADOW_PX
+static func _draw_pixel_trees(canvas: CanvasItem, left: float, size: Vector2, view_left: float, parallax_offset: float, base_y: float, amplitude: float, frequency: float, palette: PixelPalette) -> void:
+	var px := PIXEL_PX
 	var period := 260.0
 	var first := floori((parallax_offset + (left - view_left) - 60.0) / period)
 	var last := ceili((parallax_offset + (left + size.x - view_left) + 60.0) / period)
@@ -530,16 +541,16 @@ static func _draw_meadow_trees(canvas: CanvasItem, left: float, size: Vector2, v
 		var x := roundf((view_left + u - parallax_offset) / px) * px
 		if x + 24.0 < left or x - 24.0 > left + size.x:
 			continue
-		var ground := roundf(_meadow_hill_y(u, base_y, amplitude, frequency) / px) * px + px * 2.0
+		var ground := roundf(_pixel_hill_y(u, base_y, amplitude, frequency) / px) * px + px * 2.0
 		var radius := 12.0 + roundf(landmark.y * 3.0) * px
 		var crown := Vector2(x, ground - 16.0 - radius)
 		var view := Rect2(left, 0.0, size.x, size.y)
 		var trunk := Rect2(Vector2(x - px * 0.5, crown.y), Vector2(px, ground - crown.y)).intersection(view)
 		if trunk.size.x > 0.0:
-			canvas.draw_rect(trunk, Color(0.36, 0.25, 0.18))
-		_pixel_disc(canvas, crown, radius + px, px, Color(0.2, 0.42, 0.26), view)
-		_pixel_disc(canvas, crown, radius, px, Color(0.3, 0.56, 0.32), view)
-		_pixel_disc(canvas, crown + Vector2(-px, -px), radius * 0.55, px, Color(0.42, 0.68, 0.38), view)
+			canvas.draw_rect(trunk, palette.tree_trunk)
+		_pixel_disc(canvas, crown, radius + px, px, palette.tree_rim, view)
+		_pixel_disc(canvas, crown, radius, px, palette.tree_canopy, view)
+		_pixel_disc(canvas, crown + Vector2(-px, -px), radius * 0.55, px, palette.tree_light, view)
 
 ## A filled circle drawn as px-sized blocks, optionally clipped to `clip`.
 static func _pixel_disc(canvas: CanvasItem, center: Vector2, radius: float, px: float, color: Color, clip := Rect2()) -> void:

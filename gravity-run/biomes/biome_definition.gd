@@ -20,6 +20,9 @@ extends Resource
 @export var fill_texture_scale: float = 2.0
 ## The thin coloured line along the surface; off when the tiles draw their own.
 @export var draw_edge_line := true
+## The pixel style (shared pixel art for ground, hazards and backdrop) and its
+## colours. Null: the biome draws itself the classic way.
+@export var pixel_palette: PixelPalette
 @export var flip_ceiling_tiles := true
 @export var palette_row: int = 0
 @export var floor_surface_tiles: Array[Vector2i] = []

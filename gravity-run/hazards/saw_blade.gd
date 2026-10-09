@@ -90,7 +90,7 @@ func _draw() -> void:
 	if not visible:
 		return
 	var radius := Model.radius_for_state(state)
-	if BiomeRenderer.locked_biome_id() == &"meadow":
+	if BiomeRenderer.locked_pixel_palette() != null:
 		_draw_pixel_saw(radius)
 		return
 	if Model.is_embedded_variant(event):
@@ -215,14 +215,14 @@ func _surface_clip_distance(local_point: Vector2, visible_below_surface: bool) -
 	var point_y := global_position.y + local_point.y
 	return point_y - surface_y if visible_below_surface else surface_y - point_y
 
-## The meadow's pixel-art saw (MeadowPixelArt): a textured square that turns
+## The pixel-art saw (PixelHazardArt) of a pixel-style biome: a square that turns
 ## with the roll, clipped at the support line like the vector embedded saw.
 func _draw_pixel_saw(radius: float) -> void:
 	var embedded := Model.is_embedded_variant(event) and not bool(state.get("falling", false))
 	var angle := _render_roll_angle if Model.is_embedded_variant(event) else 0.0
-	var art_radius := int(round(radius / MeadowPixelArt.ART_SCALE))
-	var texture := MeadowPixelArt.saw_texture(radius)
-	var size := float(MeadowPixelArt.saw_side(art_radius)) * MeadowPixelArt.ART_SCALE
+	var art_radius := int(round(radius / PixelHazardArt.ART_SCALE))
+	var texture := PixelHazardArt.saw_texture(PixelHazardArt.palette(), radius)
+	var size := float(PixelHazardArt.saw_side(art_radius)) * PixelHazardArt.ART_SCALE
 	var half := size * 0.5
 	var square := PackedVector2Array([Vector2(-half, -half), Vector2(half, -half), Vector2(half, half), Vector2(-half, half)])
 	if embedded:
