@@ -2095,3 +2095,12 @@ msgstr "Trä"
 
 msgid "Slate"
 msgstr "Skiffer"
+
+msgid "Text: %s"
+msgstr "Text: %s"
+
+msgid "Pixel font everywhere"
+msgstr "Pixelfont överallt"
+
+msgid "Pixel font on headings"
+msgstr "Pixelfont på rubriker"

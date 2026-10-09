@@ -59,17 +59,35 @@ var _cache: Dictionary = {}
 var _themes: Dictionary = {}
 
 func _ready() -> void:
+	_plain_font()
 	var config := ConfigFile.new()
 	if config.load(SETTINGS_PATH) == OK:
 		var saved := str(config.get_value("ui", "style", "wood"))
 		if saved in STYLES:
 			style = saved
+	var saved_font := str(config.get_value("ui", "font", "mixed")) if config.load(SETTINGS_PATH) == OK else "mixed"
+	if saved_font in FONT_MODES:
+		font_mode = saved_font
 	# Tools can force a style: -- ui-style=slate
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("ui-style=") and arg.substr(9) in STYLES:
 			style = arg.substr(9)
 	apply()
 	get_tree().node_added.connect(_on_node_added)
+
+## Switches the font mode ("mixed" or "pixel"), saves it and re-themes.
+func set_font_mode(value: String) -> void:
+	if not value in FONT_MODES or value == font_mode:
+		return
+	font_mode = value
+	var config := ConfigFile.new()
+	config.load(SETTINGS_PATH)
+	config.set_value("ui", "font", font_mode)
+	config.save(SETTINGS_PATH)
+	_font = null
+	_themes.clear()
+	apply()
+	style_changed.emit(style)
 
 ## Switches the style, saves it and re-themes the whole game.
 func set_style(value: String) -> void:
@@ -112,7 +130,16 @@ func color(key: String) -> Color:
 ## everywhere, smoothed), "pixel" (Pixelify everywhere, unsmoothed) or "plain".
 var font_mode := "mixed"
 const HEADING_SIZE := 20
+const FONT_MODES := ["mixed", "pixel"]
 var _heading_font: FontFile
+## The game's normal font, remembered before the pixel theme replaces it.
+var _original_font: Font
+
+func _plain_font() -> Font:
+	if _original_font == null:
+		var project := ThemeDB.get_project_theme()
+		_original_font = project.default_font if project != null and project.default_font != null else ThemeDB.fallback_font
+	return _original_font
 
 func font() -> Font:
 	if _font == null:
@@ -120,7 +147,7 @@ func font() -> Font:
 			if arg.begins_with("ui-font="):
 				font_mode = arg.substr(8)
 		if font_mode == "plain" or font_mode == "mixed":
-			_font = ThemeDB.get_project_theme().default_font if ThemeDB.get_project_theme() != null and ThemeDB.get_project_theme().default_font != null else ThemeDB.fallback_font
+			_font = _plain_font()
 			return _font
 		_font = FontFile.new()
 		_font.load_dynamic_font(FONT_PATH)
@@ -278,8 +305,9 @@ func _wrap(image: Image, repeat: bool) -> Texture2D:
 
 ## The whole Theme for the current style (cached per style).
 func theme() -> Theme:
-	if _themes.has(style):
-		return _themes[style]
+	var theme_key := style + "|" + font_mode
+	if _themes.has(theme_key):
+		return _themes[theme_key]
 	var t := Theme.new()
 	t.default_font = font()
 	t.default_font_size = 16
@@ -320,7 +348,7 @@ func theme() -> Theme:
 		t.set_stylebox("grabber", kind, panel_box("button", Vector2(3, 3)))
 		t.set_stylebox("grabber_highlight", kind, panel_box("button_hover", Vector2(3, 3)))
 		t.set_stylebox("grabber_pressed", kind, panel_box("button_pressed", Vector2(3, 3)))
-	_themes[style] = t
+	_themes[theme_key] = t
 	return t
 
 ## Keyboard focus: the frame drawn again in the accent colour around the control.

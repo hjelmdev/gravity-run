@@ -1595,6 +1595,9 @@ func _show_options_menu() -> void:
 	style_next.pressed.connect(_cycle_ui_style)
 	style_row.add_child(style_next)
 	layout.add_child(style_row)
+	var font_button := _make_button(tr("Text: %s") % (tr("Pixel font everywhere") if PixelUi.font_mode == "pixel" else tr("Pixel font on headings")))
+	font_button.pressed.connect(_cycle_font_mode)
+	layout.add_child(font_button)
 
 	var back_button := _make_button(tr("Back"))
 	back_button.pressed.connect(_show_main_menu)
@@ -1607,6 +1610,10 @@ func _make_language_button(symbol: String, direction: int) -> Button:
 	button.custom_minimum_size = Vector2(54.0, 48.0)
 	button.pressed.connect(_cycle_language.bind(direction))
 	return button
+
+func _cycle_font_mode() -> void:
+	PixelUi.set_font_mode("pixel" if PixelUi.font_mode == "mixed" else "mixed")
+	_show_options_menu()
 
 func _cycle_ui_style() -> void:
 	PixelUi.set_style("slate" if PixelUi.style == "wood" else "wood")
