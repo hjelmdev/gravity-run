@@ -1,3 +1,12 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# Test and export logs, local build artifacts (kept in logs/, which Godot skips).
+logs/
+*.log
+*.err
+.codex-*/
+*.zip
+*.tar
+*.pck

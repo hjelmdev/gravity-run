@@ -62,6 +62,12 @@ const CampaignResultPanelScript := preload("res://campaign/campaign_result_panel
 const CampaignBannerScript := preload("res://campaign/campaign_banner.gd")
 ## Ticks the runner keeps running past the finish line before the result.
 const CAMPAIGN_RUNOUT_TICKS := 75
+## Singleplayer catches up at most this many physics ticks after a hitch (Godot
+## default 8), so a hitch is a short slowdown instead of several frozen frames
+## in a row. Multiplayer steps from its own wall clock and is not affected.
+const SP_MAX_PHYSICS_STEPS := 3
+const SHADER_WARMUP_SCRIPT := preload("res://systems/shader_warmup.gd")
+var _engine_max_physics_steps := 8
 ## Singleplayer pickup reach. The pixel runners are drawn wider than the shared
 ## 34x44 hitbox, so a coin the art visibly runs through must still count.
 ## Multiplayer validates coins on its own and is unaffected.
@@ -157,6 +163,9 @@ var _render_interpolation_fraction := 0.0
 const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_export.gd")
 
 func _ready() -> void:
+	add_child(SHADER_WARMUP_SCRIPT.new())
+	_engine_max_physics_steps = Engine.max_physics_steps_per_frame
+	Engine.max_physics_steps_per_frame = SP_MAX_PHYSICS_STEPS
 	_rock_warning_accessibility_button = Button.new()
 	_rock_warning_accessibility_button.name = "RockWarningAccessibility"
 	_rock_warning_accessibility_button.text = ""
@@ -1934,6 +1943,9 @@ func _player_hits_obstacle(obstacle: Node2D) -> bool:
 		return bool(obstacle.call("intersects_rect", player_rect))
 	var obstacle_rect: Rect2 = obstacle.call("get_hitbox_rect")
 	return player_rect.intersects(obstacle_rect)
+
+func _exit_tree() -> void:
+	Engine.max_physics_steps_per_frame = _engine_max_physics_steps
 
 ## True when the stage's biome key guards against a hazard touching the runner
 ## (a falling rock for the ice picks, lava for the heat shield).
