@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="BiomeDefinition" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://biomes/biome_definition.gd" id="1"]
+[ext_resource type="TileSet" path="res://assets/biomes/desert_campaign/desert_campaign_tileset.tres" id="2"]
+[ext_resource type="Texture2D" path="res://assets/biomes/desert_campaign/desert_campaign_dirt.png" id="3"]
+[ext_resource type="Resource" path="res://assets/biomes/desert_campaign/desert_campaign_palette.tres" id="4"]
+
+[resource]
+script = ExtResource("1")
+biome_id = &"desert_campaign"
+display_name = "Öknen"
+tile_set = ExtResource("2")
+tile_world_size = Vector2i(64, 40)
+tile_rise = 8
+pixel_art = true
+terrain_fill_texture = ExtResource("3")
+fill_texture_scale = 2.0
+draw_edge_line = false
+pixel_palette = ExtResource("4")
+floor_surface_tiles = Array[Vector2i]([Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0), Vector2i(4, 0), Vector2i(5, 0), Vector2i(6, 0), Vector2i(7, 0)])
+ceiling_surface_tiles = Array[Vector2i]([Vector2i(2, 0), Vector2i(5, 0), Vector2i(0, 0), Vector2i(7, 0), Vector2i(1, 0), Vector2i(3, 0), Vector2i(6, 0), Vector2i(4, 0)])
+background_color = Color(0.86, 0.88, 0.86, 1)
+accent_color = Color(1, 0.78, 0.4, 1)
+terrain_fill_color = Color(0.84, 0.6, 0.37, 1)
+terrain_edge_color = Color(0.33, 0.2, 0.12, 1)

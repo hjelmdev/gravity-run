@@ -17,6 +17,7 @@ const HAUNTED_MAP_NODES := [Vector2(36, 120), Vector2(78, 92), Vector2(118, 124)
 const LAVA_MAP_NODES := [Vector2(36, 96), Vector2(76, 128), Vector2(118, 100), Vector2(158, 132), Vector2(200, 104), Vector2(240, 134), Vector2(286, 104)]
 const FROST_MAP_NODES := [Vector2(34, 126), Vector2(76, 100), Vector2(118, 128), Vector2(160, 96), Vector2(202, 124), Vector2(244, 94), Vector2(286, 70)]
 const CLOUD_MAP_NODES := [Vector2(36, 90), Vector2(78, 118), Vector2(120, 88), Vector2(162, 116), Vector2(204, 86), Vector2(246, 112), Vector2(286, 80)]
+const DESERT_MAP_NODES := [Vector2(36, 110), Vector2(78, 132), Vector2(120, 104), Vector2(162, 130), Vector2(204, 100), Vector2(246, 126), Vector2(286, 96)]
 
 ## Ängen. Each stage adds one hazard family; 1-6 is the exam with everything.
 ## Lengths grow from 30 s to 45 s at the base 500 px/s.
@@ -342,9 +343,65 @@ const CLOUD_STAGES := [
 	},
 ]
 
+## Öknen. Generated with the classic mix, drawn as dunes under a hot sky by the
+## desert palette: barrels roll as tumbleweeds, spikes are cacti. Sandfalls
+## and sandstorms are scripted features.
+const DESERT_STAGES := [
+	{
+		"id": &"7-1", "title": "Dune Sea", "intro": "Tumbleweeds roll across the dunes",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade"], "new": [],
+		"weights": {"barrel_chain": 2.0},
+		"density": 1.65, "margin": 0.95, "length": 18000.0,
+		"seed": 7110,
+		"stars": [Vector2(4802.63, 362.00), Vector2(9357.37, 114.00), Vector2(14328.61, 114.00)],
+	},
+	{
+		"id": &"7-2", "title": "Cactus Canyon", "intro": "Mind the spines",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade"], "new": [],
+		"weights": {"spike_group": 2.0},
+		"density": 1.72, "margin": 0.92, "length": 19500.0,
+		"seed": 7214,
+		"stars": [Vector2(4874.48, 354.00), Vector2(9742.12, 114.00), Vector2(15434.84, 296.00)],
+	},
+	{
+		"id": &"7-3", "title": "Sandfall", "intro": "Sand pours from the cliffs",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade"], "new": [],
+		"density": 1.4, "margin": 1.0, "length": 21000.0,
+		"seed": 7308,
+		"stars": [Vector2(5613.22, 254.00), Vector2(11921.35, 254.00), Vector2(16757.46, 254.00)],
+		"features": [{"kind": "sandfall", "at": 13690.0, "count": 3}, {"kind": "sandfall", "at": 15930.0, "count": 3}],
+		"new_features": ["sandfall"],
+	},
+	{
+		"id": &"7-4", "title": "Sandstorm", "intro": "The wind lifts the desert",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade"], "new": [],
+		"density": 1.85, "margin": 0.87, "length": 22500.0,
+		"seed": 7404,
+		"stars": [Vector2(5795.16, 318.00), Vector2(11880.32, 114.00), Vector2(18432.71, 254.00)],
+		"features": [{"kind": "sandstorm", "at": 5850.0, "length": 3400.0}, {"kind": "sandstorm", "at": 14400.0, "length": 3800.0}],
+	},
+	{
+		"id": &"7-5", "title": "Mirage", "intro": "Is the oasis real?",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade"], "new": [],
+		"weights": {"saw_blade": 1.5, "terrain_slope": 1.5},
+		"density": 1.92, "margin": 0.84, "length": 24000.0,
+		"seed": 7506,
+		"stars": [Vector2(6143.96, 74.00), Vector2(12215.99, 74.00), Vector2(19849.14, 254.00)],
+		"features": [{"kind": "sandfall", "at": 6740.0, "count": 3}, {"kind": "sandstorm", "at": 12480.0, "length": 2600.0}, {"kind": "sandfall", "at": 18700.0, "count": 3}],
+	},
+	{
+		"id": &"7-6", "title": "Desert Exam", "intro": "Everything the desert has taught you",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade"], "new": [],
+		"density": 2.0, "margin": 0.8, "length": 25000.0,
+		"seed": 7610,
+		"stars": [Vector2(6155.90, 114.00), Vector2(13645.39, 114.00), Vector2(18816.44, 114.00)],
+		"features": [{"kind": "sandfall", "at": 7630.0, "count": 3}, {"kind": "sandstorm", "at": 11500.0, "length": 3000.0}, {"kind": "sandfall", "at": 16620.0, "count": 3}, {"kind": "sandfall", "at": 21550.0, "count": 3}],
+	},
+]
+
 ## Stage tables per world: [world_id, generation biome, stages].
 static func stage_tables() -> Array:
-	return [[&"meadow", &"classic", MEADOW_STAGES], [&"cave", &"cave", CAVE_STAGES], [&"haunted", &"haunted", HAUNTED_STAGES], [&"volcano", &"lava", LAVA_STAGES], [&"frost", &"cave", FROST_STAGES], [&"clouds", &"classic", CLOUD_STAGES]]
+	return [[&"meadow", &"classic", MEADOW_STAGES], [&"cave", &"cave", CAVE_STAGES], [&"haunted", &"haunted", HAUNTED_STAGES], [&"volcano", &"lava", LAVA_STAGES], [&"frost", &"cave", FROST_STAGES], [&"clouds", &"classic", CLOUD_STAGES], [&"desert", &"classic", DESERT_STAGES]]
 
 static var _worlds: Array[CampaignWorld] = []
 
@@ -426,6 +483,14 @@ static func _build_worlds() -> Array[CampaignWorld]:
 	for level in clouds.levels:
 		level.presentation_biome = &"clouds_campaign"
 	result.append(clouds)
+	var desert := _make_world(&"desert", 7, "The Desert", &"classic", "map_desert", DESERT_MAP_NODES, Color("ffd36a"))
+	_add_stages(desert, DESERT_STAGES)
+	if not desert.levels.is_empty():
+		desert.levels.append(_make_boss(&"desert", &"classic", desert.levels.size() + 1, &"7-B", "Sandmasken", "Boss: the worm under the dunes", &"sandworm"))
+	# Presentation only; encounters use the classic mix.
+	for level in desert.levels:
+		level.presentation_biome = &"desert_campaign"
+	result.append(desert)
 	return result
 
 ## Adds a world's stages. A stage only joins once the level tool has frozen

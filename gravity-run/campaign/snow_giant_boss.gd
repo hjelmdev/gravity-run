@@ -28,16 +28,25 @@ const GIANT_PHASES := [
 	},
 ]
 
+## The phase table (a subclass with other attacks overrides this).
+func _phases() -> Array:
+	return GIANT_PHASES
+
+## The scripted rock feature its "avalanche" rows drop.
+func _rock_feature() -> String:
+	return "avalanche"
+
 func get_phase_title() -> String:
-	return str(GIANT_PHASES[mini(phase, GIANT_PHASES.size() - 1)].title)
+	var phases := _phases()
+	return str(phases[mini(phase, phases.size() - 1)].title)
 
 func _schedule_phase(anchor: float) -> void:
-	var spec: Dictionary = GIANT_PHASES[phase]
+	var spec: Dictionary = _phases()[phase]
 	for attack in spec.attacks:
 		var distance := anchor + float(attack[0])
 		var events: Array[Dictionary] = []
 		if str(attack[1]) == "avalanche":
-			for event in CampaignFeatures.events_of({"kind": "avalanche", "at": distance, "count": int(attack[2])}):
+			for event in CampaignFeatures.events_of({"kind": _rock_feature(), "at": distance, "count": int(attack[2])}):
 				event["boss_attack"] = true
 				events.append(event)
 		else:

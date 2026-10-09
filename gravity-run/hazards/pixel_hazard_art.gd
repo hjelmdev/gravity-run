@@ -616,7 +616,8 @@ static func make_ice_spike(w: int, h: int, ceiling: bool) -> Image:
 	return image
 
 ## A spiny cactus in the spike's place: a rounded column with two arms, ribs
-## of light and dark green, pale spines along the edges; outlined.
+## of light and dark green, pale spines along the edges; outlined. Drawn in
+## the palette's tree colours, like the cacti of the backdrop.
 static func make_cactus(w: int, h: int, ceiling: bool) -> Image:
 	var image := _blank(w, h)
 	var cx := float(w) * 0.5
@@ -642,12 +643,12 @@ static func make_cactus(w: int, h: int, ceiling: bool) -> Image:
 				inside = false
 			if not inside:
 				continue
-			var color := pal.growth
+			var color := pal.tree_canopy
 			var rib := posmod(x - int(cx), 3)
 			if rib == 0:
-				color = pal.growth_dark
+				color = pal.tree_canopy.darkened(0.25)
 			elif p.x < cx - col * 0.4 and absf(p.x - cx) <= col:
-				color = pal.surface_hi
+				color = pal.tree_light
 			image.set_pixel(x, y, color)
 	_outline(image)
 	# Spines just outside the outline, every few pixels.

@@ -30,6 +30,8 @@ class_name CampaignFeatures
 ##   lightning  a storm cloud and sparks warn a lane, then lightning strikes it
 ##              ("side": floor|ceiling). Same timing and hitbox as the ghost hand.
 ##   gust       presentation only: wind streaks blowing across the screen.
+##   sandfall   a cave-in in the desert: sandstone rocks under pouring sand.
+##   sandstorm  presentation only: sand streaks racing across the screen.
 
 ## True for kinds that can kill: they need a quiet stretch of course.
 const KINDS := {
@@ -45,6 +47,8 @@ const KINDS := {
 	"snowstorm": {"hazardous": false, "default_length": 3000.0},
 	"lightning": {"hazardous": true, "before": 360.0, "after": 70.0, "margin": 30.0},
 	"gust": {"hazardous": false, "default_length": 3000.0},
+	"sandfall": {"hazardous": true, "before": 420.0, "after": 140.0, "default_count": 3},
+	"sandstorm": {"hazardous": false, "default_length": 3000.0},
 }
 
 ## Falling rocks of a cave-in: spacing, size and timing. The rocks use the
@@ -94,7 +98,7 @@ const FINISH_MARGIN := 240.0
 ## along the other surface. main.gd applies ROCK_MIN_LANE to feature rocks
 ## (generated rocks keep their own 260 rule).
 const ROCK_MIN_LANE := 200.0
-const MIN_LANE_CLEARANCE := {"cave_in": ROCK_MIN_LANE, "avalanche": ROCK_MIN_LANE, "bat_swarm": 200.0, "ghost_hand": 200.0, "ember_bomb": 200.0, "lightning": 200.0}
+const MIN_LANE_CLEARANCE := {"cave_in": ROCK_MIN_LANE, "avalanche": ROCK_MIN_LANE, "sandfall": ROCK_MIN_LANE, "bat_swarm": 200.0, "ghost_hand": 200.0, "ember_bomb": 200.0, "lightning": 200.0}
 
 static func is_hazardous(kind: String) -> bool:
 	return bool((KINDS.get(kind, {}) as Dictionary).get("hazardous", false))
@@ -115,14 +119,14 @@ static func span_of(feature: Dictionary) -> Vector2:
 	var at := float(feature.get("at", 0.0))
 	var def: Dictionary = KINDS.get(kind, {})
 	match kind:
-		"cave_in", "avalanche":
+		"cave_in", "avalanche", "sandfall":
 			var last := at + float(rock_count(feature) - 1) * ROCK_SPACING
 			return Vector2(at - float(def.before), last + ROCK_WIDTH * 0.5 + float(def.after))
 		"bat_swarm":
 			return Vector2(at - float(def.before), at + BAT_WIDTH * 0.5 + float(def.after))
 		"ghost_hand", "ember_bomb", "lightning":
 			return Vector2(at - float(def.before), at + HAND_WIDTH * 0.5 + float(def.after))
-		"darkness", "wisp", "fog", "ash", "snowstorm", "gust":
+		"darkness", "wisp", "fog", "ash", "snowstorm", "gust", "sandstorm":
 			return Vector2(at, at + length_of(feature))
 	return Vector2(at, at)
 
@@ -130,7 +134,7 @@ static func span_of(feature: Dictionary) -> Vector2:
 static func critical_range_of(feature: Dictionary) -> Vector2:
 	var at := float(feature.get("at", 0.0))
 	match str(feature.get("kind", "")):
-		"cave_in", "avalanche":
+		"cave_in", "avalanche", "sandfall":
 			return Vector2(at - 60.0, at + float(rock_count(feature) - 1) * ROCK_SPACING + 60.0)
 		"bat_swarm":
 			return Vector2(at - 300.0, at + BAT_WIDTH * 0.5)
@@ -145,7 +149,7 @@ static func events_of(feature: Dictionary) -> Array[Dictionary]:
 	var kind := str(feature.get("kind", ""))
 	var at := float(feature.get("at", 0.0))
 	match kind:
-		"cave_in", "avalanche":
+		"cave_in", "avalanche", "sandfall":
 			for index in range(rock_count(feature)):
 				result.append({
 					"kind": "rock", "id": "falling_rock", "feature": kind,
@@ -192,7 +196,7 @@ static func required_side_at(feature: Dictionary, course_distance: float) -> int
 	var kind := str(feature.get("kind", ""))
 	var at := float(feature.get("at", 0.0))
 	match kind:
-		"cave_in", "avalanche":
+		"cave_in", "avalanche", "sandfall":
 			var last := at + float(rock_count(feature) - 1) * ROCK_SPACING
 			if course_distance >= at - 400.0 and course_distance <= last + ROCK_WIDTH * 0.5 + 90.0:
 				return -1

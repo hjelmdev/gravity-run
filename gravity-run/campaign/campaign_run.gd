@@ -21,6 +21,7 @@ const RullarenViewScript := preload("res://campaign/rullaren_view.gd")
 const MagmaWormViewScript := preload("res://campaign/magma_worm_view.gd")
 const SnowGiantViewScript := preload("res://campaign/snow_giant_view.gd")
 const ThunderbirdViewScript := preload("res://campaign/thunderbird_view.gd")
+const SandwormViewScript := preload("res://campaign/sandworm_view.gd")
 const StalactiteViewScript := preload("res://campaign/stalactite_view.gd")
 const GiantIcicleScript := preload("res://campaign/giant_icicle.gd")
 const GhostKingViewScript := preload("res://campaign/ghost_king_view.gd")
@@ -116,6 +117,13 @@ func setup(stage: CampaignLevel) -> void:
 		_boss_view.name = "Thunderbird"
 		add_child(_boss_view)
 		_add_plate_for_current()
+	elif level.is_boss() and level.boss_id == &"sandworm":
+		boss = SandwormBoss.new()
+		boss.reset()
+		_boss_view = SandwormViewScript.new() as Node2D
+		_boss_view.name = "Sandworm"
+		add_child(_boss_view)
+		_add_plate_for_current()
 	elif level.is_boss() and level.boss_id == &"magma_worm":
 		boss = MagmaWormBoss.new()
 		boss.reset()
@@ -160,10 +168,10 @@ func _setup_features() -> void:
 			wisp.visible = false
 			add_child(wisp)
 			_wisps.append({"feature": feature, "node": wisp, "collected": false, "y": 0.0, "x": 0.0, "previous": Vector2(INF, INF), "position": Vector2(INF, INF)})
-		elif kind == "cave_in" or kind == "avalanche":
+		elif kind in ["cave_in", "avalanche", "sandfall"]:
 			var dust := CaveInDustScript.new() as Node2D
 			dust.name = "CaveInDust%d" % _dust_lines.size()
-			dust.set("snowy", kind == "avalanche")
+			dust.set("style", {"avalanche": "snow", "sandfall": "sand"}.get(kind, "rock"))
 			var first := COURSE_START_X + float(feature.at)
 			var last := first + float(CampaignFeatures.rock_count(feature) - 1) * CampaignFeatures.ROCK_SPACING
 			dust.call("configure", first - 50.0, last + 50.0)
@@ -351,6 +359,7 @@ static func hazard_tip(hazard_id: String) -> String:
 		"cave_icicle": return "It cracks loose and falls: leave the floor below it"
 		"cave_in": return "Dust in the ceiling: the rocks come down, so run on the ceiling"
 		"avalanche": return "Snow trickles down: the avalanche hits the floor, so run on the ceiling"
+		"sandfall": return "Sand pours from above: rocks come down with it, so run on the ceiling"
 		"ghost_hand": return "A purple glow in one lane: a hand reaches out, so take the other"
 		"bat_swarm": return "They sweep along one side: be on the other"
 		"haunted_ghost": return "Ghosts float through one side: take the other"
@@ -376,6 +385,7 @@ static func hazard_display_name(hazard_id: String) -> String:
 		"cave_icicle": return "icicles"
 		"cave_in": return "cave-in"
 		"avalanche": return "avalanche"
+		"sandfall": return "sandfall"
 		"ghost_hand": return "ghost hands"
 		"bat_swarm": return "bat swarm"
 		"haunted_ghost": return "floating ghosts"
@@ -456,13 +466,13 @@ func _tick_wisps(previous_rect: Rect2, final_rect: Rect2, lethal_fraction: float
 func _cue_features(course_distance: float) -> void:
 	for feature in level.features:
 		var kind := str(feature.get("kind", ""))
-		if kind != "cave_in" and kind != "avalanche":
+		if not kind in ["cave_in", "avalanche", "sandfall"]:
 			continue
 		var at := float(feature.at)
 		var key := "%s|%.0f" % [kind, at]
 		if course_distance >= at - CampaignFeatures.ROCK_TRIGGER_LEAD and course_distance < at + 400.0 and not _cued_features.has(key):
 			_cued_features[key] = true
-			feature_cue.emit("cave_in_rumble", key)
+			feature_cue.emit("sand_burst" if kind == "sandfall" else "cave_in_rumble", key)
 
 func _tick_boss(course_distance: float, gravity_direction: int, grounded: bool) -> void:
 	var rullaren := boss as RullarenBoss
@@ -477,6 +487,8 @@ func _tick_boss(course_distance: float, gravity_direction: int, grounded: bool) 
 			_boss_view.call("notify_hit", rullaren.hp)
 			if boss is ThunderbirdBoss:
 				SfxController.play_event("thunderbird_screech", "campaign|bird_screech|%d" % rullaren.hp, true)
+			elif boss is SandwormBoss:
+				SfxController.play_event("sand_burst", "campaign|sandworm_hit|%d" % rullaren.hp, true)
 			elif boss is MagmaWormBoss or boss is SnowGiantBoss:
 				SfxController.play_event("magma_roar", "campaign|worm_roar|%d" % rullaren.hp, true)
 			boss_changed.emit(rullaren.hp, RullarenBoss.MAX_HP)
@@ -492,6 +504,8 @@ func _tick_boss(course_distance: float, gravity_direction: int, grounded: bool) 
 			_place_finish_line(COURSE_START_X + rullaren.finish_distance)
 
 func _boss_hit_line() -> String:
+	if boss is SandwormBoss:
+		return tr("The worm thrashes in the sand")
 	if boss is MagmaWormBoss:
 		return tr("The worm grows angrier")
 	if boss is SnowGiantBoss:
@@ -501,6 +515,8 @@ func _boss_hit_line() -> String:
 	return tr("Rullaren speeds up")
 
 func _boss_beaten_line() -> String:
+	if boss is SandwormBoss:
+		return tr("Sandmasken is beaten!")
 	if boss is MagmaWormBoss:
 		return tr("Magmaormen is beaten!")
 	if boss is SnowGiantBoss:

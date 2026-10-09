@@ -496,6 +496,9 @@ func _draw_mini_boss(origin: Vector2) -> void:
 	if boss != null and boss.boss_id == &"thunderbird":
 		_draw_mini_thunderbird(origin)
 		return
+	if boss != null and boss.boss_id == &"sandworm":
+		_draw_mini_sandworm(origin)
+		return
 	# A tiny Rullaren on its stone: body, stack, eyes and a barrel.
 	var body := Color("8c5a46")
 	_px(origin, -6, -8, 13, 9, OUTLINE)
@@ -582,3 +585,15 @@ func _draw_mini_thunderbird(origin: Vector2) -> void:
 	_px(origin, 4, -12 + flap * 3, 4, 1, Color("ffe45c"))
 	if fmod(_time, 1.2) < 0.2:
 		_px(origin, 0, -3, 1, 2, Color("fff38a"))
+
+## A tiny Sandmasken rising from a dune by its stone, swaying, maw open.
+func _draw_mini_sandworm(origin: Vector2) -> void:
+	var sway := 1 if fmod(_time, 0.8) < 0.4 else 0
+	var hide := Color("c98a4b")
+	_px(origin, -6, 0, 13, 2, Color("f2cf8a"))
+	_px(origin, -3 + sway, -5, 5, 5, OUTLINE)
+	_px(origin, -2 + sway, -4, 3, 4, hide)
+	_px(origin, -2 + sway * 2, -12, 7, 7, OUTLINE)
+	_px(origin, -1 + sway * 2, -11, 5, 5, hide)
+	_px(origin, 2 + sway * 2, -9, 2, 2, Color("5a1f1a"))
+	_px(origin, 0 + sway * 2, -11, 1, 1, Color("1a0f08"))

@@ -56,6 +56,8 @@ func _run() -> void:
 	await _check_feature_stage("ember_bomb", "ceiling", true)
 	await _check_feature_stage("avalanche", "floor", false)
 	await _check_feature_stage("avalanche", "floor", true)
+	await _check_feature_stage("sandfall", "floor", false)
+	await _check_feature_stage("sandfall", "floor", true)
 	await _check_feature_stage("lightning", "floor", false)
 	await _check_feature_stage("lightning", "floor", true)
 	await _check_feature_stage("lightning", "ceiling", false)
@@ -79,6 +81,8 @@ func _run() -> void:
 	await _check_boss(true, &"5-B")
 	await _check_boss(false, &"6-B")
 	await _check_boss(true, &"6-B")
+	await _check_boss(false, &"7-B")
+	await _check_boss(true, &"7-B")
 	await _check_stalactite("hit")
 	await _check_stalactite("early")
 	await _check_stalactite("stay")
@@ -191,10 +195,14 @@ const FROZEN_FEATURES := {
 	"6-4": [["gust", 5400.0], ["gust", 13950.0]],
 	"6-5": [["lightning", 3310.0], ["lightning", 9120.0], ["gust", 12480.0], ["lightning", 20900.0], ["lightning", 22320.0]],
 	"6-6": [["lightning", 5030.0], ["gust", 11500.0], ["lightning", 19190.0], ["lightning", 21850.0]],
+	"7-3": [["sandfall", 13690.0], ["sandfall", 15930.0]],
+	"7-4": [["sandstorm", 5850.0], ["sandstorm", 14400.0]],
+	"7-5": [["sandfall", 6740.0], ["sandstorm", 12480.0], ["sandfall", 18700.0]],
+	"7-6": [["sandfall", 7630.0], ["sandstorm", 11500.0], ["sandfall", 16620.0], ["sandfall", 21550.0]],
 }
 
 func _check_features_frozen() -> void:
-	for spec in CampaignCatalog.CAVE_STAGES + CampaignCatalog.HAUNTED_STAGES + CampaignCatalog.LAVA_STAGES + CampaignCatalog.FROST_STAGES + CampaignCatalog.CLOUD_STAGES:
+	for spec in CampaignCatalog.CAVE_STAGES + CampaignCatalog.HAUNTED_STAGES + CampaignCatalog.LAVA_STAGES + CampaignCatalog.FROST_STAGES + CampaignCatalog.CLOUD_STAGES + CampaignCatalog.DESERT_STAGES:
 		var level := CampaignCatalog.get_level(spec.id)
 		var frozen: Array = FROZEN_FEATURES.get(str(spec.id), [])
 		var actual: Array = []
@@ -789,6 +797,11 @@ func _check_unlocks() -> void:
 	Campaign.start_level(CampaignCatalog.get_world(&"clouds").get_boss())
 	Campaign.record_completion(0, 0)
 	_check(CharacterCatalog.is_unlocked(hopp), "beating the Thunderbird unlocks Hopp")
+	var axel := CharacterCatalog.get_definition(&"axolotl")
+	_check(not CharacterCatalog.is_unlocked(axel), "Axel is locked before Sandmasken")
+	Campaign.start_level(CampaignCatalog.get_world(&"desert").get_boss())
+	Campaign.record_completion(0, 0)
+	_check(CharacterCatalog.is_unlocked(axel), "beating Sandmasken unlocks Axel")
 	Campaign.clear_active()
 	Campaign.reset_progress()
 

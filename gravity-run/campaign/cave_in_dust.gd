@@ -8,11 +8,14 @@ class_name CaveInDust
 const SHOW_AHEAD := 1500.0
 const CRACK_COLOR := Color("15100e")
 const DUST_COLOR := Color("b9a58a")
-## The frost mountain's avalanche: a crack of packed snow, snow trickling.
+## The frost mountain's avalanche (style "snow"): a crack of packed snow,
+## snow trickling. The desert's sandfall (style "sand"): sand pouring.
 const SNOW_CRACK_COLOR := Color("31476e")
 const SNOW_COLOR := Color("f4faff")
+const SAND_CRACK_COLOR := Color("6b4326")
+const SAND_COLOR := Color("f2cf8a")
 
-var snowy := false
+var style := "rock"
 
 ## World x of the crack's ends.
 var x_from := 0.0
@@ -46,7 +49,8 @@ func _draw() -> void:
 		return
 	var nearness := clampf(1.0 - (x_from - _runner_x) / SHOW_AHEAD, 0.0, 1.0)
 	var pulse := 0.75 + 0.25 * sin(_time * 9.0)
-	var dust_color := SNOW_COLOR if snowy else DUST_COLOR
+	var dust_color: Color = {"snow": SNOW_COLOR, "sand": SAND_COLOR}.get(style, DUST_COLOR)
+	var crack_color: Color = {"snow": SNOW_CRACK_COLOR, "sand": SAND_CRACK_COLOR}.get(style, CRACK_COLOR)
 	# The crack: a jagged dark line with a thin pale edge.
 	var points := PackedVector2Array()
 	var x := x_from - 30.0
@@ -56,7 +60,7 @@ func _draw() -> void:
 		x += 22.0
 		step += 1
 	if points.size() >= 2:
-		draw_polyline(points, Color(SNOW_CRACK_COLOR if snowy else CRACK_COLOR, 0.95), 8.0)
+		draw_polyline(points, Color(crack_color, 0.95), 8.0)
 		draw_polyline(points, Color(dust_color, 0.75 * pulse), 3.0)
 		draw_rect(Rect2(Vector2(x_from - 30.0, _ceiling_y), Vector2(x_to - x_from + 60.0, 18.0)), Color(dust_color, 0.16 * pulse))
 	# Dust trickling down from the crack. Deterministic positions, moving in time.

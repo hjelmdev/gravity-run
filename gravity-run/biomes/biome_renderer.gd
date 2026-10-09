@@ -22,6 +22,8 @@ const VOLCANO_CAMPAIGN: BiomeDefinition = preload("res://assets/biomes/definitio
 const FROST_CAMPAIGN: BiomeDefinition = preload("res://assets/biomes/definitions/frost_campaign.tres")
 ## Campaign-only presentation biome (world 6). Generation is the classic mix.
 const CLOUDS_CAMPAIGN: BiomeDefinition = preload("res://assets/biomes/definitions/clouds_campaign.tres")
+## Campaign-only presentation biome (world 7). Generation is the classic mix.
+const DESERT_CAMPAIGN: BiomeDefinition = preload("res://assets/biomes/definitions/desert_campaign.tres")
 const GENERATOR_VERSION_14 := 14
 const GENERATOR_VERSION_16 := 16
 const GENERATOR_VERSION_21 := 21
@@ -48,6 +50,7 @@ static func set_locked_biome(biome_id: StringName) -> void:
 		&"volcano_campaign": _locked_definition = VOLCANO_CAMPAIGN
 		&"frost_campaign": _locked_definition = FROST_CAMPAIGN
 		&"clouds_campaign": _locked_definition = CLOUDS_CAMPAIGN
+		&"desert_campaign": _locked_definition = DESERT_CAMPAIGN
 		_: _locked_definition = null
 
 static func locked_biome_id() -> StringName:
@@ -69,6 +72,7 @@ static func definition_for_id(biome_id: StringName) -> BiomeDefinition:
 		&"volcano_campaign": return VOLCANO_CAMPAIGN
 		&"frost_campaign": return FROST_CAMPAIGN
 		&"clouds_campaign": return CLOUDS_CAMPAIGN
+		&"desert_campaign": return DESERT_CAMPAIGN
 		&"cave": return CAVE
 		&"haunted": return HAUNTED
 		&"lava": return LAVA
@@ -164,7 +168,7 @@ static func _draw_weather_layer(canvas: CanvasItem, biome: BiomeDefinition, left
 	## Small deterministic primitives only: no per-frame nodes, textures, or RNG.
 	## Lava ember polygons are tiny CPU-side arrays bounded by visible cells.
 	## Cell identity uses course position; every motif stays inside its biome fragment.
-	if size.x <= 8.0 or size.y <= 32.0 or biome.biome_id == &"cave_campaign" or biome.biome_id == &"haunted_campaign" or biome.biome_id == &"volcano_campaign" or biome.biome_id == &"frost_campaign" or biome.biome_id == &"clouds_campaign":
+	if size.x <= 8.0 or size.y <= 32.0 or biome.biome_id == &"cave_campaign" or biome.biome_id == &"haunted_campaign" or biome.biome_id == &"volcano_campaign" or biome.biome_id == &"frost_campaign" or biome.biome_id == &"clouds_campaign" or biome.biome_id == &"desert_campaign":
 		return
 	var kind := str(biome.biome_id)
 	var period := 138.0

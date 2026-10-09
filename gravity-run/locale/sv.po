@@ -2242,3 +2242,69 @@ msgstr "Fågeln skriker av ilska"
 
 msgid "The Thunderbird is beaten!"
 msgstr "Åskfågeln är besegrad!"
+
+msgid "The Desert"
+msgstr "Öknen"
+
+msgid "Dune Sea"
+msgstr "Dynhavet"
+
+msgid "Tumbleweeds roll across the dunes"
+msgstr "Snurrbuskar rullar över dynerna"
+
+msgid "Cactus Canyon"
+msgstr "Kaktuskanjonen"
+
+msgid "Mind the spines"
+msgstr "Akta taggarna"
+
+msgid "Sandfall"
+msgstr "Sandfall"
+
+msgid "Sand pours from the cliffs"
+msgstr "Sanden rinner från klipporna"
+
+msgid "Sandstorm"
+msgstr "Sandstorm"
+
+msgid "The wind lifts the desert"
+msgstr "Vinden lyfter öknen"
+
+msgid "Mirage"
+msgstr "Hägring"
+
+msgid "Is the oasis real?"
+msgstr "Är oasen på riktigt?"
+
+msgid "Desert Exam"
+msgstr "Ökenprovet"
+
+msgid "Everything the desert has taught you"
+msgstr "Allt öknen har lärt dig"
+
+msgid "Sandmasken"
+msgstr "Sandmasken"
+
+msgid "Boss: the worm under the dunes"
+msgstr "Boss: masken under dynerna"
+
+msgid "Tremor"
+msgstr "Skalv"
+
+msgid "Dune quake"
+msgstr "Dynskalv"
+
+msgid "Sea of sand"
+msgstr "Sandhavet"
+
+msgid "sandfall"
+msgstr "sandfall"
+
+msgid "Sand pours from above: rocks come down with it, so run on the ceiling"
+msgstr "Sand rinner ner: stenar följer med, så spring i taket"
+
+msgid "The worm thrashes in the sand"
+msgstr "Masken slår vilt i sanden"
+
+msgid "Sandmasken is beaten!"
+msgstr "Sandmasken är besegrad!"

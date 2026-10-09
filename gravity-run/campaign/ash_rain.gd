@@ -59,7 +59,7 @@ func _process(delta: float) -> void:
 		queue_redraw()
 
 func _draw() -> void:
-	if style == "snow" and _strength > 0.0:
+	if (style == "snow" or style == "sand") and _strength > 0.0:
 		# A white haze thickening toward the right edge: the whiteout. It starts
 		# past the clear lane in front of the runner.
 		var haze_left := _runner_x + 40.0 + ASH_CLEAR
@@ -67,7 +67,7 @@ func _draw() -> void:
 		var x0 := maxf(haze_left, _view.position.x)
 		while x0 < _view.end.x:
 			var t := clampf((x0 - haze_left) / maxf(_view.end.x - haze_left, 1.0), 0.0, 1.0)
-			draw_rect(Rect2(x0, 0.0, step, _view.size.y), Color(0.95, 0.98, 1.0, 0.22 * _strength * t))
+			draw_rect(Rect2(x0, 0.0, step, _view.size.y), (Color(0.95, 0.98, 1.0, 0.22 * _strength * t) if style == "snow" else Color(0.96, 0.8, 0.56, 0.26 * _strength * t)))
 			x0 += step
 	for index in range(_flakes.size()):
 		var flake := _flakes[index]
