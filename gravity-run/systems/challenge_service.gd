@@ -29,6 +29,9 @@ var _challenge_provider: Node
 var _custom_challenge_mode := false
 var _ordinary_seed_run_pending := false
 var _pending_challenge_name := ""
+## True when the current run's seed was chosen (a challenge, a typed seed or the
+## daily stage), so the same course can come again; false for a random seed.
+var repeatable_seed := false
 
 func _ready() -> void:
 	_score_provider = SeedScoreProvider.new()
@@ -42,12 +45,14 @@ func _ready() -> void:
 	ruleset = _new_default_ruleset(GENERATOR_VERSION)
 
 func begin_run() -> int:
+	repeatable_seed = true
 	if active and seed_value > 0:
 		return seed_value
 	if _ordinary_seed_run_pending and seed_value > 0:
 		_ordinary_seed_run_pending = false
 		last_error = ""
 		return seed_value
+	repeatable_seed = false
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
 	seed_value = rng.randi_range(MIN_CHALLENGE_SEED, MAX_CHALLENGE_SEED)

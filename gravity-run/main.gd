@@ -67,6 +67,8 @@ const CAMPAIGN_RUNOUT_TICKS := 75
 ## in a row. Multiplayer steps from its own wall clock and is not affected.
 const SP_MAX_PHYSICS_STEPS := 3
 const SHADER_WARMUP_SCRIPT := preload("res://systems/shader_warmup.gd")
+const PB_GHOST_SCRIPT := preload("res://player/personal_best_ghost.gd")
+var _pb_ghost: PersonalBestGhost
 var _engine_max_physics_steps := 8
 ## Singleplayer pickup reach. The pixel runners are drawn wider than the shared
 ## 34x44 hitbox, so a coin the art visibly runs through must still count.
@@ -164,6 +166,9 @@ const DiagnosticsExport := preload("res://systems/multiplayer_v2/v2_diagnostics_
 
 func _ready() -> void:
 	add_child(SHADER_WARMUP_SCRIPT.new())
+	_pb_ghost = PB_GHOST_SCRIPT.new() as PersonalBestGhost
+	_pb_ghost.name = "PersonalBestGhost"
+	add_child(_pb_ghost)
 	_engine_max_physics_steps = Engine.max_physics_steps_per_frame
 	Engine.max_physics_steps_per_frame = SP_MAX_PHYSICS_STEPS
 	_rock_warning_accessibility_button = Button.new()
@@ -277,6 +282,7 @@ func _start_run() -> void:
 		run_definition.set("seed_value", run_seed)
 		run_definition.set("generator_version", _active_seed_version)
 		run_definition.set("ruleset", ChallengeService.ruleset if ChallengeService.ruleset != null else _default_ruleset)
+	_pb_ghost.begin(_ghost_identity(run_definition), player.get("sprite").sprite_frames, float(player.get("_pixel_scale")), float(player.get("_character_offset_y")), float(player.get_script().get_script_constant_map().get("SPRITE_SURFACE_GAP", 1.0)))
 	if not course_generator.configure_run_definition(run_definition):
 		push_error("Could not apply this run's seed and ruleset to the course generator.")
 	if not demo_mode and _campaign_level == null:
@@ -517,6 +523,7 @@ func _process(delta: float) -> void:
 	_update_ghost_presentation(_render_interpolation_fraction)
 	_render_presentation_sample_usec = Time.get_ticks_usec()
 	_render_player_position = _presentation.sample(_render_interpolation_fraction)
+	_pb_ghost.show_at(float(_singleplayer_simulation_tick - 1) + _render_interpolation_fraction)
 	_render_pose_sampled_usec = Time.get_ticks_usec() if render_diagnostics_enabled else -1
 	_render_course_distance = _render_player_position.x - PLAYER_X
 	var sprite := player.get_node("AnimatedSprite2D") as AnimatedSprite2D
@@ -710,6 +717,7 @@ func _physics_process(delta: float) -> void:
 		if is_instance_valid(obstacle) and obstacle.is_in_group("barrels"):
 			var barrel_size: Vector2 = obstacle.get("size")
 			_step_start_barrel_centers[obstacle.get_instance_id()] = HAZARD_RULES_SCRIPT.barrel_center(obstacle.global_position, barrel_size.x, barrel_size.y, bool(obstacle.get("from_ceiling")))
+	_pb_ghost.record(_singleplayer_simulation_tick, previous_player_rect.get_center(), _runner_facing())
 	_singleplayer_simulation_tick += 1
 	for hazard in obstacles:
 		if is_instance_valid(hazard) and hazard.is_in_group("lava_hazards") and hazard.has_method("apply_simulation_tick"):
@@ -954,6 +962,7 @@ func _end_run() -> void:
 		if obstacle.has_method("freeze_render_motion"):
 			obstacle.call("freeze_render_motion")
 	player.call("set_input_enabled", false)
+	_pb_ghost.finish(course_distance)
 	if _campaign_level != null:
 		# Campaign stages stay local until the campaign backend exists: no
 		# leaderboard run, no account distance, a quick retry instead.
@@ -986,6 +995,8 @@ func _complete_campaign_level() -> void:
 	AchievementService.finish_run()
 	var star_mask := int(_campaign_run.get("star_mask")) if is_instance_valid(_campaign_run) else 0
 	var result: Dictionary = Campaign.record_completion(int(run_state.get("coins")), star_mask)
+	# A finished stage beats any run that died on it; then the better score wins.
+	_pb_ghost.finish(1.0e7 + float(result.get("score", 0)))
 	result["failed"] = false
 	result["coins"] = int(run_state.get("coins"))
 	_show_campaign_result(result)
@@ -2207,3 +2218,21 @@ func _draw_track() -> void:
 			step_positions.append(float(terrain.call("get_start_x")))
 	var biome_start_offset := BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(_active_seed, _active_seed_version)
 	COURSE_SURFACE_RENDERER.draw_track(self, _render_course_distance, Vector2(screen_width, screen_height), surface_gaps, terrain_boundaries, step_positions, Callable(self, "_surface_y_at"), 0.0, null, BIOME_RENDERER_SCRIPT.course_distance_at_world_x(PLAYER_X, 0.0) - biome_start_offset, _active_seed_version)
+
+## Course identity for the personal-best ghost: a campaign stage, or a seed that
+## can come again (challenge, typed seed, daily stage). "" for random seeds and
+## the menu's demo run, which keep no ghost.
+func _ghost_identity(run_definition: Resource) -> String:
+	if demo_mode:
+		return ""
+	if _campaign_level != null:
+		return "campaign|" + _campaign_level.get_identity()
+	if not ChallengeService.repeatable_seed:
+		return ""
+	return "seed|" + str(run_definition.call("get_course_identity"))
+
+## The runner's facing for the ghost: +1 upright on the floor, -1 on the ceiling.
+func _runner_facing() -> float:
+	var sprite_node: Node2D = player.get("sprite")
+	var pixel_scale := float(player.get("_pixel_scale"))
+	return sprite_node.scale.y / pixel_scale if is_instance_valid(sprite_node) and pixel_scale > 0.0 else float(player.call("get_gravity_direction"))

@@ -56,6 +56,7 @@ func _run() -> void:
 	await _check_feature_stage("ember_bomb", "ceiling", true)
 	_check_ash()
 	await _check_biome_keys()
+	await _check_personal_best_ghost()
 	_check_hand_sweep()
 	await _check_fog_lights()
 	await _check_wisp(true)
@@ -821,3 +822,47 @@ func _check_biome_keys() -> void:
 	await get_tree().process_frame
 	Campaign.clear_active()
 	Campaign.reset_progress()
+
+## The personal-best ghost: a finished stage stores its recording, and the
+## next attempt plays it back as a see-through runner that flips like the best.
+func _check_personal_best_ghost() -> void:
+	PersonalBestGhost.clear_all()
+	var level := CampaignLevel.new()
+	level.level_id = &"T-G"
+	level.world_id = &"test"
+	level.title = "Ghost test"
+	level.seed_value = 4243
+	level.generator_version = CampaignCatalog.CAMPAIGN_GENERATOR_VERSION
+	level.ruleset = CampaignCatalog.make_ruleset(&"T-G", &"cave", ["ceiling_gap"], 0.6, 1.0)
+	level.length_px = 6000.0
+	Campaign.start_level(level)
+	var game: Node = await _make_game()
+	game.get("_campaign_run").set("generated_events_enabled", false)
+	var ghost: PersonalBestGhost = game.get("_pb_ghost")
+	_check(ghost != null and not ghost.has_playback(), "a new stage has no ghost yet")
+	# Flip to the ceiling once, so the recording has something to show.
+	var flipper := func(g: Node) -> void:
+		var player: Node = g.get_node("Player")
+		if float(player.get("world_x")) > 1500.0 and int(player.call("get_gravity_direction")) == 1 and bool(player.get("grounded")):
+			player.call("_try_flip", -1)
+	_step(game, 2400, flipper)
+	_check(Campaign.is_completed(level), "the ghost stage is finished")
+	game.queue_free()
+	await get_tree().process_frame
+	Campaign.start_level(level)
+	game = await _make_game()
+	game.get("_campaign_run").set("generated_events_enabled", false)
+	ghost = game.get("_pb_ghost")
+	_check(ghost.has_playback(), "the next attempt has the best run as a ghost")
+	_step(game, 400)
+	ghost.show_at(60.0)
+	_check(ghost.visible and ghost.position.y > 400.0, "the ghost runs on the floor early on (y %.0f)" % ghost.position.y)
+	ghost.show_at(400.0)
+	_check(ghost.visible and ghost.position.y < 200.0, "and on the ceiling after the best run's flip (y %.0f)" % ghost.position.y)
+	ghost.show_at(1.0e6)
+	_check(not ghost.visible, "the ghost is gone after the best run ended")
+	game.queue_free()
+	await get_tree().process_frame
+	Campaign.clear_active()
+	Campaign.reset_progress()
+	PersonalBestGhost.clear_all()
