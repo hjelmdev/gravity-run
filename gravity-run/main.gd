@@ -1752,7 +1752,7 @@ func _spawn_obstacle_scene(scene: PackedScene, width: float, height: float, from
 	# Campaign cave stages draw rolling barrels as mine carts (skin only).
 	if obstacle.is_in_group("barrels") and _campaign_level != null and _campaign_level.world_id == &"cave":
 		obstacle.set("skin", "mine_cart")
-	# The meadow draws barrels as rolling logs (not Rullaren's own barrels) and
+	# The meadow draws barrels (not Rullaren's own, which its machine draws),
 	# blocks and spikes as pixel art.
 	if _campaign_level != null and _campaign_level.world_id == &"meadow" and ((obstacle.is_in_group("barrels") and not _campaign_level.is_boss()) or obstacle.is_in_group("breakable") or obstacle.is_in_group("spikes")):
 		obstacle.set("skin", "meadow")

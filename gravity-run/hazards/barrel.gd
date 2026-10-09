@@ -157,12 +157,13 @@ func _draw() -> void:
 		detail_color = Color("143f57")
 	if is_rubber and bounce_ticks > 0:
 		body_color = Color("77e2d3")
-	if skin == "meadow" and not is_rubber:
-		# A rolling log: its cut end turns with the roll.
-		var log := MeadowPixelArt.log_texture(radius, is_spiked)
-		var side := Vector2(log.get_size()) * MeadowPixelArt.ART_SCALE
+	if skin == "meadow":
+		# A pixel-art barrel seen end-on, turning with the roll.
+		var kind := ("retired" if retired else "rubber") if is_rubber else ("spiked" if is_spiked else "wood")
+		var art := MeadowPixelArt.barrel_texture(radius, kind)
+		var side := Vector2(art.get_size()) * MeadowPixelArt.ART_SCALE
 		draw_set_transform_matrix(base * Transform2D(rendered_roll, Vector2(0.0, center_y)))
-		draw_texture_rect(log, Rect2(-side * 0.5, side), false)
+		draw_texture_rect(art, Rect2(-side * 0.5, side), false, Color(1.35, 1.35, 1.35) if is_rubber and bounce_ticks > 0 else Color.WHITE)
 		draw_set_transform(Vector2.ZERO)
 		return
 	if skin == "mine_cart":

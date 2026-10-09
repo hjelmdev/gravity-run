@@ -1,7 +1,7 @@
 extends Node
 ## Screenshots of a campaign stage every few hundred ticks, to look at the
 ## meadow's pixel art in play. Needs a real renderer:
-##   godot --path . --rendering-driver opengl3 --resolution 960x540 res://tools/pixel_tiles/meadow_capture.tscn -- out_dir 1-3
+##   godot --path . --rendering-driver opengl3 --resolution 960x540 res://tools/pixel_tiles/meadow_capture.tscn -- out_dir 1-3 [ticks_between] [shots] [first_tick]
 ## The runner cannot die (its hits are ignored), so the whole stage is seen.
 
 const MainScene := preload("res://main.tscn")
@@ -14,6 +14,9 @@ func _run() -> void:
 	var args := OS.get_cmdline_user_args()
 	var out_dir := args[0] if args.size() > 0 else "user://meadow_captures"
 	var level_id := StringName(args[1] if args.size() > 1 else "1-3")
+	var interval := int(args[2]) if args.size() > 2 else 120
+	var shots := int(args[3]) if args.size() > 3 else 12
+	var first := int(args[4]) if args.size() > 4 else 0
 	DirAccess.make_dir_recursive_absolute(out_dir)
 	Campaign.persist = false
 	Campaign.start_level(CampaignCatalog.get_level(level_id))
@@ -22,8 +25,11 @@ func _run() -> void:
 	await get_tree().process_frame
 	game.set_physics_process(false)
 	var effects: Object = game.get("_run_effects")
-	for shot in range(12):
-		for _i in range(120):
+	for _i in range(first):
+		effects.set("_invulnerable_left", 10)
+		game.call("_physics_process", TICK)
+	for shot in range(shots):
+		for _i in range(interval):
 			# Keep the runner alive: an endless bubble.
 			effects.set("_invulnerable_left", 10)
 			game.call("_physics_process", TICK)

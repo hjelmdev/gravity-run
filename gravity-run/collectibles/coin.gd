@@ -16,6 +16,13 @@ var sparks: Array[Dictionary] = []
 var _visual_prediction_request_id := ""
 var _visual_prediction_pending := false
 var _prediction_origin := Vector2.ZERO
+## Idle turn: the pixel coin frame on screen (PixelCoin), redrawn when it changes.
+var _frame := -1
+var _spin_phase := 0.0
+
+func _ready() -> void:
+	_spin_phase = fposmod(global_position.x * 0.013, float(PixelCoin.FRAMES))
+	set_process(true)
 
 func get_hitbox_rect() -> Rect2:
 	return Rect2(global_position - COIN_SIZE * 0.5, COIN_SIZE)
@@ -78,12 +85,16 @@ func reject_visual_prediction(request_id: String) -> bool:
 	sparks.clear()
 	position = _prediction_origin
 	visible = true
-	set_process(false)
+	set_process(true)
 	queue_redraw()
 	return true
 
 func _process(delta: float) -> void:
 	if not is_being_collected:
+		var frame := PixelCoin.frame_at(Time.get_ticks_msec() / 1000.0, _spin_phase)
+		if frame != _frame:
+			_frame = frame
+			queue_redraw()
 		return
 	burst_elapsed += delta
 	coin_face_scale_y = absf(cos(burst_elapsed * 16.0))
@@ -105,33 +116,20 @@ func _process(delta: float) -> void:
 			queue_free()
 
 func _draw() -> void:
+	# Sparks: small square pixels that fly out and fade.
 	for spark in sparks:
 		var life_ratio := clampf(float(spark["life"]) / BURST_DURATION, 0.0, 1.0)
-		var size := float(spark["size"]) * life_ratio
-		var center := Vector2(spark["position"])
-		var diamond := PackedVector2Array([
-			center + Vector2(0.0, -size),
-			center + Vector2(size * 0.3, -size * 0.3),
-			center + Vector2(size * 0.75, 0.0),
-			center + Vector2(size * 0.3, size * 0.3),
-			center + Vector2(0.0, size),
-			center + Vector2(-size * 0.3, size * 0.3),
-			center + Vector2(-size * 0.75, 0.0),
-			center + Vector2(-size * 0.3, -size * 0.3)
-		])
-		var spark_color := Color("ffeaa0")
+		var size := roundf(float(spark["size"]) * life_ratio * 0.5) * 2.0
+		if size < 2.0:
+			continue
+		var center := (Vector2(spark["position"]) / 2.0).round() * 2.0
+		var spark_color := Color("ffeaa0") if int(spark["size"] * 10.0) % 2 == 0 else Color("f5d45e")
 		spark_color.a = life_ratio
-		draw_colored_polygon(diamond, spark_color)
-
-	var coin_color := Color("f5d45e")
-	coin_color.a = coin_alpha
+		draw_rect(Rect2(center - Vector2(size, size) * 0.5, Vector2(size, size)), spark_color)
+	# The coin: the turning pixel frame; when collected it flips flat and fades.
+	var frame := _frame if _frame >= 0 else 0
+	var texture := PixelCoin.frame_texture(frame)
+	var side := float(PixelCoin.ART) * 2.0
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2(1.0, maxf(coin_face_scale_y, 0.06)))
-	draw_circle(Vector2.ZERO, 12.0, coin_color)
-	coin_color = Color("b88936")
-	coin_color.a = coin_alpha
-	draw_circle(Vector2.ZERO, 7.0, coin_color)
-	coin_color = Color("ffeaa0")
-	coin_color.a = coin_alpha
-	draw_circle(Vector2.ZERO, 4.0, coin_color)
-	draw_rect(Rect2(-1.25, -5.0, 2.5, 10.0), coin_color)
+	draw_texture_rect(texture, Rect2(Vector2(-side, -side) * 0.5, Vector2(side, side)), false, Color(1.0, 1.0, 1.0, coin_alpha))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)

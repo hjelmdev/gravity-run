@@ -98,6 +98,7 @@ func _spawn_impact_debris_once() -> void:
 	var effect := ImpactDebris.new() as Node2D
 	effect.name = "RockImpactDebris"
 	effect.call("configure_ice", int(event.get("rock_variant", 0)) == 1)
+	effect.call("configure_pixel", skin == "meadow")
 	get_parent().add_child(effect)
 	effect.global_position = Vector2(global_position.x, float(event.get("floor_y", 460.0)) - float(event.get("burial_depth", Model.BURIAL_DEPTH)))
 

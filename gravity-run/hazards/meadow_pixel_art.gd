@@ -10,8 +10,7 @@ class_name MeadowPixelArt
 ##   block   a mossy stone pillar with a grass tuft on its free end
 ##   spike   a steel spike with a lit and a shaded face
 ##   boulder a rounded rock with moss on top, for falling rocks
-##   log     the cut end of a rolling log (bark ring, growth rings, crack),
-##           optionally with thorns
+##   barrel  a barrel seen end-on (hoop, planks, bung), spiked or rubber
 
 const ART_SCALE := 2.0
 const OUTLINE := Color8(23, 40, 33)
@@ -27,10 +26,11 @@ const STEEL_LIGHT := Color8(232, 238, 244)
 const STEEL_DARK := Color8(108, 116, 132)
 const BARK := Color8(104, 66, 42)
 const BARK_DARK := Color8(70, 44, 30)
-const WOOD := Color8(222, 184, 124)
-const WOOD_RING := Color8(186, 140, 86)
-const WOOD_CORE := Color8(160, 112, 66)
-const THORN := Color8(236, 226, 196)
+const WOOD := Color8(198, 124, 64)
+const IRON := Color8(78, 84, 98)
+const RUBBER := Color8(64, 183, 174)
+const RUBBER_DULL := Color8(57, 124, 120)
+const RUBBER_DARK := Color8(20, 63, 87)
 
 static var _cache: Dictionary = {}
 
@@ -45,9 +45,10 @@ static func boulder_texture(size: Vector2) -> Texture2D:
 static func spike_texture(size: Vector2, ceiling: bool) -> Texture2D:
 	return _cached("spike|%d|%d|%s" % [int(size.x), int(size.y), str(ceiling)], func() -> Image: return make_spike(_art(size.x), _art(size.y), ceiling))
 
-## A square texture of the log's cut end, `radius` world pixels.
-static func log_texture(radius: float, thorns: bool) -> Texture2D:
-	return _cached("log|%d|%s" % [int(radius), str(thorns)], func() -> Image: return make_log(_art(radius), thorns))
+## A square texture of a barrel seen end-on, `radius` world pixels; `kind` is
+## "wood", "spiked", "rubber" or "retired".
+static func barrel_texture(radius: float, kind: String) -> Texture2D:
+	return _cached("barrel|%d|%s" % [int(radius), kind], func() -> Image: return make_barrel(_art(radius), kind))
 
 static func _art(world: float) -> int:
 	return maxi(int(round(world / ART_SCALE)), 2)
@@ -69,48 +70,101 @@ static func _put(image: Image, x: int, y: int, color: Color) -> void:
 	if x >= 0 and y >= 0 and x < image.get_width() and y < image.get_height():
 		image.set_pixel(x, y, color)
 
-## Stone pillar: staggered bricks with mortar lines, light top-left edges and
-## dark bottom-right edges on every brick, moss creeping up from the attached
-## end and a grass tuft on the free end. Drawn for a floor block; a ceiling
-## block is the same picture flipped.
+## Rough stone pillar: stacked stones of uneven size, each with a lit top-left
+## and a shaded bottom-right and its corners knocked off, jagged sides, a
+## broken free end with a chipped chunk, a few cracks, moss creeping up from
+## the attached end and patches on the sides, grass tufts on the broken top.
+## Drawn for a floor block; a ceiling block is the same picture flipped.
 static func make_block(w: int, h: int, ceiling: bool, variant: int) -> Image:
 	var image := _blank(w, h)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 4111 + w * 31 + h * 7 + variant * 1009
-	var brick_h := 6
-	var brick_w := maxi(8, w / 2)
+	# Silhouette: per-row side insets (jagged sides) and per-column top drop
+	# (broken free end).
+	var inset_left: Array[int] = []
+	var inset_right: Array[int] = []
+	var side_l := 0
+	var side_r := 0
 	for y in range(h):
-		for x in range(w):
-			var color := STONE
-			var row := y / brick_h
-			var ry := y % brick_h
-			var offset := (brick_w / 2) if row % 2 == 1 else 0
-			var rx := posmod(x + offset, brick_w)
-			if ry == brick_h - 1 or rx == brick_w - 1:
-				color = MORTAR
-			elif ry == 0 or rx == 0:
-				color = STONE_LIGHT
-			elif ry == brick_h - 2 or rx == brick_w - 2:
-				color = STONE_DARK
-			image.set_pixel(x, y, color)
-	# A few pits and cracks.
-	for _i in range(maxi(1, w * h / 120)):
-		var px := rng.randi_range(2, w - 3)
-		var py := rng.randi_range(2, h - 3)
-		_put(image, px, py, STONE_DARK)
-		if rng.randf() < 0.5:
-			_put(image, px + 1, py + 1, STONE_DARK)
-	# Moss from the bottom (the attached end), in uneven columns.
+		if y % 3 == 0:
+			side_l = rng.randi_range(0, 2) if y > 2 else 1
+			side_r = rng.randi_range(0, 2) if y > 2 else 1
+		inset_left.append(side_l)
+		inset_right.append(side_r)
+	var top: Array[int] = []
+	var drop := rng.randi_range(0, 2)
+	for x in range(w):
+		if x % 2 == 0:
+			drop = clampi(drop + rng.randi_range(-1, 1), 0, 3)
+		top.append(drop)
+	# A chipped chunk out of one top corner.
+	var chunk_w := rng.randi_range(3, maxi(3, w / 3))
+	var chunk_h := rng.randi_range(3, 6)
+	var chunk_left := rng.randf() < 0.5
+	for x in range(chunk_w):
+		var column := x if chunk_left else w - 1 - x
+		top[column] = maxi(top[column], chunk_h - x / 2)
+	# Stones: rows of uneven height, stones of uneven width, staggered.
+	var y0 := 0
+	var row := 0
+	while y0 < h:
+		var row_h := rng.randi_range(4, 7)
+		var x0 := -rng.randi_range(0, 4) if row % 2 == 1 else 0
+		while x0 < w:
+			var stone_w := rng.randi_range(5, 10)
+			var shade := rng.randf_range(-0.08, 0.08)
+			for y in range(y0, mini(y0 + row_h, h)):
+				for x in range(maxi(x0, 0), mini(x0 + stone_w, w)):
+					var ry := y - y0
+					var rx := x - x0
+					var last_y := ry == row_h - 1
+					var last_x := rx == stone_w - 1
+					# Knocked-off corners between stones.
+					if (rx == 0 or last_x) and (ry == 0 or last_y):
+						image.set_pixel(x, y, MORTAR)
+						continue
+					var color := STONE
+					if last_y or last_x:
+						color = MORTAR
+					elif ry == 0 or rx == 0:
+						color = STONE_LIGHT
+					elif ry == row_h - 2 or rx == stone_w - 2:
+						color = STONE_DARK
+					image.set_pixel(x, y, color.lightened(shade) if shade > 0.0 else color.darkened(-shade))
+			x0 += stone_w
+		y0 += row_h
+		row += 1
+	# Cracks: short diagonal runs.
+	for _i in range(maxi(1, w * h / 260)):
+		var cx := rng.randi_range(2, w - 3)
+		var cy := rng.randi_range(4, h - 4)
+		var dir := 1 if rng.randf() < 0.5 else -1
+		for step in range(rng.randi_range(3, 6)):
+			_put(image, cx + (step / 2) * dir, cy + step, MORTAR)
+	# Moss from the attached end, and patches on the sides.
 	for x in range(w):
 		var moss := rng.randi_range(1, 4) + (2 if (x / 3) % 2 == 0 else 0)
 		for y in range(h - moss, h):
 			image.set_pixel(x, y, MOSS if y > h - moss else MOSS_DARK)
-	# Grass tuft on the free end (row 0..1), overhanging a little.
+	for _i in range(maxi(1, h / 18)):
+		var py := rng.randi_range(6, h - 8)
+		var left_side := rng.randf() < 0.5
+		for y in range(py, py + rng.randi_range(2, 4)):
+			for x in range(rng.randi_range(2, 3)):
+				_put(image, x if left_side else w - 1 - x, y, MOSS if x == 0 else MOSS_DARK)
+	# Cut the silhouette.
+	for y in range(h):
+		for x in range(w):
+			if x < inset_left[y] or x >= w - inset_right[y] or y < top[x]:
+				image.set_pixel(x, y, Color(0, 0, 0, 0))
+	# Grass tufts on the broken top.
 	for x in range(w):
-		image.set_pixel(x, 0, MOSS)
-		image.set_pixel(x, 1, GRASS_HI if x % 3 != 1 else MOSS)
-		if rng.randf() < 0.45:
-			_put(image, x, 2, MOSS_DARK)
+		if rng.randf() < 0.55:
+			var t := top[x]
+			if x >= inset_left[t] and x < w - inset_right[t]:
+				_put(image, x, t, MOSS)
+				if rng.randf() < 0.5:
+					_put(image, x, t + 1, GRASS_HI)
 	_outline(image)
 	if ceiling:
 		image.flip_y()
@@ -141,37 +195,51 @@ static func make_spike(w: int, h: int, ceiling: bool) -> Image:
 		image.flip_y()
 	return image
 
-## The cut end of a log, square with side 2r: bark ring, two growth rings, a
-## dark core and a crack, outlined. Optional thorns stick out of the bark.
-static func make_log(r: int, thorns: bool) -> Image:
-	var pad := 4 if thorns else 1
+## A barrel seen end-on, square with side 2r: an iron hoop round the rim,
+## planks across the lid with dark seams, a bung, lit top-left and shaded
+## bottom-right, outlined. "spiked" adds iron spikes out of the hoop,
+## "rubber" is the teal rubber barrel with light stripes, "retired" its
+## muted parked state.
+static func make_barrel(r: int, kind: String) -> Image:
+	var pad := 4 if kind == "spiked" else 1
 	var size := r * 2 + pad * 2
 	var image := _blank(size, size)
 	var c := float(size) * 0.5
 	var rf := float(r)
+	var rubber := kind in ["rubber", "retired"]
+	var lid := RUBBER if kind == "rubber" else (RUBBER_DULL if kind == "retired" else WOOD)
+	var lid_light := lid.lightened(0.2)
+	var lid_dark := lid.darkened(0.22)
+	var hoop := RUBBER_DARK if rubber else IRON
+	var plank := maxi(3, r / 3)
 	for y in range(size):
 		for x in range(size):
-			var d := Vector2(float(x) + 0.5 - c, float(y) + 0.5 - c).length()
+			var p := Vector2(float(x) + 0.5 - c, float(y) + 0.5 - c)
+			var d := p.length()
 			if d > rf:
 				continue
-			var color := WOOD
+			var color := lid
 			if d > rf - 2.5:
-				color = BARK if (x + y) % 3 != 0 else BARK_DARK
-			elif absf(d - rf * 0.62) < 0.7 or absf(d - rf * 0.32) < 0.7:
-				color = WOOD_RING
-			elif d < rf * 0.14 + 0.5:
-				color = WOOD_CORE
+				color = hoop if d > rf - 1.5 else hoop.lightened(0.25)
+			elif rubber:
+				color = lid_light if posmod(x - int(c) + r, plank * 2) < 2 else lid
+			elif posmod(y - int(c) + r, plank) == 0:
+				color = BARK_DARK
+			if color == lid and (p.x + p.y) < -rf * 0.6:
+				color = lid_light
+			elif color == lid and (p.x + p.y) > rf * 0.7:
+				color = lid_dark
 			image.set_pixel(x, y, color)
-	# A crack from the core outwards.
-	for i in range(int(rf * 0.7)):
-		_put(image, int(c) + i / 2, int(c) - i, WOOD_CORE)
-	if thorns:
+	# The bung.
+	if not rubber:
+		_put(image, int(c) + r / 3, int(c) - 1, BARK_DARK)
+		_put(image, int(c) + r / 3 + 1, int(c) - 1, BARK_DARK)
+	if kind == "spiked":
 		for index in range(8):
-			var angle := TAU * float(index) / 8.0 + 0.2
-			var direction := Vector2.RIGHT.rotated(angle)
+			var direction := Vector2.RIGHT.rotated(TAU * float(index) / 8.0 + 0.2)
 			for step in range(4):
 				var p := Vector2(c, c) + direction * (rf + float(step))
-				_put(image, int(p.x), int(p.y), THORN)
+				_put(image, int(p.x), int(p.y), STEEL_LIGHT if step < 3 else STEEL)
 	_outline(image)
 	return image
 
