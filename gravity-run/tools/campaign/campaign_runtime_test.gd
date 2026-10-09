@@ -401,7 +401,7 @@ func _check_grave_skins() -> void:
 	var plain: Array[String] = []
 	for obstacle in cave.get("obstacles"):
 		plain.append(str(obstacle.get("skin")))
-	_check(plain == ["", ""], "blocks and spikes keep their look on cave stages (%s)" % str(plain))
+	_check(plain == ["pixel", "pixel"], "blocks and spikes on cave stages are drawn in the cave's pixel style (%s)" % str(plain))
 	cave.queue_free()
 	await get_tree().process_frame
 	Campaign.clear_active()

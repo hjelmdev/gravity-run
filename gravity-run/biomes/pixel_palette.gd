@@ -60,6 +60,10 @@ class_name PixelPalette
 @export var rubber_dull := Color8(57, 124, 120)
 @export var rubber_dark := Color8(20, 63, 87)
 @export var axle := Color8(255, 178, 83)
+## Ice (icicles).
+@export var ice := Color8(185, 232, 245)
+@export var ice_light := Color8(234, 255, 255)
+@export var ice_dark := Color8(139, 199, 223)
 
 @export_group("Backdrop")
 ## Draw the shared pixel backdrop (off: the biome draws its own).

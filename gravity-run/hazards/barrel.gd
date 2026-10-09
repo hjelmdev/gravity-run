@@ -7,6 +7,8 @@ var roll_angle := 0.0
 var fall_velocity := 0.0
 var is_falling := false
 var is_spiked := false
+## The interpolation transform of the current _draw (pixel cart wheels compose with it).
+var _render_base := Transform2D.IDENTITY
 var is_rubber := false
 var rubber_target_x := -1.0
 var travel_direction := 1
@@ -140,10 +142,12 @@ func _draw() -> void:
 		return
 	var rendered_roll := roll_angle
 	var base := Transform2D.IDENTITY
+	_render_base = base
 	if _local_render_motion:
 		var fraction := Engine.get_physics_interpolation_fraction()
 		var rendered_position := _previous_position.lerp(position, fraction)
 		base = Transform2D(lerp_angle(_previous_rotation, rotation, fraction) - rotation, (rendered_position - position).rotated(-rotation))
+		_render_base = base
 		draw_set_transform_matrix(base)
 		rendered_roll = lerpf(_previous_roll, roll_angle, fraction)
 	var radius := HazardRules.barrel_radius(size.x, size.y)
@@ -200,6 +204,9 @@ func intersects_rect(rect: Rect2) -> bool:
 ## A mine cart that fits inside the barrel's collision circle: a tapered iron
 ## body with a rim band and an ore pile, two spinning wheels under it.
 func _draw_mine_cart(radius: float, center_y: float, wheel_angle: float, teal: bool) -> void:
+	if BiomeRenderer.locked_pixel_palette() != null:
+		_draw_pixel_cart(radius, center_y, wheel_angle, teal)
+		return
 	var ground := center_y + radius
 	var body_color := Color("3f8f8a") if teal else Color("9b5a3a")
 	var rim_color := Color("1c3f4a") if teal else Color("3b2a24")
@@ -228,3 +235,20 @@ func _draw_mine_cart(radius: float, center_y: float, wheel_angle: float, teal: b
 		draw_circle(wheel_center, wheel_radius * 0.45, Color("b8b2a6"))
 		var spoke := Vector2.RIGHT.rotated(wheel_angle) * wheel_radius * 0.9
 		draw_line(wheel_center - spoke, wheel_center + spoke, Color("b8b2a6"), 2.0)
+
+## The mine cart in a pixel-style biome (PixelHazardArt): the cart picture
+## and two wheels that turn with the roll, at the vector cart's places.
+func _draw_pixel_cart(radius: float, center_y: float, wheel_angle: float, teal: bool) -> void:
+	var palette := PixelHazardArt.palette()
+	var cart := PixelHazardArt.cart_texture(palette, radius, teal)
+	var side := Vector2(cart.get_size()) * PixelHazardArt.ART_SCALE
+	draw_texture_rect(cart, Rect2(Vector2(0.0, center_y) - side * 0.5, side), false)
+	var wheel_radius := radius * 0.24
+	var wheel := PixelHazardArt.wheel_texture(palette, wheel_radius)
+	var wheel_side := Vector2(wheel.get_size()) * PixelHazardArt.ART_SCALE
+	var ground := center_y + radius
+	for wheel_x in [-radius * 0.46, radius * 0.46]:
+		var wheel_center := Vector2(wheel_x, ground - wheel_radius)
+		draw_set_transform_matrix(_render_base * Transform2D(wheel_angle, wheel_center))
+		draw_texture_rect(wheel, Rect2(-wheel_side * 0.5, wheel_side), false)
+	draw_set_transform_matrix(_render_base)

@@ -15,9 +15,6 @@ var _pixel_mode := false
 
 const PIXEL_CHIPS := [Vector2(-130.0, -210.0), Vector2(-70.0, -260.0), Vector2(-20.0, -300.0), Vector2(40.0, -270.0), Vector2(95.0, -230.0), Vector2(150.0, -180.0)]
 const GRASS_BITS := [Vector2(-90.0, -150.0), Vector2(-30.0, -190.0), Vector2(60.0, -170.0), Vector2(120.0, -140.0)]
-const PIXEL_STONE := [Color8(150, 142, 132), Color8(196, 192, 178), Color8(104, 98, 92)]
-const PIXEL_GRASS := [Color8(108, 190, 72), Color8(170, 226, 92)]
-const PIXEL_OUTLINE := Color8(23, 40, 33)
 
 func configure_pixel(value: bool) -> void:
 	_pixel_mode = value
@@ -58,6 +55,9 @@ func _draw() -> void:
 ## Snapped to the 2 px art grid, so the chips read as pixels like the rock.
 func _draw_pixel(fade: float) -> void:
 	var t := _age
+	var palette := PixelHazardArt.palette()
+	var chips: Array = [palette.ice, palette.ice_light, palette.ice_dark] if _ice_mode else [palette.stone, palette.stone_light, palette.stone_dark]
+	var bits: Array = [palette.ice_light, palette.ice] if _ice_mode else [palette.surface, palette.surface_hi]
 	# Dust: puffs that roll out to both sides of the rock along the ground.
 	for index in range(4):
 		var side := -1.0 if index < 2 else 1.0
@@ -71,10 +71,10 @@ func _draw_pixel(fade: float) -> void:
 		var p: Vector2 = velocity * t + Vector2(0.0, 0.5 * GRAVITY * t * t) + Vector2(signf(velocity.x) * 34.0, -6.0)
 		var s := 6.0 if index % 2 == 0 else 4.0
 		var corner := ((p - Vector2(s, s) * 0.5) / 2.0).round() * 2.0
-		var outline := PIXEL_OUTLINE
+		var outline := palette.hazard_outline
 		outline.a = fade
 		draw_rect(Rect2(corner - Vector2(2.0, 2.0), Vector2(s + 4.0, s + 4.0)), outline)
-		var color: Color = PIXEL_STONE[index % PIXEL_STONE.size()]
+		var color: Color = chips[index % chips.size()]
 		color.a = fade
 		draw_rect(Rect2(corner, Vector2(s, s)), color)
 	# Grass bits torn up by the landing.
@@ -82,7 +82,7 @@ func _draw_pixel(fade: float) -> void:
 		var velocity: Vector2 = GRASS_BITS[index]
 		var p: Vector2 = velocity * t + Vector2(0.0, 0.5 * GRAVITY * t * t) + Vector2(signf(velocity.x) * 30.0, 0.0)
 		var corner := (p / 2.0).round() * 2.0
-		var color: Color = PIXEL_GRASS[index % PIXEL_GRASS.size()]
+		var color: Color = bits[index % bits.size()]
 		color.a = fade
 		draw_rect(Rect2(corner, Vector2(2.0, 4.0)), color)
 

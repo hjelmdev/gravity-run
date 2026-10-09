@@ -188,6 +188,9 @@ func _draw_stone_silhouette(rect: Rect2) -> void:
 	draw_line(origin + Vector2(size.x * 0.64, size.y * 0.20), origin + Vector2(size.x * 0.53, size.y * 0.42), vein_color, 2.0)
 
 func _draw_icicle_silhouette(rect: Rect2) -> void:
+	if skin == "pixel":
+		draw_texture_rect(PixelHazardArt.icicle_texture(PixelHazardArt.palette(), rect.size), Rect2((rect.position / 2.0).round() * 2.0, rect.size), false)
+		return
 	var o := rect.position
 	var s := rect.size
 	var points := PackedVector2Array([

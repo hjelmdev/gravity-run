@@ -12,6 +12,8 @@ class_name PixelHazardArt
 ##   saw     a circular saw blade
 ##   boulder a faceted rock with a cap of growth, for falling rocks
 ##   barrel  a barrel seen end-on (hoop, planks, bung), spiked or rubber
+##   icicle  a jagged icicle for the cave's falling ice
+##   cart    a mine cart with an ore pile, and its spoked wheels
 
 const ART_SCALE := 2.0
 
@@ -44,6 +46,19 @@ static func boulder_texture(palette: PixelPalette, size: Vector2) -> Texture2D:
 
 static func spike_texture(palette: PixelPalette, size: Vector2, ceiling: bool) -> Texture2D:
 	return _cached(palette, "spike|%d|%d|%s" % [int(size.x), int(size.y), str(ceiling)], func() -> Image: return make_spike(_art(size.x), _art(size.y), ceiling))
+
+## An icicle filling w x h world pixels (wide end at the top).
+static func icicle_texture(palette: PixelPalette, size: Vector2) -> Texture2D:
+	return _cached(palette, "icicle|%d|%d" % [int(size.x), int(size.y)], func() -> Image: return make_icicle(_art(size.x), _art(size.y)))
+
+## A mine cart (without wheels) in a square of side 2*radius + padding; "teal"
+## is the rubber variant.
+static func cart_texture(palette: PixelPalette, radius: float, teal: bool) -> Texture2D:
+	return _cached(palette, "cart|%d|%s" % [int(radius), str(teal)], func() -> Image: return make_cart(_art(radius), teal))
+
+## A cart wheel of `radius` world pixels, square texture.
+static func wheel_texture(palette: PixelPalette, radius: float) -> Texture2D:
+	return _cached(palette, "wheel|%d" % int(radius), func() -> Image: return make_wheel(maxi(_art(radius), 3)))
 
 ## A square texture of a barrel seen end-on, `radius` world pixels; `kind` is
 ## "wood", "spiked", "rubber" or "retired".
@@ -364,5 +379,101 @@ static func make_saw(r: int) -> Image:
 			else:
 				color = pal.axle
 			image.set_pixel(x, y, color)
+	_outline(image)
+	return image
+
+## A mine cart filling the barrel's circle (radius r, square side 2r + 2): a
+## tapered body of planks with an iron rim, an ore pile heaped above it, lit
+## top-left, outlined. The wheels are separate pictures so they can turn.
+static func make_cart(r: int, teal: bool) -> Image:
+	var side := r * 2 + 2
+	var image := _blank(side, side)
+	var c := float(side) * 0.5
+	var rf := float(r)
+	var body := pal.rubber if teal else pal.wood.darkened(0.15)
+	var body_light := body.lightened(0.2)
+	var body_dark := body.darkened(0.25)
+	var rim := pal.rubber_dark if teal else pal.iron
+	var ore := pal.stone if teal else Color8(214, 172, 74)
+	var ore_light := ore.lightened(0.3)
+	var top := int(c - rf * 0.38)
+	var bottom := int(c + rf - rf * 0.42)
+	# Ore pile: a bumpy mound above the rim.
+	for x in range(side):
+		var u := (float(x) + 0.5 - c) / (rf * 0.8)
+		if absf(u) > 1.0:
+			continue
+		var height := int(rf * (0.34 * (1.0 - u * u)) + 2.0 * sin(float(x) * 1.7))
+		for y in range(top - height, top):
+			_put(image, x, y, ore_light if (x + y) % 5 == 0 else ore)
+	# Body: tapered rows.
+	for y in range(top, bottom + 1):
+		var t := float(y - top) / float(maxi(bottom - top, 1))
+		var half := rf * lerpf(0.92, 0.68, t)
+		for x in range(side):
+			var dx := float(x) + 0.5 - c
+			if absf(dx) > half:
+				continue
+			var color := body
+			if y - top <= 1:
+				color = rim
+			elif int(dx + rf) % maxi(int(rf * 0.5), 3) == 0:
+				color = body_dark
+			elif dx < -half * 0.5:
+				color = body_light
+			image.set_pixel(x, y, color)
+	_outline(image)
+	return image
+
+## A spoked wheel of radius r art pixels (square side 2r + 2): iron tyre, a
+## lighter hub and two crossed spokes, outlined.
+static func make_wheel(r: int) -> Image:
+	var side := r * 2 + 2
+	var image := _blank(side, side)
+	var c := float(side) * 0.5
+	var rf := float(r)
+	for y in range(side):
+		for x in range(side):
+			var p := Vector2(float(x) + 0.5 - c, float(y) + 0.5 - c)
+			var d := p.length()
+			if d > rf:
+				continue
+			var color := pal.iron
+			if d < rf * 0.4:
+				color = pal.steel_light
+			elif absf(p.x) < 1.0 or absf(p.y) < 1.0:
+				color = pal.steel
+			elif d < rf - 1.5:
+				color = Color(0, 0, 0, 0)
+			image.set_pixel(x, y, color)
+	_outline(image)
+	return image
+
+## An icicle: the vector icicle's jagged outline (wide at the top, a point at
+## the bottom), a lit left face and a shaded right face, a light streak and a
+## dark crack, outlined.
+static func make_icicle(w: int, h: int) -> Image:
+	var image := _blank(w, h)
+	var s := Vector2(float(w), float(h))
+	var outline := PackedVector2Array([
+		Vector2(s.x * 0.08, 0.0), Vector2(s.x * 0.92, 0.0), Vector2(s.x * 0.83, s.y * 0.48),
+		Vector2(s.x * 0.68, s.y * 0.66), Vector2(s.x * 0.53, s.y * 0.91), Vector2(s.x * 0.47, s.y),
+		Vector2(s.x * 0.39, s.y * 0.91), Vector2(s.x * 0.28, s.y * 0.67), Vector2(s.x * 0.15, s.y * 0.49),
+	])
+	for y in range(h):
+		for x in range(w):
+			var p := Vector2(float(x) + 0.5, float(y) + 0.5)
+			if not Geometry2D.is_point_in_polygon(p, outline):
+				continue
+			var color := pal.ice
+			if p.x < s.x * 0.36:
+				color = pal.ice_light
+			elif p.x > s.x * 0.62:
+				color = pal.ice_dark
+			image.set_pixel(x, y, color)
+	for step in range(int(s.y * 0.35)):
+		_put(image, int(s.x * 0.3) + step / 3, int(s.y * 0.12) + step, pal.ice_dark)
+	for step in range(int(s.y * 0.3)):
+		_put(image, int(s.x * 0.55) + step / 4, int(s.y * 0.1) + step, Color.WHITE)
 	_outline(image)
 	return image
