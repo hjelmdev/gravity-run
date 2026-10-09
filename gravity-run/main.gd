@@ -282,7 +282,8 @@ func _start_run() -> void:
 	_campaign_level = null if demo_mode else Campaign.active_level
 	# The menu's demo runner shows the campaign worlds in turn: each demo run
 	# borrows one world's stage (its course and pixel look), not the campaign.
-	_demo_level = _next_demo_level() if demo_mode else null
+	# A demo run on an active challenge (tests, previews) keeps that seed.
+	_demo_level = _next_demo_level() if demo_mode and not ChallengeService.active else null
 	var look_level: CampaignLevel = _campaign_level if _campaign_level != null else _demo_level
 	# Campaign stages pin one biome; every other run uses the rotation.
 	BIOME_RENDERER_SCRIPT.set_locked_biome(look_level.get_presentation_biome() if look_level != null else &"")
@@ -291,6 +292,7 @@ func _start_run() -> void:
 	loot_spawn_planner.reset(run_seed)
 	_active_seed = run_seed
 	_active_seed_version = look_level.generator_version if look_level != null else ChallengeService.generation_version
+	BIOME_RENDERER_SCRIPT.set_world_frame(PLAYER_X, BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(run_seed, _active_seed_version), _active_seed_version)
 	_seed_scores.clear()
 	_pending_hazard_discoveries.clear()
 	var run_definition: Resource
@@ -1334,8 +1336,7 @@ func _spawn_course_event(event: Dictionary) -> void:
 					rock_event["event_id"] = rock_event_id
 				rock.call("configure", rock_event)
 				rock.name = "FallingRock_%s" % rock_event_id
-				if BIOME_RENDERER_SCRIPT.locked_pixel_palette() != null:
-					rock.set("skin", "pixel")
+				rock.set("skin", PixelHazardArt.skin_for("rock", event_x))
 				add_child(rock)
 				obstacles.append(rock)
 		&"bat_swarm":
@@ -1776,18 +1777,14 @@ func _spawn_obstacle_scene(scene: PackedScene, width: float, height: float, from
 	obstacle.connect("destroyed", Callable(self, "_on_obstacle_destroyed"))
 	if obstacle.is_in_group("barrels") and obstacle.has_signal("destruction_started"):
 		_connect_barrel_audio(obstacle)
-	# Campaign cave stages draw rolling barrels as mine carts (skin only).
-	if obstacle.is_in_group("barrels") and BIOME_RENDERER_SCRIPT.locked_biome_id() == &"cave_campaign":
-		obstacle.set("skin", "mine_cart")
-	# Pixel-style biomes draw barrels (not a boss machine's own barrels; the
-	# Snow Giant's are the frost world's snowballs),
-	# blocks and spikes as pixel art.
-	if BIOME_RENDERER_SCRIPT.locked_pixel_palette() != null and str(obstacle.get("skin")).is_empty() and ((obstacle.is_in_group("barrels") and (_campaign_level == null or not _campaign_level.is_boss() or _campaign_level.boss_id == &"snow_giant")) or obstacle.is_in_group("breakable") or obstacle.is_in_group("spikes")):
-		obstacle.set("skin", "pixel")
-	# Haunted campaign stages draw blocks and spikes as gravestones and crosses.
-	if BIOME_RENDERER_SCRIPT.locked_biome_id() == &"haunted_campaign" and (obstacle.is_in_group("breakable") or obstacle.is_in_group("spikes")):
-		if str(obstacle.get("skin")).is_empty():
-			obstacle.set("skin", "grave")
+	# Pixel looks (campaign, and the endless rotation) draw barrels, blocks and
+	# spikes as pixel art of the biome they stand in; the cave look rolls mine
+	# carts. A boss machine's own barrels keep their look (the Snow Giant's
+	# are the frost world's snowballs).
+	var art_kind := "barrel" if obstacle.is_in_group("barrels") else ("block" if obstacle.is_in_group("breakable") else ("spikes" if obstacle.is_in_group("spikes") else ""))
+	var boss_barrel := art_kind == "barrel" and _campaign_level != null and _campaign_level.is_boss() and _campaign_level.boss_id != &"snow_giant"
+	if not art_kind.is_empty() and not boss_barrel and str(obstacle.get("skin")).is_empty():
+		obstacle.set("skin", PixelHazardArt.skin_for(art_kind, x))
 	if obstacle.has_method("set_motion_speed_multiplier"):
 		obstacle.call("set_motion_speed_multiplier", motion_speed_multiplier)
 	if obstacle.has_method("set_spiked"):

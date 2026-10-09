@@ -164,7 +164,7 @@ func _draw() -> void:
 	if skin == "pixel":
 		# A pixel-art barrel seen end-on, turning with the roll.
 		var kind := ("retired" if retired else "rubber") if is_rubber else ("spiked" if is_spiked else "wood")
-		var art := PixelHazardArt.barrel_texture(PixelHazardArt.palette(), radius, kind)
+		var art := PixelHazardArt.barrel_texture(PixelHazardArt.palette_at(self), radius, kind)
 		var side := Vector2(art.get_size()) * PixelHazardArt.ART_SCALE
 		draw_set_transform_matrix(base * Transform2D(rendered_roll, Vector2(0.0, center_y)))
 		draw_texture_rect(art, Rect2(-side * 0.5, side), false, Color(1.35, 1.35, 1.35) if is_rubber and bounce_ticks > 0 else Color.WHITE)
@@ -189,7 +189,7 @@ func _draw() -> void:
 		if not is_rubber:
 			draw_line(first_start, first_end, detail_color, 4.0)
 			draw_line(second_start, second_end, detail_color, 4.0)
-	if is_spiked and not (skin == "mine_cart" and BiomeRenderer.locked_pixel_palette() != null):
+	if is_spiked and not (skin == "mine_cart" and PixelHazardArt.is_pixel_at(global_position.x)):
 		for index in range(8):
 			var angle := TAU * float(index) / 8.0 + rendered_roll
 			var outward := Vector2.RIGHT.rotated(angle)
@@ -204,7 +204,7 @@ func intersects_rect(rect: Rect2) -> bool:
 ## A mine cart that fits inside the barrel's collision circle: a tapered iron
 ## body with a rim band and an ore pile, two spinning wheels under it.
 func _draw_mine_cart(radius: float, center_y: float, wheel_angle: float, teal: bool) -> void:
-	if BiomeRenderer.locked_pixel_palette() != null:
+	if PixelHazardArt.is_pixel_at(global_position.x):
 		_draw_pixel_cart(radius, center_y, wheel_angle, teal)
 		return
 	var ground := center_y + radius
@@ -239,7 +239,7 @@ func _draw_mine_cart(radius: float, center_y: float, wheel_angle: float, teal: b
 ## The mine cart in a pixel-style biome (PixelHazardArt): the cart picture
 ## and two wheels that turn with the roll, at the vector cart's places.
 func _draw_pixel_cart(radius: float, center_y: float, wheel_angle: float, teal: bool) -> void:
-	var palette := PixelHazardArt.palette()
+	var palette := PixelHazardArt.palette_at(self)
 	# A spiked cart carries its spikes on its walls (they do not orbit it).
 	var cart := PixelHazardArt.cart_texture(palette, radius, teal, is_spiked)
 	var side := Vector2(cart.get_size()) * PixelHazardArt.ART_SCALE

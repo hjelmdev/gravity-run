@@ -97,6 +97,9 @@ func load_manifest(course_manifest: Resource) -> String:
 	_world_height = float(manifest.world_height)
 	_surface_index = SurfaceIndexScript.new()
 	_surface_index.configure(manifest.events, float(manifest.initial_floor_y), float(manifest.initial_ceiling_y))
+	var frame_version := int(manifest.get("generator_version"))
+	# Hazards find the pixel look of the biome they stand in from this frame.
+	BiomeRendererScript.set_world_frame(float(manifest.start_x), BiomeRendererScript.start_biome_offset_for_seed(int(manifest.get("seed_value")), frame_version), frame_version)
 	var floor_y := float(manifest.initial_floor_y)
 	var ceiling_y := float(manifest.initial_ceiling_y)
 	for event_value in manifest.events:
@@ -118,12 +121,14 @@ func load_manifest(course_manifest: Resource) -> String:
 				for index in range(int(event.get("count", 1))):
 					var spike := create_hazard(SpikeScene, Vector2(start_x + float(index) * float(event.get("spacing", 32.0)), float(event.get("y", surface_y))), Vector2(CourseGenerator.SPIKE_WIDTH, CourseGenerator.SPIKE_HEIGHT), from_ceiling)
 					spike.name = "Spike_%s_%d" % [event_id, index]
+					spike.set("skin", PixelHazardArt.skin_for("spikes", spike.position.x))
 					_tag_presentation_target(spike, "%s:%d" % [event_id, index], kind, false)
 					add_child(spike)
 					event_nodes["%s_%d" % [event_id, index]] = spike
 			"block":
 				var block := create_hazard(BlockScene, Vector2(x, float(event.get("y", surface_y))), Vector2(float(event.get("width", 48.0)), float(event.get("height", 72.0))), from_ceiling)
 				block.name = "Block_%s" % event_id
+				block.set("skin", PixelHazardArt.skin_for("block", block.position.x))
 				_tag_presentation_target(block, event_id, kind, false)
 				add_child(block)
 				event_nodes[event_id] = block
@@ -141,6 +146,7 @@ func load_manifest(course_manifest: Resource) -> String:
 					barrel.call("set_rubber_variant", int(event.get("barrel_variant", 0)) == 1)
 					barrel.connect("destruction_started", Callable(self, "_on_barrel_destruction_started"))
 					barrel.name = "Barrel_%s" % barrel_id
+					barrel.set("skin", PixelHazardArt.skin_for("barrel", barrel.position.x))
 					_tag_presentation_target(barrel, barrel_id, "barrel", true)
 					add_child(barrel)
 					event_nodes[barrel_id] = barrel
@@ -181,6 +187,7 @@ func load_manifest(course_manifest: Resource) -> String:
 				rock.call("configure", event)
 				rock.connect("impact_started", Callable(self, "_on_rock_impact_started"))
 				rock.name = "FallingRock_%s" % event_id
+				rock.set("skin", PixelHazardArt.skin_for("rock", x))
 				_tag_presentation_target(rock, event_id, kind, false)
 				add_child(rock)
 				event_nodes[event_id] = rock

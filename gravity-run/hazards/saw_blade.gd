@@ -90,7 +90,7 @@ func _draw() -> void:
 	if not visible:
 		return
 	var radius := Model.radius_for_state(state)
-	if BiomeRenderer.locked_pixel_palette() != null:
+	if PixelHazardArt.is_pixel_at(global_position.x):
 		_draw_pixel_saw(radius)
 		return
 	if Model.is_embedded_variant(event):
@@ -221,7 +221,7 @@ func _draw_pixel_saw(radius: float) -> void:
 	var embedded := Model.is_embedded_variant(event) and not bool(state.get("falling", false))
 	var angle := _render_roll_angle if Model.is_embedded_variant(event) else 0.0
 	var art_radius := int(round(radius / PixelHazardArt.ART_SCALE))
-	var texture := PixelHazardArt.saw_texture(PixelHazardArt.palette(), radius)
+	var texture := PixelHazardArt.saw_texture(PixelHazardArt.palette_at(self), radius)
 	var size := float(PixelHazardArt.saw_side(art_radius)) * PixelHazardArt.ART_SCALE
 	var half := size * 0.5
 	var square := PackedVector2Array([Vector2(-half, -half), Vector2(half, -half), Vector2(half, half), Vector2(-half, half)])

@@ -455,7 +455,7 @@ func _check_mine_carts() -> void:
 	var endless: Node = await _make_game()
 	endless.call("_spawn_obstacle_scene", preload("res://hazards/barrel.tscn"), 54.0, 54.0, false, 900.0)
 	var plain: Node2D = (endless.get("obstacles") as Array).back()
-	_check(str(plain.get("skin")).is_empty(), "endless barrels stay barrels")
+	_check(str(plain.get("skin")) in ["pixel", "mine_cart"], "endless barrels are pixel art of the biome they roll in (%s)" % str(plain.get("skin")))
 	endless.queue_free()
 	await get_tree().process_frame
 

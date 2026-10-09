@@ -159,7 +159,7 @@ func _draw_stone_silhouette(rect: Rect2) -> void:
 		# to landing (the hitbox rect can change size on the way).
 		var art_size := Vector2(float(event.get("width", Model.WIDTH)), float(event.get("height", Model.HEIGHT)))
 		var placed := Rect2(rect.get_center() - art_size * 0.5, art_size)
-		draw_texture_rect(PixelHazardArt.boulder_texture(PixelHazardArt.palette(), art_size), Rect2((placed.position / 2.0).round() * 2.0, art_size), false)
+		draw_texture_rect(PixelHazardArt.boulder_texture(PixelHazardArt.palette_at(self), art_size), Rect2((placed.position / 2.0).round() * 2.0, art_size), false)
 		return
 	var origin := rect.position
 	var size := rect.size
@@ -189,7 +189,7 @@ func _draw_stone_silhouette(rect: Rect2) -> void:
 
 func _draw_icicle_silhouette(rect: Rect2) -> void:
 	if skin == "pixel":
-		draw_texture_rect(PixelHazardArt.icicle_texture(PixelHazardArt.palette(), rect.size), Rect2((rect.position / 2.0).round() * 2.0, rect.size), false)
+		draw_texture_rect(PixelHazardArt.icicle_texture(PixelHazardArt.palette_at(self), rect.size), Rect2((rect.position / 2.0).round() * 2.0, rect.size), false)
 		return
 	var o := rect.position
 	var s := rect.size
@@ -218,7 +218,7 @@ func _draw_icicle_silhouette(rect: Rect2) -> void:
 ## The biome's dirt over the buried part of the rock, anchored to the world
 ## like the ground fill, so the rock sits in the ground without a seam.
 func _draw_pixel_ground(mask: Rect2, surface_y: float) -> void:
-	var biome: BiomeDefinition = BiomeRenderer.locked_definition()
+	var biome: BiomeDefinition = BiomeRenderer.definition_at_world_x(global_position.x)
 	if biome == null or biome.terrain_fill_texture == null or biome.tile_set == null:
 		return
 	# Dirt from the surface down through the grass cap's depth, then the cap.

@@ -71,7 +71,7 @@ func _spike_triangles_local() -> Array[PackedVector2Array]:
 
 func _draw_side_spikes() -> void:
 	# Pixel-style biomes draw them as outlined steel spikes like their other spikes.
-	var palette := BiomeRenderer.locked_pixel_palette()
+	var palette := BiomeRenderer.pixel_palette_at_world_x(global_position.x)
 	for triangle in _spike_triangles_local():
 		if palette != null:
 			draw_colored_polygon(triangle, palette.steel)

@@ -34,6 +34,28 @@ static func palette() -> PixelPalette:
 		_default_palette = PixelPalette.new()
 	return _default_palette
 
+## The palette for a hazard: the biome look at its world x in this run (the
+## locked one in the campaign), or the default when that biome has none.
+static func palette_at(node: Node2D) -> PixelPalette:
+	var at := BiomeRenderer.pixel_palette_at_world_x(node.global_position.x)
+	return at if at != null else palette()
+
+## True when the biome at this world x is drawn in pixel art.
+static func is_pixel_at(world_x: float) -> bool:
+	return BiomeRenderer.pixel_palette_at_world_x(world_x) != null
+
+## The presentation skin a spawned hazard gets at a world x: "mine_cart" for
+## barrels in the cave look, "pixel" for barrels, blocks, spikes and rocks in
+## any pixel look (the palette picks graves, ice or cacti), else "". kind is
+## "barrel", "block", "spikes" or "rock".
+static func skin_for(kind: String, world_x: float) -> String:
+	var look := BiomeRenderer.definition_at_world_x(world_x)
+	if look.pixel_palette == null:
+		return ""
+	if kind == "barrel" and look.biome_id == &"cave_campaign":
+		return "mine_cart"
+	return "pixel"
+
 ## A texture ready for drawing (nearest filtering), w x h world pixels.
 static func block_texture(palette: PixelPalette, size: Vector2, ceiling: bool, variant: int) -> Texture2D:
 	return _cached(palette, "block|%d|%d|%s|%d" % [int(size.x), int(size.y), str(ceiling), variant], func() -> Image: return make_grave(_art(size.x), _art(size.y), ceiling, variant) if palette.block_style == "grave" else make_block(_art(size.x), _art(size.y), ceiling, variant))

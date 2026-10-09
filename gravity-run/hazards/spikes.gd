@@ -28,7 +28,7 @@ func _draw() -> void:
 		_draw_ghost_fire()
 		return
 	if skin == "pixel":
-		draw_texture_rect(PixelHazardArt.spike_texture(PixelHazardArt.palette(), size, from_ceiling), Rect2(Vector2(-size.x * 0.5, 0.0 if from_ceiling else -size.y), size), false)
+		draw_texture_rect(PixelHazardArt.spike_texture(PixelHazardArt.palette_at(self), size, from_ceiling), Rect2(Vector2(-size.x * 0.5, 0.0 if from_ceiling else -size.y), size), false)
 		return
 	if skin == "grave":
 		draw_colored_polygon(points, Color("8b90a6"))

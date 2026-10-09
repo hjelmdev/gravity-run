@@ -81,16 +81,53 @@ static func definition_for_id(biome_id: StringName) -> BiomeDefinition:
 static func definition_at(distance: float) -> BiomeDefinition:
 	return definition_for_generator(distance, GENERATOR_VERSION_14 - 1)
 
+## Endless runs, seeds and multiplayer draw the rotation with the campaign's
+## pixel looks (the meadow for classic, and so on). Presentation only: the
+## encounter rules still see the generation biome (biome_id_for_generator).
+static var pixel_rotation := true
+
+static func _look(definition: BiomeDefinition) -> BiomeDefinition:
+	if not pixel_rotation:
+		return definition
+	match definition.biome_id:
+		&"cave": return CAVE_CAMPAIGN
+		&"haunted": return HAUNTED_CAMPAIGN
+		&"lava": return VOLCANO_CAMPAIGN
+		_: return MEADOW
+
 static func definition_for_generator(distance: float, generator_version: int) -> BiomeDefinition:
 	if _locked_definition != null:
 		return _locked_definition
 	var cycle_length := GEN14_CYCLE_LENGTH if generator_version >= GENERATOR_VERSION_14 else CYCLE_LENGTH
 	var slot := int(floor(fposmod(maxf(distance, 0.0), cycle_length) / THEME_LENGTH))
 	match slot:
-		1: return CAVE
-		2: return HAUNTED
-		3: return LAVA if generator_version >= GENERATOR_VERSION_14 else CLASSIC
-		_: return CLASSIC
+		1: return _look(CAVE)
+		2: return _look(HAUNTED)
+		3: return _look(LAVA if generator_version >= GENERATOR_VERSION_14 else CLASSIC)
+		_: return _look(CLASSIC)
+
+## Where hazards of the current run sit on the course: world x of course
+## distance 0, the seed's biome start offset and the generator version. Set
+## by the singleplayer scene and the race presentation at run start, so a
+## hazard can find the pixel look of the biome it stands in.
+static var _frame_start_x := 180.0
+static var _frame_offset := 0.0
+static var _frame_version := GENERATOR_VERSION_14 - 1
+
+static func set_world_frame(course_start_x: float, biome_start_offset: float, generator_version: int) -> void:
+	_frame_start_x = course_start_x
+	_frame_offset = biome_start_offset
+	_frame_version = generator_version
+
+## The biome look at a world x of the current run (the locked one in the
+## campaign).
+static func definition_at_world_x(world_x: float) -> BiomeDefinition:
+	return definition_for_generator(maxf(world_x - _frame_start_x, 0.0) + _frame_offset, _frame_version)
+
+## The pixel palette at a world x of the current run, or null when that biome
+## is not drawn in pixel art.
+static func pixel_palette_at_world_x(world_x: float) -> PixelPalette:
+	return definition_at_world_x(world_x).pixel_palette
 
 static func start_biome_slot_for_seed(seed_value: int, generator_version: int) -> int:
 	if generator_version < GENERATOR_VERSION_16 or seed_value <= 0:
@@ -108,7 +145,7 @@ static func biome_id_for_seed(seed_value: int, distance: float, generator_versio
 	return biome_id_for_generator(distance + start_biome_offset_for_seed(seed_value, generator_version), generator_version)
 
 static func biome_id_at(distance: float) -> String:
-	return String(definition_at(distance).biome_id)
+	return biome_id_for_generator(distance, GENERATOR_VERSION_14 - 1)
 
 ## Campaign presentation biomes and the generation biome their stages use.
 ## Encounter rules (ghosts only in "haunted", lava only in "lava") must see

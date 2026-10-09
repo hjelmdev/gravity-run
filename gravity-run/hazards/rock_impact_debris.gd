@@ -55,7 +55,7 @@ func _draw() -> void:
 ## Snapped to the 2 px art grid, so the chips read as pixels like the rock.
 func _draw_pixel(fade: float) -> void:
 	var t := _age
-	var palette := PixelHazardArt.palette()
+	var palette := PixelHazardArt.palette_at(self)
 	var chips: Array = [palette.ice, palette.ice_light, palette.ice_dark] if _ice_mode else [palette.stone, palette.stone_light, palette.stone_dark]
 	var bits: Array = [palette.ice_light, palette.ice] if _ice_mode else [palette.surface, palette.surface_hi]
 	# Dust: puffs that roll out to both sides of the rock along the ground.
