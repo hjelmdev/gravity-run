@@ -32,6 +32,12 @@ const STREAMS: Dictionary = {
 	"lantern_chime": preload("res://assets/audio/sfx/lantern_chime.wav"),
 	"haunted_star": preload("res://assets/audio/sfx/haunted_star.wav"),
 	"ghost_king_laugh": preload("res://assets/audio/sfx/ghost_king_laugh.wav"),
+	# Volcano (tools/audio/generate_volcano_audio.gd). ember_star replaces
+	# gravity_star on volcano stages; the others are played by name by features.
+	"lava_bubble": preload("res://assets/audio/sfx/lava_bubble.wav"),
+	"ember_impact": preload("res://assets/audio/sfx/ember_impact.wav"),
+	"magma_roar": preload("res://assets/audio/sfx/magma_roar.wav"),
+	"ember_star": preload("res://assets/audio/sfx/ember_star.wav"),
 	# Campaign (tools/audio/generate_campaign_audio.py).
 	"campaign_goal": preload("res://assets/audio/sfx/campaign_goal.wav"),
 	"rullaren_throw": preload("res://assets/audio/sfx/rullaren_throw.wav"),

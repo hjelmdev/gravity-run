@@ -15,6 +15,9 @@ const CAVE_CAMPAIGN: BiomeDefinition = preload("res://assets/biomes/definitions/
 ## Campaign-only presentation biome (world 3). Same tiles and generation as
 ## `haunted`, plus a livelier backdrop. Never part of the rotation.
 const HAUNTED_CAMPAIGN: BiomeDefinition = preload("res://assets/biomes/definitions/haunted_campaign.tres")
+## Campaign-only presentation biome (world 4). Same generation as `lava`, plus
+## a dedicated backdrop. Never part of the rotation.
+const VOLCANO_CAMPAIGN: BiomeDefinition = preload("res://assets/biomes/definitions/volcano_campaign.tres")
 const GENERATOR_VERSION_14 := 14
 const GENERATOR_VERSION_16 := 16
 const GENERATOR_VERSION_21 := 21
@@ -38,6 +41,7 @@ static func set_locked_biome(biome_id: StringName) -> void:
 		&"meadow": _locked_definition = MEADOW
 		&"cave_campaign": _locked_definition = CAVE_CAMPAIGN
 		&"haunted_campaign": _locked_definition = HAUNTED_CAMPAIGN
+		&"volcano_campaign": _locked_definition = VOLCANO_CAMPAIGN
 		_: _locked_definition = null
 
 static func locked_biome_id() -> StringName:
@@ -48,6 +52,7 @@ static func definition_for_id(biome_id: StringName) -> BiomeDefinition:
 		&"meadow": return MEADOW
 		&"cave_campaign": return CAVE_CAMPAIGN
 		&"haunted_campaign": return HAUNTED_CAMPAIGN
+		&"volcano_campaign": return VOLCANO_CAMPAIGN
 		&"cave": return CAVE
 		&"haunted": return HAUNTED
 		&"lava": return LAVA
@@ -120,10 +125,13 @@ static func draw_backdrop(canvas: CanvasItem, view_left: float, view_size: Vecto
 					_draw_cave_backdrop(canvas, cursor, layout_size, course_distance, fragment_offset, biome, false)
 					_draw_cave_campaign_backdrop(canvas, cursor, layout_size, course_distance, fragment_offset, presentation_time_seconds)
 				&"haunted": pass
+				&"volcano_campaign": pass
 				&"lava": _draw_lava_backdrop(canvas, cursor, layout_size, distance, view_left, course_distance, biome)
 				&"meadow": _draw_meadow_backdrop(canvas, cursor, layout_size, view_left, course_distance, presentation_time_seconds)
 				_: _draw_classic_backdrop(canvas, cursor, layout_size, course_distance * 0.12 + fragment_offset, biome)
-		if biome.biome_id == &"haunted_campaign":
+		if biome.biome_id == &"volcano_campaign":
+			_draw_volcano_campaign_backdrop(canvas, cursor, layout_size, course_distance, fragment_offset, presentation_time_seconds)
+		elif biome.biome_id == &"haunted_campaign":
 			_draw_haunted_campaign_backdrop(canvas, cursor, layout_size, course_distance, fragment_offset, presentation_time_seconds)
 		elif biome.biome_id == &"haunted":
 			_draw_haunted_backdrop(canvas, cursor, layout_size, distance, view_left, Vector2(view_size.x, layout_size.y), course_distance, biome, cycle_length)
@@ -136,7 +144,7 @@ static func _draw_weather_layer(canvas: CanvasItem, biome: BiomeDefinition, left
 	## Small deterministic primitives only: no per-frame nodes, textures, or RNG.
 	## Lava ember polygons are tiny CPU-side arrays bounded by visible cells.
 	## Cell identity uses course position; every motif stays inside its biome fragment.
-	if size.x <= 8.0 or size.y <= 32.0 or biome.biome_id == &"cave_campaign" or biome.biome_id == &"haunted_campaign":
+	if size.x <= 8.0 or size.y <= 32.0 or biome.biome_id == &"cave_campaign" or biome.biome_id == &"haunted_campaign" or biome.biome_id == &"volcano_campaign":
 		return
 	var kind := str(biome.biome_id)
 	var period := 138.0
@@ -672,6 +680,89 @@ static func _draw_dead_tree(canvas: CanvasItem, base: Vector2, height: float, se
 		canvas.draw_line(mid, mid + Vector2(float(branch[1]) * reach * 0.35, -reach * 0.38), color, 1.6, true)
 		canvas.draw_line(mid, mid + Vector2(float(branch[1]) * reach * 0.4, reach * 0.02), color, 1.4, true)
 	canvas.draw_line(top, top + Vector2(0.0, -height * 0.12), color, 2.0, true)
+
+## Campaign volcano backdrop (world 4): a dark red sky, a huge smoking volcano
+## in the distance, two parallax rows of black basalt columns, a heat glow from
+## below and a few drifting embers. A function of course position (and time for
+## smoke, glow and embers), so theme fragments join without seams. Kept dark and
+## low-contrast so the lava, spikes and rocks in the play corridor read first.
+static func _draw_volcano_campaign_backdrop(canvas: CanvasItem, left: float, size: Vector2, camera_course_distance: float, fragment_offset: float, time_seconds: float) -> void:
+	var right := left + size.x
+	# Sky: dark red at the top, hotter towards the horizon.
+	var bands := 8
+	for band in range(bands):
+		var t := float(band) / float(bands - 1)
+		var sky := Color(0.1, 0.02, 0.035).lerp(Color(0.46, 0.115, 0.045), t * t)
+		canvas.draw_rect(Rect2(left, size.y * float(band) / float(bands), size.x, size.y / float(bands) + 1.0), sky)
+	# The big volcano: a slow parallax lattice so one is nearly always in view.
+	var volcano_left := camera_course_distance * 0.05 + fragment_offset
+	var volcano_period := 760.0
+	for point in _landmarks_in_course(volcano_left - 420.0, volcano_left + size.x + 420.0, volcano_period, 523):
+		var half_base := size.y * 0.62
+		var cx := left + point.x - volcano_left
+		var base_y := size.y * 0.9
+		var peak_y := size.y * (0.3 + point.y * 0.06)
+		var half_top := half_base * 0.17
+		if cx + half_base < left or cx - half_base > right:
+			continue
+		var body := Color(0.115, 0.032, 0.045, 1.0)
+		canvas.draw_colored_polygon(PackedVector2Array([
+			Vector2(clampf(cx - half_base, left, right), base_y), Vector2(clampf(cx - half_base * 0.5, left, right), peak_y + (base_y - peak_y) * 0.42),
+			Vector2(clampf(cx - half_top, left, right), peak_y), Vector2(clampf(cx + half_top, left, right), peak_y),
+			Vector2(clampf(cx + half_base * 0.5, left, right), peak_y + (base_y - peak_y) * 0.42), Vector2(clampf(cx + half_base, left, right), base_y)]), body)
+		if cx - half_top < left or cx + half_top > right:
+			continue
+		# Glowing crater rim and two lava streaks running down the flanks.
+		var pulse := 0.8 + 0.2 * sin(time_seconds * 1.7 + point.x)
+		canvas.draw_rect(Rect2(cx - half_top, peak_y - 2.0, half_top * 2.0, 4.0), Color(1.0, 0.5, 0.12, 0.85 * pulse))
+		canvas.draw_circle(Vector2(cx, peak_y - 4.0), half_top * 1.1, Color(1.0, 0.4, 0.08, 0.1 * pulse))
+		canvas.draw_line(Vector2(cx - half_top * 0.5, peak_y + 3.0), Vector2(cx - half_base * 0.36, peak_y + (base_y - peak_y) * 0.62), Color(1.0, 0.36, 0.07, 0.5 * pulse), 2.0, true)
+		canvas.draw_line(Vector2(cx + half_top * 0.6, peak_y + 3.0), Vector2(cx + half_base * 0.28, peak_y + (base_y - peak_y) * 0.5), Color(1.0, 0.36, 0.07, 0.4 * pulse), 1.6, true)
+		# Smoke column: soft puffs rise, widen and fade while drifting sideways.
+		for puff in range(6):
+			var age := fposmod(time_seconds * 0.07 + float(puff) / 6.0 + point.y, 1.0)
+			var smoke := Color(0.26, 0.1, 0.1, 0.34 * (1.0 - age) * minf(age * 6.0, 1.0))
+			canvas.draw_circle(Vector2(cx + age * half_base * 0.55 + sin(age * 5.0 + float(puff)) * 8.0, peak_y - 6.0 - age * size.y * 0.3), half_top * (0.55 + age * 1.5), smoke)
+	# Far then near basalt column clusters, rooted at the ground.
+	for layer in range(2):
+		var parallax := 0.14 if layer == 0 else 0.3
+		var period := 150.0 if layer == 0 else 210.0
+		var parallax_left := camera_course_distance * parallax + fragment_offset
+		var color := Color(0.075, 0.024, 0.04, 1.0) if layer == 0 else Color(0.04, 0.015, 0.028, 1.0)
+		var base_y := size.y * (0.84 if layer == 0 else 0.92)
+		for point in _landmarks_in_course(parallax_left - 80.0, parallax_left + size.x + 80.0, period, 641 + layer * 19):
+			var x := left + point.x - parallax_left
+			var count := 3 + int(point.y * 3.0)
+			var column_w := 15.0 if layer == 0 else 22.0
+			if x - column_w * count < left or x + column_w * count > right:
+				continue
+			for i in range(count):
+				var offset := (float(i) - float(count - 1) * 0.5) * column_w
+				var height := size.y * (0.16 + 0.2 * fposmod(point.y * 7.3 + float(i) * 0.37, 1.0)) * (1.0 if layer == 1 else 0.8)
+				var cx := x + offset
+				var tilt := (fposmod(point.y * 3.1 + float(i) * 0.53, 1.0) - 0.5) * column_w * 0.9
+				canvas.draw_colored_polygon(PackedVector2Array([
+					Vector2(cx - column_w * 0.5, base_y), Vector2(cx - column_w * 0.5, base_y - height),
+					Vector2(cx + column_w * 0.5, base_y - height + tilt), Vector2(cx + column_w * 0.5, base_y)]), color)
+				if layer == 1:
+					# Lit edge from the glow below.
+					canvas.draw_line(Vector2(cx + column_w * 0.5, base_y), Vector2(cx + column_w * 0.5, base_y - height + tilt), Color(0.9, 0.3, 0.07, 0.3), 1.0)
+	# Glow from below: stacked translucent bands that breathe slowly.
+	var glow := 0.85 + 0.15 * sin(time_seconds * 1.1)
+	for band in range(5):
+		var h := size.y * (0.1 + 0.05 * band)
+		canvas.draw_rect(Rect2(left, size.y - h, size.x, h), Color(1.0, 0.33, 0.06, 0.06 * glow))
+	# Embers rising and drifting.
+	var ember_left := camera_course_distance * 0.2 + fragment_offset
+	for point in _landmarks_in_course(ember_left - 40.0, ember_left + size.x + 40.0, 150.0, 797):
+		var age := fposmod(time_seconds * (0.1 + point.y * 0.06) + point.x * 0.013, 1.0)
+		var x := left + point.x - ember_left + sin(age * 9.0 + point.x) * 12.0
+		var y := size.y * (0.95 - age * 0.8)
+		if x - 6.0 < left or x + 6.0 > right:
+			continue
+		var fade := (1.0 - age) * minf(age * 8.0, 1.0)
+		canvas.draw_circle(Vector2(x, y), 4.5, Color(1.0, 0.35, 0.06, 0.12 * fade))
+		canvas.draw_circle(Vector2(x, y), 1.6, Color(1.0, 0.7, 0.3, 0.9 * fade))
 
 static func cave_clipped_ridge_vertices(left: float, camera_course_distance: float, fragment_offset: float, fragment_width: float, logical_height: float, layer: int) -> PackedVector2Array:
 	## Return only the upper ridge contour. Fill quads add their own bottom corners

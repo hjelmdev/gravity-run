@@ -450,6 +450,8 @@ func _tick_boss(course_distance: float, gravity_direction: int, grounded: bool) 
 	match result:
 		"hit":
 			_boss_view.call("notify_hit", rullaren.hp)
+			if boss is MagmaWormBoss:
+				SfxController.play_event("magma_roar", "campaign|worm_roar|%d" % rullaren.hp, true)
 			boss_changed.emit(rullaren.hp, RullarenBoss.MAX_HP)
 			callout.emit("boss", tr("Direct hit!"), tr("The worm grows angrier") if boss is MagmaWormBoss else tr("Rullaren speeds up"), tr("%d hits left") % rullaren.hp)
 			_add_plate_for_current()

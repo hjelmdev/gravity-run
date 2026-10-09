@@ -22,6 +22,12 @@ const WORLD_AUDIO := {
 		"bpm": 132.0,
 		"star_sfx": "haunted_star",
 	},
+	&"volcano_campaign": {
+		"track": preload("res://assets/audio/music/volcano_forge.wav"),
+		## tools/audio/generate_volcano_audio.gd
+		"bpm": 156.0,
+		"star_sfx": "ember_star",
+	},
 }
 
 ## The stage's own music, or null (the normal round track).
