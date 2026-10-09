@@ -25,6 +25,12 @@ Förloppet för de schemalagda passen (se NATTPASS.md). Nyast överst.
   det ger lite nu) och hemligheter (fas 6, belöningen är inte bestämd). Bakgrunder som noder
   (backlog 1.2) väntar, eftersom det behöver mätas i Chrome.
 - Kända testfel som fanns före i dag: multiplayer contract_test (två gen11-versionsgrindar).
+- Klart sedan förra posten: personbästa-spöke (32d6ce2), dagens bana (8959212), near miss-utrop
+  (384e9f2). Alla 150 tester körda mot dagens och morgonens bygge (5700c34): samma resultat
+  på allt som fanns i morse, alltså inga nya fel. 26 tester felar eller hänger likadant på båda.
+- Webbexporten `campaign8-volcano-20261009` är byggd, provstartad i webbläsaren (meny, hubb med
+  Dagens bana, en runda) och committad i Pages-klonen som d5ee43e. INTE pushad: väntar på Adam
+  (`git push` i `E:TVECKLINGGRAVITY-RUN-PAGES`).
 
 ## 2026-10-09 08:00 – pass 2 slut
 - Klart: sista regressionskörningen på allt är grön mot gamla bygget (enda skillnaden är
