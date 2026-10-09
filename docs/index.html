@@ -176,7 +176,7 @@
 		// Retire old Godot workers and cached game exports before loading the iframe.
 		const makeGameUrl = () => {
 			const gameUrl = new URL('./game/index.html', location.href);
-			gameUrl.searchParams.set('build', 'pixel1-meadow-cave-20261009');
+			gameUrl.searchParams.set('build', 'pixel2-ui-20261009');
 			const params = new URLSearchParams(location.search);
 			if (params.get('v2_profile') === '1') gameUrl.searchParams.set('v2_profile', '1');
 			if (params.get('v2_render_anchor') === '1') gameUrl.searchParams.set('v2_render_anchor', '1');
