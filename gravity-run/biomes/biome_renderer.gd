@@ -86,25 +86,30 @@ static func definition_at(distance: float) -> BiomeDefinition:
 ## encounter rules still see the generation biome (biome_id_for_generator).
 static var pixel_rotation := true
 
-static func _look(definition: BiomeDefinition) -> BiomeDefinition:
+## The look of a rotation slot. The newer worlds take turns with the old ones
+## on the slot whose rules they share, one lap of the rotation each: classic
+## slots are the meadow, then the clouds, then the desert; cave slots the cave,
+## then the frost mountain. Presentation only (same course, same seeds).
+static func _look(definition: BiomeDefinition, lap := 0) -> BiomeDefinition:
 	if not pixel_rotation:
 		return definition
 	match definition.biome_id:
-		&"cave": return CAVE_CAMPAIGN
+		&"cave": return [CAVE_CAMPAIGN, FROST_CAMPAIGN][posmod(lap, 2)]
 		&"haunted": return HAUNTED_CAMPAIGN
 		&"lava": return VOLCANO_CAMPAIGN
-		_: return MEADOW
+		_: return [MEADOW, CLOUDS_CAMPAIGN, DESERT_CAMPAIGN][posmod(lap, 3)]
 
 static func definition_for_generator(distance: float, generator_version: int) -> BiomeDefinition:
 	if _locked_definition != null:
 		return _locked_definition
 	var cycle_length := GEN14_CYCLE_LENGTH if generator_version >= GENERATOR_VERSION_14 else CYCLE_LENGTH
 	var slot := int(floor(fposmod(maxf(distance, 0.0), cycle_length) / THEME_LENGTH))
+	var lap := int(floor(maxf(distance, 0.0) / cycle_length)) + _look_shift
 	match slot:
-		1: return _look(CAVE)
-		2: return _look(HAUNTED)
-		3: return _look(LAVA if generator_version >= GENERATOR_VERSION_14 else CLASSIC)
-		_: return _look(CLASSIC)
+		1: return _look(CAVE, lap)
+		2: return _look(HAUNTED, lap)
+		3: return _look(LAVA if generator_version >= GENERATOR_VERSION_14 else CLASSIC, lap)
+		_: return _look(CLASSIC, lap)
 
 ## Where hazards of the current run sit on the course: world x of course
 ## distance 0, the seed's biome start offset and the generator version. Set
@@ -114,7 +119,12 @@ static var _frame_start_x := 180.0
 static var _frame_offset := 0.0
 static var _frame_version := GENERATOR_VERSION_14 - 1
 
-static func set_world_frame(course_start_x: float, biome_start_offset: float, generator_version: int) -> void:
+## seed_value also picks which of the newer looks a run starts with, so
+## runs differ; both players of a race share it.
+static var _look_shift := 0
+
+static func set_world_frame(course_start_x: float, biome_start_offset: float, generator_version: int, seed_value := 0) -> void:
+	_look_shift = posmod(seed_value, 6)
 	_frame_start_x = course_start_x
 	_frame_offset = biome_start_offset
 	_frame_version = generator_version

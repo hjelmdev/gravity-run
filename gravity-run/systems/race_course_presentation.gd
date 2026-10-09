@@ -99,7 +99,7 @@ func load_manifest(course_manifest: Resource) -> String:
 	_surface_index.configure(manifest.events, float(manifest.initial_floor_y), float(manifest.initial_ceiling_y))
 	var frame_version := int(manifest.get("generator_version"))
 	# Hazards find the pixel look of the biome they stand in from this frame.
-	BiomeRendererScript.set_world_frame(float(manifest.start_x), BiomeRendererScript.start_biome_offset_for_seed(int(manifest.get("seed_value")), frame_version), frame_version)
+	BiomeRendererScript.set_world_frame(float(manifest.start_x), BiomeRendererScript.start_biome_offset_for_seed(int(manifest.get("seed_value")), frame_version), frame_version, int(manifest.get("seed_value")))
 	var floor_y := float(manifest.initial_floor_y)
 	var ceiling_y := float(manifest.initial_ceiling_y)
 	for event_value in manifest.events:

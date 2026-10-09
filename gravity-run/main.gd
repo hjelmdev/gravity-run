@@ -295,7 +295,7 @@ func _start_run() -> void:
 	loot_spawn_planner.reset(run_seed)
 	_active_seed = run_seed
 	_active_seed_version = look_level.generator_version if look_level != null else ChallengeService.generation_version
-	BIOME_RENDERER_SCRIPT.set_world_frame(PLAYER_X, BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(run_seed, _active_seed_version), _active_seed_version)
+	BIOME_RENDERER_SCRIPT.set_world_frame(PLAYER_X, BIOME_RENDERER_SCRIPT.start_biome_offset_for_seed(run_seed, _active_seed_version), _active_seed_version, run_seed)
 	_seed_scores.clear()
 	_pending_hazard_discoveries.clear()
 	var run_definition: Resource
