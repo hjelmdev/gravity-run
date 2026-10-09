@@ -54,6 +54,7 @@ const CampaignRunScript := preload("res://campaign/campaign_run.gd")
 ## Per-world campaign music, tempo (the run cycle puts a footstep on every
 ## eighth note) and star sound, keyed by presentation biome.
 const CampaignAudio := preload("res://campaign/campaign_audio.gd")
+const ASH_RAIN_SCRIPT := preload("res://campaign/ash_rain.gd")
 const CAMPAIGN_FEATURES_SCRIPT := preload("res://campaign/campaign_features.gd")
 const BAT_SWARM_SCRIPT := preload("res://hazards/bat_swarm.gd")
 const GHOST_HAND_SCRIPT := preload("res://hazards/ghost_hand.gd")
@@ -146,6 +147,8 @@ var _campaign_level: CampaignLevel
 var _demo_level: CampaignLevel = null
 ## The biome whose music an endless run is playing (&"" before the first).
 var _music_biome: StringName = &""
+## Snow, sand, wind or ash following the biome look (not on campaign stages).
+var _weather: Node2D = null
 ## Which world the next demo run shows; the worlds take turns.
 static var _demo_world_index := -1
 var _campaign_run: Node2D
@@ -287,6 +290,16 @@ func _start_run() -> void:
 	# A demo run on an active challenge (tests, previews) keeps that seed.
 	_demo_level = _next_demo_level() if demo_mode and not ChallengeService.active else null
 	_music_biome = &""
+	# Endless, seeds and the demo get the biome weather (campaign stages script
+	# their own).
+	if is_instance_valid(_weather):
+		_weather.queue_free()
+	_weather = null
+	if _campaign_level == null:
+		_weather = ASH_RAIN_SCRIPT.new() as Node2D
+		_weather.name = "BiomeWeather"
+		add_child(_weather)
+		_weather.call("setup_follow", 0)
 	var look_level: CampaignLevel = _campaign_level if _campaign_level != null else _demo_level
 	# Campaign stages pin one biome; every other run uses the rotation.
 	BIOME_RENDERER_SCRIPT.set_locked_biome(look_level.get_presentation_biome() if look_level != null else &"")
@@ -577,6 +590,8 @@ func _process(delta: float) -> void:
 	_update_hud_fade(delta)
 	_update_biome_music()
 	_sync_run_cycle_to_music()
+	if is_instance_valid(_weather) and is_instance_valid(camera):
+		_weather.call("update_view", float(camera.get("left")), screen_width, _render_player_position.x)
 	if is_instance_valid(_campaign_run):
 		_campaign_run.call("update_presentation", float(camera.get("left")), screen_width, Callable(self, "_surface_y_at"))
 		if bool(_campaign_run.call("has_darkness")):

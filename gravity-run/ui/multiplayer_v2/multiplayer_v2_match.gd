@@ -15,6 +15,7 @@ const CoursePresentationScript := preload("res://systems/race_course_presentatio
 const CourseGeneratorScript := preload("res://systems/course_generator.gd")
 const BiomeRendererScript := preload("res://biomes/biome_renderer.gd")
 const CampaignAudio := preload("res://campaign/campaign_audio.gd")
+const AshRainScript := preload("res://campaign/ash_rain.gd")
 const RoundCoordinatorScript := preload("res://systems/multiplayer_v2/v2_round_coordinator.gd")
 const HudLayout := preload("res://ui/multiplayer_v2/v2_hud_layout.gd")
 const SharedRunHudScene := preload("res://ui/shared_run_hud.tscn")
@@ -75,6 +76,8 @@ var _course_presentation: Node2D
 var _camera_left := 0.0
 ## The biome whose music the race is playing (&"" before the first).
 var _music_biome: StringName = &""
+## Biome weather (snow, sand, wind, ash) over the course.
+var _weather: Node2D = null
 var _spectator_peer_id := 0
 var _last_spectator_event_peer_id := -1
 var _result: Dictionary = {}
@@ -189,6 +192,10 @@ func _ready() -> void:
 	_course_presentation = CoursePresentationScript.new()
 	_course_presentation.name = "RaceCoursePresentation"
 	_course_root.add_child(_course_presentation)
+	_weather = AshRainScript.new() as Node2D
+	_weather.name = "BiomeWeather"
+	_course_root.add_child(_weather)
+	_weather.call("setup_follow", 0)
 	_course_presentation.call("set_render_profile_enabled", _profiling_enabled)
 	_course_presentation.call("set_audio_round_id", _round_id)
 	var presentation_error := str(_course_presentation.call("load_manifest", _manifest))
@@ -680,6 +687,8 @@ func _process(delta: float) -> void:
 	_render_camera.follow(Vector2(_camera_left + CAMERA_PLAYER_X, 0.0), true)
 	_course_presentation.call("set_camera_left", _camera_left)
 	_update_biome_music(_camera_left + CAMERA_PLAYER_X)
+	if is_instance_valid(_weather):
+		_weather.call("update_view", _camera_left, get_viewport_rect().size.x, _camera_left + CAMERA_PLAYER_X)
 	var world_render_fraction := _render_fraction
 	if _round_started:
 		world_render_fraction = WorldSimulationScript.presentation_fraction(presentation_tick, _world.tick)

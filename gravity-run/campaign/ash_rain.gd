@@ -17,6 +17,23 @@ const ASH_CLEAR := 220.0
 const COURSE_START_X := 180.0
 
 var style := "ash"
+## Endless, multiplayer and the menu demo: no fixed sections; the weather
+## follows the biome look at the runner (BIOME_STYLES) and swells in the
+## middle of each biome stretch, clear at its ends.
+var follow_biomes := false
+const BIOME_STYLES := {&"frost_campaign": "snow", &"desert_campaign": "sand", &"clouds_campaign": "wind", &"volcano_campaign": "ash"}
+## Clear stretch at each end of a biome (fraction of it) and the ramp after it.
+const FOLLOW_CLEAR := 0.18
+const FOLLOW_RAMP := 0.16
+
+func setup_follow(seed_value: int) -> void:
+	follow_biomes = true
+	setup([] as Array[Vector2], seed_value)
+
+static func follow_strength(progress: float) -> float:
+	var edge := minf(progress, 1.0 - progress)
+	var t := clampf((edge - FOLLOW_CLEAR) / FOLLOW_RAMP, 0.0, 1.0)
+	return t * t * (3.0 - 2.0 * t)
 var sections: Array[Vector2] = []
 var _flakes: Array[Vector3] = []
 var _time := 0.0
@@ -50,7 +67,13 @@ func get_strength() -> float:
 func update_view(view_left: float, view_width: float, runner_x: float) -> void:
 	_view = Rect2(view_left, 0.0, view_width, 540.0)
 	_runner_x = runner_x
-	_strength = strength_for(runner_x - COURSE_START_X, sections)
+	if follow_biomes:
+		var look_style: String = BIOME_STYLES.get(BiomeRenderer.definition_at_world_x(runner_x).biome_id, "")
+		_strength = 0.0 if look_style.is_empty() else follow_strength(BiomeRenderer.slot_progress_at_world_x(runner_x))
+		if not look_style.is_empty():
+			style = look_style
+	else:
+		_strength = strength_for(runner_x - COURSE_START_X, sections)
 	visible = _strength > 0.001
 
 func _process(delta: float) -> void:

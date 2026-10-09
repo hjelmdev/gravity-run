@@ -134,6 +134,10 @@ static func set_world_frame(course_start_x: float, biome_start_offset: float, ge
 static func definition_at_world_x(world_x: float) -> BiomeDefinition:
 	return definition_for_generator(maxf(world_x - _frame_start_x, 0.0) + _frame_offset, _frame_version)
 
+## How far through its biome stretch (0..1) a world x of the current run is.
+static func slot_progress_at_world_x(world_x: float) -> float:
+	return fposmod(maxf(world_x - _frame_start_x, 0.0) + _frame_offset, THEME_LENGTH) / THEME_LENGTH
+
 ## The pixel palette at a world x of the current run, or null when that biome
 ## is not drawn in pixel art.
 static func pixel_palette_at_world_x(world_x: float) -> PixelPalette:
