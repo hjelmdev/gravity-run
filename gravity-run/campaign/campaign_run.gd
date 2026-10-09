@@ -19,6 +19,7 @@ const FinishConfettiScript := preload("res://campaign/finish_confetti.gd")
 const PressurePlateScript := preload("res://campaign/pressure_plate.gd")
 const RullarenViewScript := preload("res://campaign/rullaren_view.gd")
 const MagmaWormViewScript := preload("res://campaign/magma_worm_view.gd")
+const SnowGiantViewScript := preload("res://campaign/snow_giant_view.gd")
 const StalactiteViewScript := preload("res://campaign/stalactite_view.gd")
 const GiantIcicleScript := preload("res://campaign/giant_icicle.gd")
 const GhostKingViewScript := preload("res://campaign/ghost_king_view.gd")
@@ -100,6 +101,13 @@ func setup(stage: CampaignLevel) -> void:
 		_boss_view.name = "StalactiteGiant"
 		add_child(_boss_view)
 		_add_icicle_for_current()
+	elif level.is_boss() and level.boss_id == &"snow_giant":
+		boss = SnowGiantBoss.new()
+		boss.reset()
+		_boss_view = SnowGiantViewScript.new() as Node2D
+		_boss_view.name = "SnowGiant"
+		add_child(_boss_view)
+		_add_plate_for_current()
 	elif level.is_boss() and level.boss_id == &"magma_worm":
 		boss = MagmaWormBoss.new()
 		boss.reset()
@@ -124,6 +132,7 @@ func _setup_features() -> void:
 	var dark_sections: Array[Vector2] = []
 	var fog_sections: Array[Vector2] = []
 	var ash_sections: Array[Vector2] = []
+	var ash_style := "ash"
 	for feature in level.features:
 		var kind := str(feature.get("kind", ""))
 		if not CampaignFeatures.is_known(kind):
@@ -134,7 +143,8 @@ func _setup_features() -> void:
 			dark_sections.append(Vector2(float(feature.at), float(feature.at) + CampaignFeatures.length_of(feature)))
 		elif kind == "fog":
 			fog_sections.append(Vector2(float(feature.at), float(feature.at) + CampaignFeatures.length_of(feature)))
-		elif kind == "ash":
+		elif kind == "ash" or kind == "snowstorm":
+			ash_style = "snow" if kind == "snowstorm" else "ash"
 			ash_sections.append(Vector2(float(feature.at), float(feature.at) + CampaignFeatures.length_of(feature)))
 		elif kind == "wisp":
 			var wisp := WispScript.new() as Node2D
@@ -142,9 +152,10 @@ func _setup_features() -> void:
 			wisp.visible = false
 			add_child(wisp)
 			_wisps.append({"feature": feature, "node": wisp, "collected": false, "y": 0.0, "x": 0.0, "previous": Vector2(INF, INF), "position": Vector2(INF, INF)})
-		elif kind == "cave_in":
+		elif kind == "cave_in" or kind == "avalanche":
 			var dust := CaveInDustScript.new() as Node2D
 			dust.name = "CaveInDust%d" % _dust_lines.size()
+			dust.set("snowy", kind == "avalanche")
 			var first := COURSE_START_X + float(feature.at)
 			var last := first + float(CampaignFeatures.rock_count(feature) - 1) * CampaignFeatures.ROCK_SPACING
 			dust.call("configure", first - 50.0, last + 50.0)
@@ -154,6 +165,7 @@ func _setup_features() -> void:
 	if not ash_sections.is_empty():
 		_ash = AshRainScript.new() as AshRain
 		_ash.name = "AshRain"
+		_ash.style = ash_style
 		_ash.call("setup", ash_sections, level.seed_value)
 		add_child(_ash)
 	if not fog_sections.is_empty():
@@ -330,6 +342,7 @@ static func hazard_tip(hazard_id: String) -> String:
 		"saw_blade": return "It moves along the surface: time your flip"
 		"cave_icicle": return "It cracks loose and falls: leave the floor below it"
 		"cave_in": return "Dust in the ceiling: the rocks come down, so run on the ceiling"
+		"avalanche": return "Snow trickles down: the avalanche hits the floor, so run on the ceiling"
 		"ghost_hand": return "A purple glow in one lane: a hand reaches out, so take the other"
 		"bat_swarm": return "They sweep along one side: be on the other"
 		"haunted_ghost": return "Ghosts float through one side: take the other"
@@ -353,6 +366,7 @@ static func hazard_display_name(hazard_id: String) -> String:
 		"saw_blade": return "saw blade"
 		"cave_icicle": return "icicles"
 		"cave_in": return "cave-in"
+		"avalanche": return "avalanche"
 		"ghost_hand": return "ghost hands"
 		"bat_swarm": return "bat swarm"
 		"haunted_ghost": return "floating ghosts"
@@ -431,10 +445,11 @@ func _tick_wisps(previous_rect: Rect2, final_rect: Rect2, lethal_fraction: float
 ## The rumble of a cave-in starts when its first rock wakes up.
 func _cue_features(course_distance: float) -> void:
 	for feature in level.features:
-		if str(feature.get("kind", "")) != "cave_in":
+		var kind := str(feature.get("kind", ""))
+		if kind != "cave_in" and kind != "avalanche":
 			continue
 		var at := float(feature.at)
-		var key := "cave_in|%.0f" % at
+		var key := "%s|%.0f" % [kind, at]
 		if course_distance >= at - CampaignFeatures.ROCK_TRIGGER_LEAD and course_distance < at + 400.0 and not _cued_features.has(key):
 			_cued_features[key] = true
 			feature_cue.emit("cave_in_rumble", key)
@@ -450,10 +465,10 @@ func _tick_boss(course_distance: float, gravity_direction: int, grounded: bool) 
 	match result:
 		"hit":
 			_boss_view.call("notify_hit", rullaren.hp)
-			if boss is MagmaWormBoss:
+			if boss is MagmaWormBoss or boss is SnowGiantBoss:
 				SfxController.play_event("magma_roar", "campaign|worm_roar|%d" % rullaren.hp, true)
 			boss_changed.emit(rullaren.hp, RullarenBoss.MAX_HP)
-			callout.emit("boss", tr("Direct hit!"), tr("The worm grows angrier") if boss is MagmaWormBoss else tr("Rullaren speeds up"), tr("%d hits left") % rullaren.hp)
+			callout.emit("boss", tr("Direct hit!"), _boss_hit_line(), tr("%d hits left") % rullaren.hp)
 			_add_plate_for_current()
 		"missed":
 			callout.emit("boss", tr("Missed the plate"), tr("It comes around again"), tr("Be on the glowing side when you pass it"))
@@ -461,8 +476,22 @@ func _tick_boss(course_distance: float, gravity_direction: int, grounded: bool) 
 		"defeated":
 			_boss_view.call("notify_defeated")
 			boss_changed.emit(0, RullarenBoss.MAX_HP)
-			callout.emit("boss", tr("Boss beaten"), tr("Magmaormen is beaten!") if boss is MagmaWormBoss else tr("Rullaren is beaten!"), tr("Run to the finish"))
+			callout.emit("boss", tr("Boss beaten"), _boss_beaten_line(), tr("Run to the finish"))
 			_place_finish_line(COURSE_START_X + rullaren.finish_distance)
+
+func _boss_hit_line() -> String:
+	if boss is MagmaWormBoss:
+		return tr("The worm grows angrier")
+	if boss is SnowGiantBoss:
+		return tr("The giant stamps in rage")
+	return tr("Rullaren speeds up")
+
+func _boss_beaten_line() -> String:
+	if boss is MagmaWormBoss:
+		return tr("Magmaormen is beaten!")
+	if boss is SnowGiantBoss:
+		return tr("The Snow Giant is beaten!")
+	return tr("Rullaren is beaten!")
 
 ## Stalaktitjätten: true when its dive caught the runner.
 func _tick_stalactite(course_distance: float, gravity_direction: int) -> bool:

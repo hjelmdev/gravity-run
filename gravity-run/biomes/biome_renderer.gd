@@ -18,6 +18,8 @@ const HAUNTED_CAMPAIGN: BiomeDefinition = preload("res://assets/biomes/definitio
 ## Campaign-only presentation biome (world 4). Same generation as `lava`, plus
 ## a dedicated backdrop. Never part of the rotation.
 const VOLCANO_CAMPAIGN: BiomeDefinition = preload("res://assets/biomes/definitions/volcano_campaign.tres")
+## Campaign-only presentation biome (world 5). Generation is the cave mix.
+const FROST_CAMPAIGN: BiomeDefinition = preload("res://assets/biomes/definitions/frost_campaign.tres")
 const GENERATOR_VERSION_14 := 14
 const GENERATOR_VERSION_16 := 16
 const GENERATOR_VERSION_21 := 21
@@ -42,6 +44,7 @@ static func set_locked_biome(biome_id: StringName) -> void:
 		&"cave_campaign": _locked_definition = CAVE_CAMPAIGN
 		&"haunted_campaign": _locked_definition = HAUNTED_CAMPAIGN
 		&"volcano_campaign": _locked_definition = VOLCANO_CAMPAIGN
+		&"frost_campaign": _locked_definition = FROST_CAMPAIGN
 		_: _locked_definition = null
 
 static func locked_biome_id() -> StringName:
@@ -61,6 +64,7 @@ static func definition_for_id(biome_id: StringName) -> BiomeDefinition:
 		&"cave_campaign": return CAVE_CAMPAIGN
 		&"haunted_campaign": return HAUNTED_CAMPAIGN
 		&"volcano_campaign": return VOLCANO_CAMPAIGN
+		&"frost_campaign": return FROST_CAMPAIGN
 		&"cave": return CAVE
 		&"haunted": return HAUNTED
 		&"lava": return LAVA
@@ -156,7 +160,7 @@ static func _draw_weather_layer(canvas: CanvasItem, biome: BiomeDefinition, left
 	## Small deterministic primitives only: no per-frame nodes, textures, or RNG.
 	## Lava ember polygons are tiny CPU-side arrays bounded by visible cells.
 	## Cell identity uses course position; every motif stays inside its biome fragment.
-	if size.x <= 8.0 or size.y <= 32.0 or biome.biome_id == &"cave_campaign" or biome.biome_id == &"haunted_campaign" or biome.biome_id == &"volcano_campaign":
+	if size.x <= 8.0 or size.y <= 32.0 or biome.biome_id == &"cave_campaign" or biome.biome_id == &"haunted_campaign" or biome.biome_id == &"volcano_campaign" or biome.biome_id == &"frost_campaign":
 		return
 	var kind := str(biome.biome_id)
 	var period := 138.0
@@ -500,27 +504,32 @@ static func _draw_pixel_backdrop(canvas: CanvasItem, left: float, size: Vector2,
 			if clipped.size.x > 0.0:
 				canvas.draw_rect(clipped, part[1])
 	# Far ridge, then two hill ranges; trees stand on the near range.
-	_draw_pixel_hills(canvas, left, size, view_left, camera_course_distance * 0.05, size.y * 0.46, 40.0, 0.006, palette.ridge, palette.ridge_crest)
-	_draw_pixel_hills(canvas, left, size, view_left, camera_course_distance * 0.10, size.y * 0.54, 34.0, 0.011, palette.hills_far, palette.hills_far_crest)
+	var puffy := palette.hill_style == "puffy"
+	_draw_pixel_hills(canvas, left, size, view_left, camera_course_distance * 0.05, size.y * 0.46, 40.0, 0.006, palette.ridge, palette.ridge_crest, puffy)
+	_draw_pixel_hills(canvas, left, size, view_left, camera_course_distance * 0.10, size.y * 0.54, 34.0, 0.011, palette.hills_far, palette.hills_far_crest, puffy)
 	var near_offset := camera_course_distance * 0.22
 	var near_base := size.y * 0.66
 	if palette.trees:
 		_draw_pixel_trees(canvas, left, size, view_left, near_offset, near_base, 28.0, 0.017, palette)
-	_draw_pixel_hills(canvas, left, size, view_left, near_offset, near_base, 28.0, 0.017, palette.hills_near, palette.hills_near_crest)
+	_draw_pixel_hills(canvas, left, size, view_left, near_offset, near_base, 28.0, 0.017, palette.hills_near, palette.hills_near_crest, puffy)
 
 static func _pixel_hill_y(u: float, base_y: float, amplitude: float, frequency: float) -> float:
 	return base_y - amplitude * (0.6 * sin(u * frequency) + 0.4 * sin(u * frequency * 2.3 + 1.7))
 
 ## A hill range as stepped columns (4 px wide, heights snapped to 4 px) with a
 ## lighter crest row.
-static func _draw_pixel_hills(canvas: CanvasItem, left: float, size: Vector2, view_left: float, parallax_offset: float, base_y: float, amplitude: float, frequency: float, color: Color, crest := Color.TRANSPARENT) -> void:
+## "puffy" adds round bumps on top, so the range reads as a cloud bank.
+static func _draw_pixel_hills(canvas: CanvasItem, left: float, size: Vector2, view_left: float, parallax_offset: float, base_y: float, amplitude: float, frequency: float, color: Color, crest := Color.TRANSPARENT, puffy := false) -> void:
 	var px := PIXEL_PX
 	# Columns as rects (cheap to batch; no polygon triangulation per frame).
 	var x := floorf(left / px) * px
 	var right := left + size.x
 	while x < right:
 		var u := parallax_offset + (x - view_left)
-		var y := roundf(_pixel_hill_y(u, base_y, amplitude, frequency) / px) * px
+		var hill_y := _pixel_hill_y(u, base_y, amplitude, frequency)
+		if puffy:
+			hill_y -= 14.0 * sqrt(absf(sin(u * 0.04)))
+		var y := roundf(hill_y / px) * px
 		var x0 := maxf(x, left)
 		var w := minf(x + px, right) - x0
 		if w > 0.0:
@@ -549,6 +558,12 @@ static func _draw_pixel_trees(canvas: CanvasItem, left: float, size: Vector2, vi
 		var crown := Vector2(x, ground - 16.0 - radius)
 		if palette.tree_style == "dead":
 			_draw_pixel_dead_tree(canvas, Vector2(x, ground), radius, px, palette, Rect2(left, 0.0, size.x, size.y), cell)
+			continue
+		if palette.tree_style == "pine":
+			_draw_pixel_pine(canvas, Vector2(x, ground), radius, px, palette, Rect2(left, 0.0, size.x, size.y))
+			continue
+		if palette.tree_style == "cactus":
+			_draw_pixel_cactus(canvas, Vector2(x, ground), radius, px, palette, Rect2(left, 0.0, size.x, size.y), cell)
 			continue
 		var view := Rect2(left, 0.0, size.x, size.y)
 		var trunk := Rect2(Vector2(x - px * 0.5, crown.y), Vector2(px, ground - crown.y)).intersection(view)
@@ -1050,3 +1065,64 @@ static func _draw_pixel_dead_tree(canvas: CanvasItem, ground: Vector2, size: flo
 		var body := block.intersection(clip)
 		if body.size.x > 0.0:
 			canvas.draw_rect(body, palette.tree_trunk)
+
+## A snowy pine of px blocks: a short trunk under three stacked tiers, each a
+## stepped triangle with a dark rim, a lit left side and snow along its top.
+static func _draw_pixel_pine(canvas: CanvasItem, ground: Vector2, size: float, px: float, palette: PixelPalette, clip: Rect2) -> void:
+	size *= 1.5
+	var x := roundf(ground.x / px) * px
+	var trunk := Rect2(Vector2(x - px * 0.5, ground.y - px * 2.0), Vector2(px, px * 2.0)).intersection(clip)
+	if trunk.size.x > 0.0:
+		canvas.draw_rect(trunk, palette.tree_trunk)
+	var tier_h := roundf(size * 0.9 / px) * px
+	var bottom := ground.y - px * 2.0
+	for tier in range(3):
+		var half_base := roundf((size * (1.0 - 0.24 * float(tier))) / px) * px
+		var tier_bottom := bottom - float(tier) * tier_h * 0.62
+		var rows := int(tier_h / px)
+		for row in range(rows):
+			var t := float(row + 1) / float(rows)
+			var half := maxf(roundf(half_base * t / px) * px, px * 0.5)
+			var y := tier_bottom - tier_h + float(row) * px
+			var rim := Rect2(Vector2(x - half - px * 0.5, y), Vector2(half * 2.0 + px, px)).intersection(clip)
+			if rim.size.x > 0.0:
+				canvas.draw_rect(rim, palette.tree_rim)
+			var body := Rect2(Vector2(x - half + px * 0.5, y), Vector2(maxf(half * 2.0 - px, px), px)).intersection(clip)
+			if body.size.x > 0.0:
+				canvas.draw_rect(body, palette.tree_canopy)
+			var lit := Rect2(Vector2(x - half + px * 0.5, y), Vector2(maxf(half * 0.6, px), px)).intersection(clip)
+			if lit.size.x > 0.0 and row > 0:
+				canvas.draw_rect(lit, palette.tree_light)
+			# Snow sits on the top rows and on the tips of each tier.
+			if row < 2 or row == rows - 1:
+				var snow_w := half * 2.0 - px if row < 2 else px * 2.0
+				var snow_x := x - half + px * 0.5 if row < 2 else x - half - px * 0.5
+				var snow := Rect2(Vector2(snow_x, y), Vector2(maxf(snow_w, px), px)).intersection(clip)
+				if snow.size.x > 0.0:
+					canvas.draw_rect(snow, palette.snow)
+
+## A saguaro cactus of px blocks: a column with a round top and one or two
+## arms that bend upwards, a dark rim and a lit rib.
+static func _draw_pixel_cactus(canvas: CanvasItem, ground: Vector2, size: float, px: float, palette: PixelPalette, clip: Rect2, seed_cell: int) -> void:
+	var x := roundf(ground.x / px) * px
+	var height := roundf(size * 2.4 / px) * px
+	var blocks: Array[Rect2] = [Rect2(Vector2(x - px, ground.y - height), Vector2(px * 2.0, height))]
+	var arms := 1 + posmod(seed_cell, 2)
+	for arm in range(arms):
+		var side := -1.0 if arm == 0 else 1.0
+		var arm_y := ground.y - height * (0.45 + 0.15 * float(arm))
+		var reach := px * 3.0
+		blocks.append(Rect2(Vector2(x + (side * px - px * 0.5 if side > 0.0 else -px - reach + px * 0.5), arm_y), Vector2(reach, px)))
+		var up_x := x + side * (px + reach) - (px if side > 0.0 else 0.0)
+		blocks.append(Rect2(Vector2(up_x - px * 0.5, arm_y - height * 0.3), Vector2(px * 1.5, height * 0.3 + px)))
+	for block in blocks:
+		var rim := block.grow(px * 0.5).intersection(clip)
+		if rim.size.x > 0.0:
+			canvas.draw_rect(rim, palette.tree_rim)
+	for block in blocks:
+		var body := block.intersection(clip)
+		if body.size.x > 0.0:
+			canvas.draw_rect(body, palette.tree_canopy)
+	var rib := Rect2(Vector2(x - px * 0.5, ground.y - height + px), Vector2(px * 0.5, height - px * 2.0)).intersection(clip)
+	if rib.size.x > 0.0:
+		canvas.draw_rect(rib, palette.tree_light)

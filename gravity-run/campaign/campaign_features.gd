@@ -24,6 +24,9 @@ class_name CampaignFeatures
 ##              burning mound blocks that lane for a moment ("side": floor|ceiling).
 ##              Same timing and hitbox as the ghost hand.
 ##   ash        presentation only: ash drifting down over the screen.
+##   avalanche  a cave-in on the frost mountain: the same rocks (drawn snowy by
+##              the frost palette) under a crack of snow in the ceiling.
+##   snowstorm  presentation only: snow driving across the screen (AshRain).
 
 ## True for kinds that can kill: they need a quiet stretch of course.
 const KINDS := {
@@ -35,6 +38,8 @@ const KINDS := {
 	"fog": {"hazardous": false, "default_length": 2000.0, "sparse": true},
 	"ember_bomb": {"hazardous": true, "before": 360.0, "after": 70.0, "margin": 30.0},
 	"ash": {"hazardous": false, "default_length": 3000.0},
+	"avalanche": {"hazardous": true, "before": 420.0, "after": 140.0, "default_count": 3},
+	"snowstorm": {"hazardous": false, "default_length": 3000.0},
 }
 
 ## Falling rocks of a cave-in: spacing, size and timing. The rocks use the
@@ -84,7 +89,7 @@ const FINISH_MARGIN := 240.0
 ## along the other surface. main.gd applies ROCK_MIN_LANE to feature rocks
 ## (generated rocks keep their own 260 rule).
 const ROCK_MIN_LANE := 200.0
-const MIN_LANE_CLEARANCE := {"cave_in": ROCK_MIN_LANE, "bat_swarm": 200.0, "ghost_hand": 200.0, "ember_bomb": 200.0}
+const MIN_LANE_CLEARANCE := {"cave_in": ROCK_MIN_LANE, "avalanche": ROCK_MIN_LANE, "bat_swarm": 200.0, "ghost_hand": 200.0, "ember_bomb": 200.0}
 
 static func is_hazardous(kind: String) -> bool:
 	return bool((KINDS.get(kind, {}) as Dictionary).get("hazardous", false))
@@ -105,14 +110,14 @@ static func span_of(feature: Dictionary) -> Vector2:
 	var at := float(feature.get("at", 0.0))
 	var def: Dictionary = KINDS.get(kind, {})
 	match kind:
-		"cave_in":
+		"cave_in", "avalanche":
 			var last := at + float(rock_count(feature) - 1) * ROCK_SPACING
 			return Vector2(at - float(def.before), last + ROCK_WIDTH * 0.5 + float(def.after))
 		"bat_swarm":
 			return Vector2(at - float(def.before), at + BAT_WIDTH * 0.5 + float(def.after))
 		"ghost_hand", "ember_bomb":
 			return Vector2(at - float(def.before), at + HAND_WIDTH * 0.5 + float(def.after))
-		"darkness", "wisp", "fog", "ash":
+		"darkness", "wisp", "fog", "ash", "snowstorm":
 			return Vector2(at, at + length_of(feature))
 	return Vector2(at, at)
 
@@ -120,7 +125,7 @@ static func span_of(feature: Dictionary) -> Vector2:
 static func critical_range_of(feature: Dictionary) -> Vector2:
 	var at := float(feature.get("at", 0.0))
 	match str(feature.get("kind", "")):
-		"cave_in":
+		"cave_in", "avalanche":
 			return Vector2(at - 60.0, at + float(rock_count(feature) - 1) * ROCK_SPACING + 60.0)
 		"bat_swarm":
 			return Vector2(at - 300.0, at + BAT_WIDTH * 0.5)
@@ -135,10 +140,10 @@ static func events_of(feature: Dictionary) -> Array[Dictionary]:
 	var kind := str(feature.get("kind", ""))
 	var at := float(feature.get("at", 0.0))
 	match kind:
-		"cave_in":
+		"cave_in", "avalanche":
 			for index in range(rock_count(feature)):
 				result.append({
-					"kind": "rock", "id": "falling_rock", "feature": "cave_in",
+					"kind": "rock", "id": "falling_rock", "feature": kind,
 					"course_distance": at + float(index) * ROCK_SPACING,
 					"width": ROCK_WIDTH, "height": ROCK_HEIGHT, "from_ceiling": false,
 					"trigger_lead": ROCK_TRIGGER_LEAD, "warning_ticks": ROCK_WARNING_TICKS,
@@ -175,7 +180,7 @@ static func required_side_at(feature: Dictionary, course_distance: float) -> int
 	var kind := str(feature.get("kind", ""))
 	var at := float(feature.get("at", 0.0))
 	match kind:
-		"cave_in":
+		"cave_in", "avalanche":
 			var last := at + float(rock_count(feature) - 1) * ROCK_SPACING
 			if course_distance >= at - 400.0 and course_distance <= last + ROCK_WIDTH * 0.5 + 90.0:
 				return -1

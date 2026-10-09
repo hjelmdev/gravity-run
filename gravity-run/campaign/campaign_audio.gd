@@ -28,6 +28,12 @@ const WORLD_AUDIO := {
 		"bpm": 160.0,
 		"star_sfx": "ember_star",
 	},
+	&"frost_campaign": {
+		"track": preload("res://assets/audio/music/frost_peaks.wav"),
+		## tools/audio/generate_world_music.gd
+		"bpm": 136.0,
+		"star_sfx": "crystal_chime",
+	},
 }
 
 ## The stage's own music, or null (the normal round track).

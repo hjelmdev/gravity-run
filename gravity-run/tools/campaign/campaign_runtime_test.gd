@@ -54,6 +54,8 @@ func _run() -> void:
 	await _check_feature_stage("ember_bomb", "floor", true)
 	await _check_feature_stage("ember_bomb", "ceiling", false)
 	await _check_feature_stage("ember_bomb", "ceiling", true)
+	await _check_feature_stage("avalanche", "floor", false)
+	await _check_feature_stage("avalanche", "floor", true)
 	_check_ash()
 	await _check_biome_keys()
 	await _check_personal_best_ghost()
@@ -69,6 +71,8 @@ func _run() -> void:
 	await _check_boss(true)
 	await _check_boss(false, &"4-B")
 	await _check_boss(true, &"4-B")
+	await _check_boss(false, &"5-B")
+	await _check_boss(true, &"5-B")
 	await _check_stalactite("hit")
 	await _check_stalactite("early")
 	await _check_stalactite("stay")
@@ -144,7 +148,7 @@ func _check_catalog() -> void:
 ## Encounter kinds or ids that belong to other biomes than the world's own.
 static func _foreign_encounters(world_id: StringName) -> Array:
 	match world_id:
-		&"cave":
+		&"cave", &"frost":
 			return ["ghost", "lava_crack", "volcano", "haunted_ghost", "haunted_chaser", "lava_tidal_pool"]
 		&"haunted":
 			return ["lava_crack", "volcano", "cave_icicle", "lava_tidal_pool"]
@@ -173,10 +177,14 @@ const FROZEN_FEATURES := {
 	"4-4": [],
 	"4-5": [["ember_bomb", 13960.0], ["ember_bomb", 14910.0], ["ember_bomb", 17190.0], ["ember_bomb", 19240.0]],
 	"4-6": [["ember_bomb", 5210.0], ["ash", 12000.0], ["ember_bomb", 18000.0]],
+	"5-3": [["avalanche", 6800.0], ["avalanche", 13980.0], ["avalanche", 16930.0]],
+	"5-4": [["snowstorm", 5850.0], ["snowstorm", 14400.0]],
+	"5-5": [["avalanche", 13050.0], ["avalanche", 20320.0]],
+	"5-6": [["avalanche", 9530.0], ["snowstorm", 12500.0], ["avalanche", 16890.0]],
 }
 
 func _check_features_frozen() -> void:
-	for spec in CampaignCatalog.CAVE_STAGES + CampaignCatalog.HAUNTED_STAGES + CampaignCatalog.LAVA_STAGES:
+	for spec in CampaignCatalog.CAVE_STAGES + CampaignCatalog.HAUNTED_STAGES + CampaignCatalog.LAVA_STAGES + CampaignCatalog.FROST_STAGES:
 		var level := CampaignCatalog.get_level(spec.id)
 		var frozen: Array = FROZEN_FEATURES.get(str(spec.id), [])
 		var actual: Array = []
@@ -761,6 +769,11 @@ func _check_unlocks() -> void:
 	Campaign.start_level(CampaignCatalog.get_world(&"volcano").get_boss())
 	Campaign.record_completion(0, 0)
 	_check(CharacterCatalog.is_unlocked(bit), "beating the Magmaormen unlocks Bit")
+	var bambu := CharacterCatalog.get_definition(&"panda")
+	_check(not CharacterCatalog.is_unlocked(bambu), "Bambu is locked before the Snow Giant")
+	Campaign.start_level(CampaignCatalog.get_world(&"frost").get_boss())
+	Campaign.record_completion(0, 0)
+	_check(CharacterCatalog.is_unlocked(bambu), "beating the Snow Giant unlocks Bambu")
 	Campaign.clear_active()
 	Campaign.reset_progress()
 

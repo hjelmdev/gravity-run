@@ -2110,3 +2110,66 @@ msgstr "Ljudeffektvolym"
 
 msgid "Sound effects enabled"
 msgstr "Ljudeffekter på"
+
+msgid "Frost Mountain"
+msgstr "Frostfjället"
+
+msgid "Snowfield"
+msgstr "Snöfältet"
+
+msgid "Snowballs roll down the mountain"
+msgstr "Snöbollar rullar nerför fjället"
+
+msgid "Icicle Pass"
+msgstr "Istappspasset"
+
+msgid "Ice hangs over every step"
+msgstr "Isen hänger över varje steg"
+
+msgid "Avalanche"
+msgstr "Lavin"
+
+msgid "The mountain lets go of its snow"
+msgstr "Fjället släpper sin snö"
+
+msgid "Whiteout"
+msgstr "Vitt mörker"
+
+msgid "A snowstorm sweeps the slope"
+msgstr "En snöstorm sveper över sluttningen"
+
+msgid "Frozen Steps"
+msgstr "Frusna trappan"
+
+msgid "Steep steps and sliding snow"
+msgstr "Branta steg och glidande snö"
+
+msgid "Mountain Exam"
+msgstr "Fjällprovet"
+
+msgid "Everything the mountain has taught you"
+msgstr "Allt fjället har lärt dig"
+
+msgid "Snow Giant"
+msgstr "Snöjätten"
+
+msgid "Boss: the giant who throws snowballs"
+msgstr "Boss: jätten som kastar snöbollar"
+
+msgid "Snowball volley"
+msgstr "Snöbollsskur"
+
+msgid "Blizzard"
+msgstr "Snöstorm"
+
+msgid "avalanche"
+msgstr "lavin"
+
+msgid "Snow trickles down: the avalanche hits the floor, so run on the ceiling"
+msgstr "Snö sipprar ner: lavinen slår ner i golvet, så spring i taket"
+
+msgid "The giant stamps in rage"
+msgstr "Jätten stampar av ilska"
+
+msgid "The Snow Giant is beaten!"
+msgstr "Snöjätten är besegrad!"

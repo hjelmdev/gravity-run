@@ -8,10 +8,12 @@ class_name PixelHazardArt
 ## cached. Presentation only: hitboxes are the hazards' own.
 ##
 ##   block   a rough stone pillar, the palette's growth creeping over it
-##   spike   a steel spike with a lit and a shaded face
+##   spike   a steel spike with a lit and a shaded face (or a stone cross,
+##           an ice shard, a cactus: PixelPalette.spike_style)
 ##   saw     a circular saw blade
 ##   boulder a faceted rock with a cap of growth, for falling rocks
-##   barrel  a barrel seen end-on (hoop, planks, bung), spiked or rubber
+##   barrel  a barrel seen end-on (hoop, planks, bung), spiked or rubber (or
+##           a snowball, a tumbleweed: PixelPalette.barrel_style)
 ##   icicle  a jagged icicle for the cave's falling ice
 ##   cart    a mine cart with an ore pile, and its spoked wheels
 
@@ -45,7 +47,7 @@ static func boulder_texture(palette: PixelPalette, size: Vector2) -> Texture2D:
 	return _cached(palette, "boulder|%d|%d" % [int(size.x), int(size.y)], func() -> Image: return make_boulder(_art(size.x), _art(size.y)))
 
 static func spike_texture(palette: PixelPalette, size: Vector2, ceiling: bool) -> Texture2D:
-	return _cached(palette, "spike|%d|%d|%s" % [int(size.x), int(size.y), str(ceiling)], func() -> Image: return make_cross(_art(size.x), _art(size.y), ceiling) if palette.spike_style == "cross" else make_spike(_art(size.x), _art(size.y), ceiling))
+	return _cached(palette, "spike|%d|%d|%s" % [int(size.x), int(size.y), str(ceiling)], func() -> Image: return make_spike_styled(palette.spike_style, _art(size.x), _art(size.y), ceiling))
 
 ## An icicle filling w x h world pixels (wide end at the top).
 static func icicle_texture(palette: PixelPalette, size: Vector2) -> Texture2D:
@@ -63,7 +65,7 @@ static func wheel_texture(palette: PixelPalette, radius: float) -> Texture2D:
 ## A square texture of a barrel seen end-on, `radius` world pixels; `kind` is
 ## "wood", "spiked", "rubber" or "retired".
 static func barrel_texture(palette: PixelPalette, radius: float, kind: String) -> Texture2D:
-	return _cached(palette, "barrel|%d|%s" % [int(radius), kind], func() -> Image: return make_barrel(_art(radius), kind))
+	return _cached(palette, "barrel|%d|%s" % [int(radius), kind], func() -> Image: return make_barrel_styled(palette.barrel_style, _art(radius), kind))
 
 static func _art(world: float) -> int:
 	return maxi(int(round(world / ART_SCALE)), 2)
@@ -558,4 +560,183 @@ static func make_cross(w: int, h: int, ceiling: bool) -> Image:
 	_outline(image)
 	if ceiling:
 		image.flip_y()
+	return image
+
+## A spike in the palette's spike_style ("steel", "cross", "ice", "cactus").
+static func make_spike_styled(style: String, w: int, h: int, ceiling: bool) -> Image:
+	match style:
+		"cross": return make_cross(w, h, ceiling)
+		"ice": return make_ice_spike(w, h, ceiling)
+		"cactus": return make_cactus(w, h, ceiling)
+	return make_spike(w, h, ceiling)
+
+## A barrel in the palette's barrel_style. Rubber barrels keep their own look
+## everywhere (they bounce, so they must read as rubber).
+static func make_barrel_styled(style: String, r: int, kind: String) -> Image:
+	if kind in ["wood", "spiked"]:
+		match style:
+			"snowball": return make_snowball(r, kind == "spiked")
+			"tumbleweed": return make_tumbleweed(r, kind == "spiked")
+	return make_barrel(r, kind)
+
+## An ice shard filling the triangle: a tall main shard with a lit left face,
+## a shaded right face and a bright ridge, a shorter shard leaning on each
+## side, white glints; outlined.
+static func make_ice_spike(w: int, h: int, ceiling: bool) -> Image:
+	var image := _blank(w, h)
+	var half := float(w) * 0.5
+	var shards := [Vector3(half, 0.0, half * 0.62), Vector3(half * 0.55, float(h) * 0.38, half * 0.5), Vector3(half * 1.45, float(h) * 0.3, half * 0.5)]
+	for shard in shards:
+		var cx: float = shard.x
+		var top: float = shard.y
+		var base_half: float = shard.z
+		for y in range(int(top), h):
+			var t := (float(y) + 0.5 - top) / maxf(float(h) - top, 1.0)
+			var reach := base_half * t
+			for x in range(w):
+				var dx := float(x) + 0.5 - cx
+				if absf(dx) > reach:
+					continue
+				# The whole spike must stay inside the hazard's triangle.
+				if absf(float(x) + 0.5 - half) > half * (float(y) + 0.5) / float(h) + 0.5:
+					continue
+				var color := pal.ice
+				if dx < -reach * 0.15:
+					color = pal.ice_light
+				elif dx > reach * 0.4:
+					color = pal.ice_dark
+				if absf(dx) < 0.6 and t < 0.7:
+					color = Color.WHITE
+				image.set_pixel(x, y, color)
+	_put(image, int(half) - 2, int(h * 0.55), Color.WHITE)
+	_put(image, int(half * 0.5), int(h * 0.8), Color.WHITE)
+	_outline(image)
+	if ceiling:
+		image.flip_y()
+	return image
+
+## A spiny cactus in the spike's place: a rounded column with two arms, ribs
+## of light and dark green, pale spines along the edges; outlined.
+static func make_cactus(w: int, h: int, ceiling: bool) -> Image:
+	var image := _blank(w, h)
+	var cx := float(w) * 0.5
+	var col := maxf(float(w) * 0.17, 2.0)
+	var arm := maxf(float(w) * 0.09, 1.5)
+	var body: Array[Rect2] = [
+		Rect2(cx - col, float(h) * 0.06, col * 2.0, float(h)),
+		Rect2(float(w) * 0.16, float(h) * 0.56, cx - float(w) * 0.16, arm * 2.0),
+		Rect2(float(w) * 0.16, float(h) * 0.34, arm * 2.0, float(h) * 0.22 + arm * 2.0),
+		Rect2(cx, float(h) * 0.66, float(w) * 0.84 - cx, arm * 2.0),
+		Rect2(float(w) * 0.84 - arm * 2.0, float(h) * 0.44, arm * 2.0, float(h) * 0.22 + arm * 2.0),
+	]
+	for y in range(h):
+		for x in range(w):
+			var p := Vector2(float(x) + 0.5, float(y) + 0.5)
+			var inside := false
+			for rect in body:
+				if rect.has_point(p):
+					inside = true
+					break
+			# A round top on the column.
+			if inside and p.y < float(h) * 0.06 + col and Vector2(p.x - cx, p.y - (float(h) * 0.06 + col)).length() > col:
+				inside = false
+			if not inside:
+				continue
+			var color := pal.growth
+			var rib := posmod(x - int(cx), 3)
+			if rib == 0:
+				color = pal.growth_dark
+			elif p.x < cx - col * 0.4 and absf(p.x - cx) <= col:
+				color = pal.surface_hi
+			image.set_pixel(x, y, color)
+	_outline(image)
+	# Spines just outside the outline, every few pixels.
+	for y in range(2, h, 3):
+		for x in range(w):
+			if image.get_pixel(x, y).a > 0.5 and x > 0 and image.get_pixel(x - 1, y).a < 0.5:
+				_put(image, x - 1, y, pal.steel_light)
+				break
+		for x in range(w - 1, -1, -1):
+			if image.get_pixel(x, y).a > 0.5 and x < w - 1 and image.get_pixel(x + 1, y).a < 0.5:
+				_put(image, x + 1, y, pal.steel_light)
+				break
+	if ceiling:
+		image.flip_y()
+	return image
+
+## A rolling snowball, square with side 2r: packed snow lit from the top left
+## with a blue shade, a few clumps and grit stuck in it; "spiked" has ice
+## shards frozen into it.
+static func make_snowball(r: int, spiked: bool) -> Image:
+	var pad := 4 if spiked else 1
+	var size := r * 2 + pad * 2
+	var image := _blank(size, size)
+	var c := float(size) * 0.5
+	var rf := float(r)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 5101 + r
+	for y in range(size):
+		for x in range(size):
+			var p := Vector2(float(x) + 0.5 - c, float(y) + 0.5 - c)
+			var d := p.length()
+			if d > rf:
+				continue
+			var color := pal.ice_light
+			var light := (p.x + p.y) / rf
+			if light < -0.7:
+				color = Color.WHITE
+			elif light > 0.55:
+				color = pal.ice_dark
+			elif light > 0.1:
+				color = pal.ice
+			image.set_pixel(x, y, color)
+	# Clumps (a lighter and a shaded pixel) and grit.
+	for index in range(maxi(3, r / 2)):
+		var p := Vector2(c, c) + Vector2.RIGHT.rotated(rng.randf() * TAU) * rng.randf_range(0.2, 0.75) * rf
+		_put(image, int(p.x), int(p.y), pal.ice_dark if index % 3 == 0 else Color.WHITE)
+		_put(image, int(p.x) + 1, int(p.y) + 1, pal.ice)
+		if index % 4 == 1:
+			_put(image, int(p.x) - 1, int(p.y), pal.pebble_dark)
+	if spiked:
+		for index in range(8):
+			var direction := Vector2.RIGHT.rotated(TAU * float(index) / 8.0 + 0.2)
+			for step in range(4):
+				var p := Vector2(c, c) + direction * (rf + float(step) - 1.0)
+				_put(image, int(p.x), int(p.y), pal.ice_light if step < 2 else pal.ice_dark)
+	_outline(image)
+	return image
+
+## A tumbleweed, square with side 2r: a ball of tangled dry twigs (loops of
+## light and dark straw with gaps you can see through); "spiked" has thorns.
+static func make_tumbleweed(r: int, spiked: bool) -> Image:
+	var pad := 4 if spiked else 1
+	var size := r * 2 + pad * 2
+	var image := _blank(size, size)
+	var c := Vector2(float(size), float(size)) * 0.5
+	var rf := float(r)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7703 + r
+	var straw := pal.wood.lightened(0.25)
+	# Loops: arcs of random circles inside the ball.
+	for loop in range(10 + r / 2):
+		var centre := c + Vector2.RIGHT.rotated(rng.randf() * TAU) * rng.randf_range(0.0, 0.45) * rf
+		var radius := rng.randf_range(0.35, 0.6) * rf
+		var start := rng.randf() * TAU
+		var color := straw if loop % 3 != 0 else pal.wood_dark
+		for s in range(int(radius * 5.0)):
+			var p := centre + Vector2.RIGHT.rotated(start + float(s) / (radius * 5.0) * PI * 1.4) * radius
+			if p.distance_to(c) <= rf - 0.5:
+				_put(image, int(p.x), int(p.y), color)
+	# A rim so the ball reads as round.
+	for s in range(int(rf * 7.0)):
+		var p := c + Vector2.RIGHT.rotated(float(s) / (rf * 7.0) * TAU) * (rf - 1.0)
+		if s % 5 != 0:
+			_put(image, int(p.x), int(p.y), pal.wood if s % 3 else straw)
+	if spiked:
+		for index in range(8):
+			var direction := Vector2.RIGHT.rotated(TAU * float(index) / 8.0 + 0.2)
+			for step in range(4):
+				var p := c + direction * (rf + float(step) - 1.0)
+				_put(image, int(p.x), int(p.y), pal.steel_light if step < 3 else pal.steel)
+	# No outline: the twigs are thin, an outline would turn them all dark.
 	return image

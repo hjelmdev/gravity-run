@@ -490,6 +490,9 @@ func _draw_mini_boss(origin: Vector2) -> void:
 	if boss != null and boss.boss_id == &"magma_worm":
 		_draw_mini_magma_worm(origin)
 		return
+	if boss != null and boss.boss_id == &"snow_giant":
+		_draw_mini_snow_giant(origin)
+		return
 	# A tiny Rullaren on its stone: body, stack, eyes and a barrel.
 	var body := Color("8c5a46")
 	_px(origin, -6, -8, 13, 9, OUTLINE)
@@ -546,3 +549,17 @@ func _draw_mini_magma_worm(origin: Vector2) -> void:
 	_px(origin, 0 + sway * 2, -12, 4, 3, crust)
 	_px(origin, 2 + sway * 2, -11, 1, 1, Color("fff3b0"))
 	_px(origin, 4 + sway * 2, -10, 2, 1, magma)
+
+## A tiny Snow Giant stamping by its stone, a snowball in its fist.
+func _draw_mini_snow_giant(origin: Vector2) -> void:
+	var stomp := 1 if fmod(_time, 0.7) < 0.35 else 0
+	var fur := Color("eef6ff")
+	_px(origin, -5, -11 + stomp, 11, 12 - stomp, OUTLINE)
+	_px(origin, -4, -10 + stomp, 9, 10 - stomp, fur)
+	_px(origin, -3, -8 + stomp, 6, 3, Color("6f8fbf"))
+	_px(origin, -2, -7 + stomp, 1, 1, Color("7ff0ff"))
+	_px(origin, 1, -7 + stomp, 1, 1, Color("7ff0ff"))
+	_px(origin, -4, -12 + stomp, 1, 2, Color("d6f2ff"))
+	_px(origin, 4, -12 + stomp, 1, 2, Color("d6f2ff"))
+	_px(origin, -9, -5, 4, 4, OUTLINE)
+	_px(origin, -8, -4, 2, 2, fur)

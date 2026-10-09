@@ -15,6 +15,7 @@ const MEADOW_MAP_NODES := [Vector2(38, 138), Vector2(78, 112), Vector2(118, 134)
 const CAVE_MAP_NODES := [Vector2(34, 70), Vector2(74, 98), Vector2(116, 74), Vector2(156, 110), Vector2(196, 84), Vector2(238, 118), Vector2(284, 92)]
 const HAUNTED_MAP_NODES := [Vector2(36, 120), Vector2(78, 92), Vector2(118, 124), Vector2(160, 96), Vector2(202, 130), Vector2(242, 100), Vector2(286, 74)]
 const LAVA_MAP_NODES := [Vector2(36, 96), Vector2(76, 128), Vector2(118, 100), Vector2(158, 132), Vector2(200, 104), Vector2(240, 134), Vector2(286, 104)]
+const FROST_MAP_NODES := [Vector2(34, 126), Vector2(76, 100), Vector2(118, 128), Vector2(160, 96), Vector2(202, 124), Vector2(244, 94), Vector2(286, 70)]
 
 ## Ängen. Each stage adds one hazard family; 1-6 is the exam with everything.
 ## Lengths grow from 30 s to 45 s at the base 500 px/s.
@@ -229,9 +230,65 @@ const LAVA_STAGES := [
 	},
 ]
 
+## Frostfjället. Generated with the cave mix (icicles), drawn snowy by the
+## frost palette: barrels roll as snowballs, spikes are ice shards. Avalanches
+## and snowstorms are scripted features.
+const FROST_STAGES := [
+	{
+		"id": &"5-1", "title": "Snowfield", "intro": "Snowballs roll down the mountain",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "cave_icicle"], "new": [],
+		"weights": {"barrel_chain": 2.0},
+		"density": 1.4, "margin": 1.05, "length": 18000.0,
+		"seed": 5114,
+		"stars": [Vector2(4461.49, 426.00), Vector2(10362.66, 114.00), Vector2(14803.46, 114.00)],
+	},
+	{
+		"id": &"5-2", "title": "Icicle Pass", "intro": "Ice hangs over every step",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "cave_icicle"], "new": [],
+		"weights": {"cave_icicle": 2.0, "falling_rock": 1.4},
+		"density": 1.5, "margin": 1.0, "length": 19500.0,
+		"seed": 5211,
+		"stars": [Vector2(5103.48, 114.00), Vector2(10849.44, 114.00), Vector2(16026.53, 114.00)],
+	},
+	{
+		"id": &"5-3", "title": "Avalanche", "intro": "The mountain lets go of its snow",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "cave_icicle"], "new": [],
+		"density": 1.55, "margin": 0.98, "length": 21000.0,
+		"seed": 5307,
+		"stars": [Vector2(5719.80, 89.50), Vector2(11335.80, 119.00), Vector2(18276.65, 466.00)],
+		"features": [{"kind": "avalanche", "at": 6800.0, "count": 3}, {"kind": "avalanche", "at": 13980.0, "count": 3}, {"kind": "avalanche", "at": 16930.0, "count": 4}],
+		"new_features": ["avalanche"],
+	},
+	{
+		"id": &"5-4", "title": "Whiteout", "intro": "A snowstorm sweeps the slope",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "cave_icicle"], "new": [],
+		"density": 1.65, "margin": 0.94, "length": 22500.0,
+		"seed": 5412,
+		"stars": [Vector2(5564.23, 426.00), Vector2(12045.24, 178.00), Vector2(18319.57, 254.00)],
+		"features": [{"kind": "snowstorm", "at": 5850.0, "length": 3400.0}, {"kind": "snowstorm", "at": 14400.0, "length": 3800.0}],
+	},
+	{
+		"id": &"5-5", "title": "Frozen Steps", "intro": "Steep steps and sliding snow",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "cave_icicle"], "new": [],
+		"weights": {"terrain_step": 1.8, "terrain_slope": 1.8},
+		"density": 1.75, "margin": 0.9, "length": 24000.0,
+		"seed": 5514,
+		"stars": [Vector2(6090.18, 114.00), Vector2(14268.56, 186.00), Vector2(19951.08, 146.00)],
+		"features": [{"kind": "avalanche", "at": 13050.0, "count": 3}, {"kind": "avalanche", "at": 20320.0, "count": 4}],
+	},
+	{
+		"id": &"5-6", "title": "Mountain Exam", "intro": "Everything the mountain has taught you",
+		"profiles": ["spike_group", "block", "floor_gap", "ceiling_gap", "barrel_chain", "terrain_step", "terrain_slope", "falling_rock", "saw_blade", "cave_icicle"], "new": [],
+		"density": 1.9, "margin": 0.84, "length": 25000.0,
+		"seed": 5607,
+		"stars": [Vector2(6624.24, 426.00), Vector2(13591.89, 186.00), Vector2(18565.70, 186.00)],
+		"features": [{"kind": "avalanche", "at": 9530.0, "count": 3}, {"kind": "snowstorm", "at": 12500.0, "length": 3000.0}, {"kind": "avalanche", "at": 16890.0, "count": 3}],
+	},
+]
+
 ## Stage tables per world: [world_id, generation biome, stages].
 static func stage_tables() -> Array:
-	return [[&"meadow", &"classic", MEADOW_STAGES], [&"cave", &"cave", CAVE_STAGES], [&"haunted", &"haunted", HAUNTED_STAGES], [&"volcano", &"lava", LAVA_STAGES]]
+	return [[&"meadow", &"classic", MEADOW_STAGES], [&"cave", &"cave", CAVE_STAGES], [&"haunted", &"haunted", HAUNTED_STAGES], [&"volcano", &"lava", LAVA_STAGES], [&"frost", &"cave", FROST_STAGES]]
 
 static var _worlds: Array[CampaignWorld] = []
 
@@ -297,6 +354,14 @@ static func _build_worlds() -> Array[CampaignWorld]:
 	for level in volcano.levels:
 		level.presentation_biome = &"volcano_campaign"
 	result.append(volcano)
+	var frost := _make_world(&"frost", 5, "Frost Mountain", &"cave", "map_frost", FROST_MAP_NODES, Color("9fe3ff"))
+	_add_stages(frost, FROST_STAGES)
+	if not frost.levels.is_empty():
+		frost.levels.append(_make_boss(&"frost", &"cave", frost.levels.size() + 1, &"5-B", "Snow Giant", "Boss: the giant who throws snowballs", &"snow_giant"))
+	# Presentation only; encounters use the cave mix.
+	for level in frost.levels:
+		level.presentation_biome = &"frost_campaign"
+	result.append(frost)
 	return result
 
 ## Adds a world's stages. A stage only joins once the level tool has frozen

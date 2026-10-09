@@ -8,6 +8,11 @@ class_name CaveInDust
 const SHOW_AHEAD := 1500.0
 const CRACK_COLOR := Color("15100e")
 const DUST_COLOR := Color("b9a58a")
+## The frost mountain's avalanche: a crack of packed snow, snow trickling.
+const SNOW_CRACK_COLOR := Color("31476e")
+const SNOW_COLOR := Color("f4faff")
+
+var snowy := false
 
 ## World x of the crack's ends.
 var x_from := 0.0
@@ -41,6 +46,7 @@ func _draw() -> void:
 		return
 	var nearness := clampf(1.0 - (x_from - _runner_x) / SHOW_AHEAD, 0.0, 1.0)
 	var pulse := 0.75 + 0.25 * sin(_time * 9.0)
+	var dust_color := SNOW_COLOR if snowy else DUST_COLOR
 	# The crack: a jagged dark line with a thin pale edge.
 	var points := PackedVector2Array()
 	var x := x_from - 30.0
@@ -50,9 +56,9 @@ func _draw() -> void:
 		x += 22.0
 		step += 1
 	if points.size() >= 2:
-		draw_polyline(points, Color(CRACK_COLOR, 0.95), 8.0)
-		draw_polyline(points, Color(DUST_COLOR, 0.75 * pulse), 3.0)
-		draw_rect(Rect2(Vector2(x_from - 30.0, _ceiling_y), Vector2(x_to - x_from + 60.0, 18.0)), Color(DUST_COLOR, 0.16 * pulse))
+		draw_polyline(points, Color(SNOW_CRACK_COLOR if snowy else CRACK_COLOR, 0.95), 8.0)
+		draw_polyline(points, Color(dust_color, 0.75 * pulse), 3.0)
+		draw_rect(Rect2(Vector2(x_from - 30.0, _ceiling_y), Vector2(x_to - x_from + 60.0, 18.0)), Color(dust_color, 0.16 * pulse))
 	# Dust trickling down from the crack. Deterministic positions, moving in time.
 	var count := int((x_to - x_from) / 14.0) + 6
 	for index in range(count):
@@ -60,4 +66,4 @@ func _draw() -> void:
 		var column := x_from - 20.0 + fposmod(sin(seed_value) * 43758.5453, x_to - x_from + 40.0)
 		var fall := fposmod(_time * (50.0 + 30.0 * fposmod(seed_value, 1.0)) + float(index) * 17.0, 90.0)
 		var alpha := (1.0 - fall / 90.0) * (0.35 + 0.5 * nearness)
-		draw_rect(Rect2(Vector2(column, _ceiling_y + 10.0 + fall), Vector2(4.0, 4.0)), Color(DUST_COLOR, minf(alpha * 1.4, 1.0)))
+		draw_rect(Rect2(Vector2(column, _ceiling_y + 10.0 + fall), Vector2(4.0, 4.0)), Color(dust_color, minf(alpha * 1.4, 1.0)))

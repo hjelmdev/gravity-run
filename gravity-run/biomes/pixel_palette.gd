@@ -62,8 +62,11 @@ class_name PixelPalette
 @export var axle := Color8(255, 178, 83)
 ## Shape of blocks: "pillar" (rough stone) or "grave" (a headstone).
 @export_enum("pillar", "grave") var block_style := "pillar"
-## Shape of spikes: "steel" or "cross" (a stone cross-spear).
-@export_enum("steel", "cross") var spike_style := "steel"
+## Shape of spikes: "steel", "cross" (a stone cross-spear), "ice" (an ice
+## shard) or "cactus" (a spiny cactus).
+@export_enum("steel", "cross", "ice", "cactus") var spike_style := "steel"
+## Rolling barrels: "wood" barrels, "snowball"s or "tumbleweed"s.
+@export_enum("wood", "snowball", "tumbleweed") var barrel_style := "wood"
 ## Ice (icicles).
 @export var ice := Color8(185, 232, 245)
 @export var ice_light := Color8(234, 255, 255)
@@ -89,8 +92,12 @@ class_name PixelPalette
 @export var hills_near_crest := Color(0.5, 0.75, 0.46)
 ## Round trees on the near hills.
 @export var trees := true
-## "round" leafy trees or "dead" bare trees.
-@export_enum("round", "dead") var tree_style := "round"
+## "round" leafy trees, "dead" bare trees, snowy "pine"s or "cactus"es.
+@export_enum("round", "dead", "pine", "cactus") var tree_style := "round"
+## Snow on the backdrop (pine tiers and hill crests), and the hills drawn as
+## "puffy" cloud banks instead of rolling "hills".
+@export var snow := Color(0.95, 0.98, 1.0)
+@export_enum("hills", "puffy") var hill_style := "hills"
 @export var tree_trunk := Color(0.36, 0.25, 0.18)
 @export var tree_rim := Color(0.2, 0.42, 0.26)
 @export var tree_canopy := Color(0.3, 0.56, 0.32)
