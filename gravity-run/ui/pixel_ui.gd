@@ -69,6 +69,7 @@ func _ready() -> void:
 		if arg.begins_with("ui-style=") and arg.substr(9) in STYLES:
 			style = arg.substr(9)
 	apply()
+	get_tree().node_added.connect(_on_node_added)
 
 ## Switches the style, saves it and re-themes the whole game.
 func set_style(value: String) -> void:
@@ -106,13 +107,30 @@ func color(key: String) -> Color:
 	return (PALETTES[style] as Dictionary)[key]
 
 ## The pixel font, without smoothing (crisp at any size).
+## Font mode: "mixed" (the normal font for text, Pixelify Sans for headings of
+## HEADING_SIZE and up: readable and still pixel-flavoured), "soft" (Pixelify
+## everywhere, smoothed), "pixel" (Pixelify everywhere, unsmoothed) or "plain".
+var font_mode := "mixed"
+const HEADING_SIZE := 20
+var _heading_font: FontFile
+
 func font() -> Font:
 	if _font == null:
+		for arg in OS.get_cmdline_user_args():
+			if arg.begins_with("ui-font="):
+				font_mode = arg.substr(8)
+		if font_mode == "plain" or font_mode == "mixed":
+			_font = ThemeDB.get_project_theme().default_font if ThemeDB.get_project_theme() != null and ThemeDB.get_project_theme().default_font != null else ThemeDB.fallback_font
+			return _font
 		_font = FontFile.new()
 		_font.load_dynamic_font(FONT_PATH)
-		_font.antialiasing = TextServer.FONT_ANTIALIASING_NONE
-		_font.hinting = TextServer.HINTING_NONE
-		_font.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_DISABLED
+		if font_mode == "pixel":
+			_font.antialiasing = TextServer.FONT_ANTIALIASING_NONE
+			_font.hinting = TextServer.HINTING_NONE
+			_font.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_DISABLED
+		else:
+			_font.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
+			_font.hinting = TextServer.HINTING_LIGHT
 	return _font
 
 # --- Frames ------------------------------------------------------------------
@@ -317,3 +335,29 @@ func _focus_box() -> StyleBoxFlat:
 	box.expand_margin_bottom = 2.0
 	box.anti_aliasing = false
 	return box
+
+## The pixel font for headings (Pixelify Sans, unsmoothed).
+func heading_font() -> Font:
+	if font_mode == "plain":
+		return font()
+	if _heading_font == null:
+		_heading_font = FontFile.new()
+		_heading_font.load_dynamic_font(FONT_PATH)
+		_heading_font.antialiasing = TextServer.FONT_ANTIALIASING_NONE
+		_heading_font.hinting = TextServer.HINTING_NONE
+		_heading_font.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_DISABLED
+	return _heading_font
+
+## In "mixed" mode every Label or Button whose text is HEADING_SIZE or larger
+## gets the pixel heading font, without touching the screens that make them.
+func _on_node_added(node: Node) -> void:
+	if font_mode != "mixed" or not (node is Label or node is Button):
+		return
+	_style_heading.call_deferred(node)
+
+func _style_heading(node: Node) -> void:
+	if not is_instance_valid(node):
+		return
+	var control := node as Control
+	if control.get_theme_font_size("font_size") >= HEADING_SIZE and not control.has_theme_font_override("font"):
+		control.add_theme_font_override("font", heading_font())
