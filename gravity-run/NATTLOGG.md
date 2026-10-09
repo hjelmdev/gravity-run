@@ -2,6 +2,24 @@
 
 Förloppet för de schemalagda passen (se NATTPASS.md). Nyast överst.
 
+## 2026-10-09 kväll – värld 5–7 (WORLDS_5_7_PLAN.md)
+- Klart: Frostfjället (062f1a5), Molnriket (3329c8a) och Öknen (8f1e170), sex banor och en
+  boss var. Generatorn är orörd: frost använder grottans mix, moln och öken den klassiska.
+- Nya skriptade inslag: lavin, snöstorm, blixtnedslag, vindbyar, sandfall, sandstorm.
+  Lavin och sandfall är grottans ras med annan stil; snöstorm, vindbyar och sandstorm är
+  askregnet (AshRain) med stilarna snow/wind/sand; blixten har spökhandens tidning.
+- Bossar: Snöjätten (kastar snöbollar, laviner), Åskfågeln (blixtsalvor), Sandmasken
+  (sandfall, kaktustak). Alla har testbot i campaign_runtime_test (0 fel).
+- Upplåsningar: Bambu (Snöjätten), Hopp (Åskfågeln), Axel (Sandmasken). OBS: som med Bit
+  får den som redan valt någon av dem standardlöparen tills bossen är slagen.
+- Pixelpaletten fick spike_style ice/cactus, barrel_style snowball/tumbleweed, tree_style
+  pine/cactus, hill_style puffy och islands, så nästa biom kan återanvända dem.
+- Kartbilder: tools/campaign/generate_world_maps.gd (GDScript-port av Python-skriptet).
+  Musik: frost_peaks, cloud_kingdom, desert_dunes. Nya ljud i generate_sky_desert_audio.gd.
+- Val: 7-3 fick tätheten 1,4 (den klassiska mixen lämnade inga lugna fönster för sandfall
+  vid 1,55); 7-3 har två sandfall i stället för tre.
+- Inte publicerat: samlas med vagnfixen (59b859d) tills Adam ber om publicering.
+
 ## 2026-10-09 dagpass (Adam på jobbet) – läget
 - Supabase-migrationerna 202610080002–0004 är INTE körda: Supabase-kopplingen här når bara
   Middagstipset och Block Pact, och datorn har ingen Supabase CLI eller databasnyckel.
