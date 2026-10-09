@@ -265,35 +265,61 @@ static func _outline(image: Image) -> void:
 	for p in edge:
 		image.set_pixel(p.x, p.y, OUTLINE)
 
-## A rounded boulder filling the box: lit from the top left, shaded bottom
-## right, a few cracks and a moss cap, outlined.
+## A chunky, faceted rock filling the box: an irregular polygon outline, each
+## facet (a wedge from an off-centre ridge point to one edge) flat-shaded by
+## how much it faces the light from the top left, darker ridge lines between
+## facets, a small moss clump and a crack; outlined. It reads as a rock from
+## any side, hanging in the ceiling or lying on the floor.
 static func make_boulder(w: int, h: int) -> Image:
 	var image := _blank(w, h)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 7331 + w * 13 + h
 	var c := Vector2(float(w), float(h)) * 0.5
+	var corners := 9
+	var outline := PackedVector2Array()
+	for i in range(corners):
+		var angle := TAU * (float(i) + rng.randf_range(-0.2, 0.2)) / float(corners) - PI * 0.5
+		var reach := rng.randf_range(0.8, 1.0)
+		outline.append(c + Vector2(cos(angle) * (c.x - 1.0), sin(angle) * (c.y - 1.0)) * reach)
+	var ridge := c + Vector2(-0.12 * c.x, -0.18 * c.y)
+	var light := Vector2(-0.6, -0.8).normalized()
+	var tones := [STONE_DARK.darkened(0.15), STONE_DARK, STONE, STONE_LIGHT]
 	for y in range(h):
 		for x in range(w):
-			var p := (Vector2(float(x) + 0.5, float(y) + 0.5) - c) / c
-			# A lumpy superellipse: flatter bottom, bumpy outline.
-			var bump := 0.06 * sin(atan2(p.y, p.x) * 5.0 + 1.3)
-			var d := pow(absf(p.x), 2.2) + pow(absf(p.y), 2.2)
-			if d > 1.0 - bump:
+			var p := Vector2(float(x) + 0.5, float(y) + 0.5)
+			if not Geometry2D.is_point_in_polygon(p, outline):
 				continue
-			var light := -p.x * 0.5 - p.y * 0.7
-			var color := STONE
-			if light > 0.35:
-				color = STONE_LIGHT
-			elif light < -0.35:
-				color = STONE_DARK
-			if p.y < -0.55 + 0.1 * sin(p.x * 9.0):
-				color = MOSS if p.y < -0.7 else MOSS_DARK
-			image.set_pixel(x, y, color)
-	for _i in range(2):
-		var x := rng.randi_range(int(w * 0.3), int(w * 0.7))
-		var y := rng.randi_range(int(h * 0.3), int(h * 0.5))
-		for step in range(maxi(3, h / 5)):
-			_put(image, x + (step % 2), y + step, STONE_DARK)
+			# The facet: the edge whose wedge (ridge, a, b) holds the pixel.
+			var tone := 2
+			for i in range(corners):
+				var a := outline[i]
+				var b := outline[(i + 1) % corners]
+				if Geometry2D.point_is_inside_triangle(p, ridge, a, b):
+					var normal := Vector2(b.y - a.y, a.x - b.x).normalized()
+					var facing := normal.dot(light)
+					tone = 3 if facing > 0.45 else (2 if facing > -0.1 else (1 if facing > -0.6 else 0))
+					break
+			image.set_pixel(x, y, tones[tone])
+	# Ridge lines from the ridge point to every corner, one tone darker.
+	for corner in outline:
+		var steps := int(ridge.distance_to(corner))
+		for s in range(steps):
+			var q := ridge.lerp(corner, float(s) / float(maxi(steps, 1)))
+			var current := image.get_pixel(int(q.x), int(q.y))
+			if current.a > 0.5:
+				image.set_pixel(int(q.x), int(q.y), current.darkened(0.12))
+	# A crack down one lit facet.
+	var crack := ridge + Vector2(c.x * 0.25, -c.y * 0.1)
+	for s in range(maxi(3, h / 4)):
+		_put(image, int(crack.x) + (s / 2) % 2, int(crack.y) + s, STONE_DARK.darkened(0.2))
+	# A small moss clump near the top left.
+	var moss_at := c + Vector2(-0.45 * c.x, -0.6 * c.y)
+	for y in range(-2, 3):
+		for x in range(-4, 5):
+			if absi(x) + absi(y) * 2 <= 4:
+				var q := Vector2i(int(moss_at.x) + x, int(moss_at.y) + y)
+				if q.x >= 0 and q.y >= 0 and q.x < w and q.y < h and image.get_pixel(q.x, q.y).a > 0.5:
+					image.set_pixel(q.x, q.y, MOSS if y < 1 else MOSS_DARK)
 	_outline(image)
 	return image
 
